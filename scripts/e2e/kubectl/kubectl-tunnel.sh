@@ -596,14 +596,18 @@ wait_heartbeat 1
 
 log "case 3: global kill-switch — INARI_KUBECTL_ACCESS_ENABLED=false → 410 + tunnel rejected"
 start_kubeproxy -e INARI_KUBECTL_ACCESS_ENABLED=false
-sleep 4 # give the agent a reconnect attempt against the flagged proxy
 CODE=$(docker exec "$TOOLS_NAME" curl -s -o /tmp/resp.txt -w '%{http_code}' \
   -H "Authorization: Bearer $(user_token)" "$PROXY_URL_HTTP/api/v1/namespaces")
 [ "$CODE" = 410 ] || die "kill-switch request returned $CODE, want 410 (body: $(docker exec "$TOOLS_NAME" cat /tmp/resp.txt))"
 docker exec "$TOOLS_NAME" grep -q "kubectl access is disabled" /tmp/resp.txt \
   || die "410 body lacks policy text: $(docker exec "$TOOLS_NAME" cat /tmp/resp.txt)"
-docker logs "$TA_NAME" 2>&1 | tail -50 | grep -qi "disabled by platform policy\|unavailable" \
-  || die "agent log shows no tunnel rejection under the kill switch"
+# Retry: the agent's reconnect attempt is on its own backoff schedule.
+reject_seen=""
+for i in $(seq 1 15); do
+  docker logs "$TA_NAME" 2>&1 | tail -50 | grep -qi "disabled by platform policy\|unavailable" && { reject_seen=1; break; }
+  sleep 2
+done
+[ -n "$reject_seen" ] || die "agent log shows no tunnel rejection under the kill switch"
 log "  410 for users; agent stream rejected"
 log "  re-enabling"
 start_kubeproxy
@@ -638,9 +642,26 @@ create_tunnel_client
 start_agent
 wait_heartbeat 1
 
+# wait_proxy_ready polls the user proxy route until it stops answering 503.
+# Needed after a kubeproxy restart: the heartbeat row stays fresh for ~20s
+# after the old session dies, so wait_heartbeat alone can return before the
+# agent has reconnected to the NEW kubeproxy — a watch fired into that gap
+# 503s before the audit-open defer runs and case 5 finds no close row.
+wait_proxy_ready() {
+  for i in $(seq 1 30); do
+    code=$(docker exec "$TOOLS_NAME" curl -s -o /dev/null -w '%{http_code}' -m 10 \
+      -H "Authorization: Bearer $(user_token)" "$PROXY_URL_HTTP/api/v1/namespaces" || true)
+    [ "$code" = 200 ] && return 0
+    sleep 2
+  done
+  docker logs "$KP_NAME" 2>&1 | tail -15 >&2 || true
+  die "proxy route never returned 200 after tunnel wait (last code: $code)"
+}
+
 log "case 5: max-lifetime reaper — tiny INARI_KUBEPROXY_MAX_TUNNEL_LIFETIME cuts a watch"
 start_kubeproxy -e INARI_KUBEPROXY_MAX_TUNNEL_LIFETIME=3s
 wait_heartbeat 1
+wait_proxy_ready
 set +e
 WATCH_OUT=$(docker exec "$TOOLS_NAME" timeout 20 /tmp/kubectl --server "$PROXY_URL" --certificate-authority /tmp/ca.crt --token "$(user_token)" get ns -w 2>&1)
 WATCH_RC=$?
