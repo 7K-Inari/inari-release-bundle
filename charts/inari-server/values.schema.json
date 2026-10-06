@@ -65,6 +65,45 @@
       },
       "required": ["type", "port"]
     },
+    "kubeproxy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": { "type": "integer", "const": 1 },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          },
+          "required": ["repository"]
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          },
+          "required": ["type", "port"]
+        },
+        "publicUrl": { "type": "string" },
+        "kubectlAccessEnabled": { "type": "boolean" },
+        "maxTunnelLifetime": { "type": "string" },
+        "openResultTimeout": { "type": "string" },
+        "connByteCap": { "type": "integer", "minimum": 1 },
+        "probes": {
+          "type": "object",
+          "properties": {
+            "startup": { "$ref": "#/$defs/probe" },
+            "readiness": { "$ref": "#/$defs/probe" },
+            "liveness": { "$ref": "#/$defs/probe" }
+          }
+        },
+        "extraEnv": { "type": "array" },
+        "resources": { "type": ["object", "null"] }
+      }
+    },
     "database": {
       "type": "object",
       "properties": {
@@ -171,6 +210,8 @@
         "enabled": { "type": "boolean" },
         "hostnames": { "type": "array", "items": { "type": "string" } },
         "pathPrefix": { "type": "string" },
+        "agentHostnames": { "type": "array", "items": { "type": "string" } },
+        "kubeproxyHostnames": { "type": "array", "items": { "type": "string" } },
         "annotations": { "type": "object" }
       }
     },

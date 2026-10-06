@@ -1,0 +1,94 @@
+{{- if .Values.kubeproxy.enabled }}
+{{- if ne (int .Values.kubeproxy.replicaCount) 1 }}
+{{- fail "kubeproxy.replicaCount must stay 1 — tunnel sessions are pinned to a single pod's in-memory registry (ADR-0014)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inari-server.kubeproxyName" . }}
+  labels:
+    {{- include "inari-server.kubeproxyLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.kubeproxy.replicaCount }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "inari-server.kubeproxySelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "inari-server.kubeproxySelectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "inari-server.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: kubeproxy
+          image: "{{ .Values.kubeproxy.image.repository }}:{{ .Values.kubeproxy.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.kubeproxy.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.kubeproxy.service.port }}
+          {{- if .Values.kubeproxy.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.kubeproxy.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.kubeproxy.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.kubeproxy.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.kubeproxy.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: {{ .Values.kubeproxy.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.kubeproxy.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.kubeproxy.probes.readiness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.kubeproxy.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.kubeproxy.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.kubeproxy.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.kubeproxy.probes.liveness.failureThreshold }}
+          {{- end }}
+          env:
+            - name: INARI_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.secret.name }}
+                  key: {{ .Values.database.secret.uriKey }}
+            - name: INARI_OPENFGA_API_URL
+              value: {{ .Values.openfga.url | quote }}
+            - name: INARI_CACHE_BACKEND
+              value: {{ .Values.cache.backend | quote }}
+            {{- if eq .Values.cache.backend "redis" }}
+            - name: INARI_REDIS_URL
+              value: {{ include "inari-server.redisUrl" . | quote }}
+            {{- end }}
+            - name: INARI_OIDC_ISSUER_URL
+              value: {{ include "inari-server.oidcIssuerUrl" . | quote }}
+            - name: INARI_KUBEPROXY_LISTEN_ADDR
+              value: {{ printf ":%d" (int .Values.kubeproxy.service.port) | quote }}
+            - name: INARI_KUBECTL_ACCESS_ENABLED
+              value: {{ .Values.kubeproxy.kubectlAccessEnabled | quote }}
+            - name: INARI_KUBEPROXY_MAX_TUNNEL_LIFETIME
+              value: {{ .Values.kubeproxy.maxTunnelLifetime | quote }}
+            - name: INARI_KUBEPROXY_OPEN_RESULT_TIMEOUT
+              value: {{ .Values.kubeproxy.openResultTimeout | quote }}
+            - name: INARI_KUBEPROXY_CONN_BYTE_CAP
+              value: {{ .Values.kubeproxy.connByteCap | quote }}
+            {{- with .Values.kubeproxy.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.kubeproxy.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

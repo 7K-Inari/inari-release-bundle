@@ -63,6 +63,60 @@ service:
   type: ClusterIP
   port: 8080
 
+# Kubectl gateway data plane (plan §7.2; ADR-0014 in inari-server): the
+# inari-kubeproxy Deployment + Service. Terminates user kubectl TLS (at the
+# LB/Ingress in front), admits tunnel-agent streams, muxes requests onto
+# per-cluster tunnels. Tunnel sessions live in one pod's memory, so
+# replicaCount is pinned to 1 — do not scale out (last-writer-wins fencing
+# would thrash sessions).
+kubeproxy:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/7k-inari/inari-kubeproxy
+    # Defaults to the chart's appVersion when empty (same release train as
+    # the server image).
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8090
+  # Public base URL kubectl and tunnel agents reach (TLS terminated at the
+  # LB/Gateway in front). Surfaced as proxyUrl in cluster access-info;
+  # empty = gateway mode not advertised to users.
+  publicUrl: ""
+  # Global kill switch: false → 410 for users, tunnel streams rejected.
+  kubectlAccessEnabled: true
+  # Abuse bounds (ADR-0014): per-connection re-auth bound and open timeout.
+  maxTunnelLifetime: 60m
+  openResultTimeout: 30s
+  # Per-connection byte cap in bytes (default 4 GiB).
+  connByteCap: 4294967296
+  probes:
+    startup:
+      enabled: true
+      periodSeconds: 2
+      timeoutSeconds: 2
+      failureThreshold: 30
+    readiness:
+      enabled: true
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+    liveness:
+      enabled: true
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+  # Extra INARI_* env vars for the kubeproxy container only.
+  extraEnv: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
 # PostgreSQL connection. The URI is read from a secret key, never plaintext.
 database:
   secret:
@@ -196,6 +250,11 @@ route:
   # PathPrefix cannot express this — Gateway API prefixes are segment-based
   # and "/inari." is a partial segment.
   agentHostnames: []
+  # Dedicated kubeproxy hostnames (e.g. ["kubectl.example.org"]): rendered
+  # as an HTTPRoute routing ALL paths to inari-kubeproxy — both user
+  # kubectl (/api/v1/tenants/*/proxy/*) and tunnel-agent streams
+  # (/inari.tunnel.v1.TunnelService). Requires kubeproxy.enabled=true.
+  kubeproxyHostnames: []
   # Extra annotations (e.g. external-dns/cloudflare-proxy).
   annotations: {}
 

@@ -4,3 +4,9 @@
 # The HA leg uses server-values-e2e-ha.yaml + nats-values.yaml instead.
 nats:
   streamReplicas: 1
+# The kubectl gateway is covered by the docker-only suite
+# (scripts/e2e/kubectl/kubectl-tunnel.sh). The stack leg does not exercise
+# it, and its image is published only at server release time — enabling it
+# here would ImagePullBackOff on the chart's appVersion tag.
+kubeproxy:
+  enabled: false

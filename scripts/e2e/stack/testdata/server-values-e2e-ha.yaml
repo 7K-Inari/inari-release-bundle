@@ -6,3 +6,7 @@
 # E2E_HA / INARI_E2E_CACHE_BACKEND in suite/provision.go.
 nats:
   streamReplicas: 3
+# See server-values-e2e.yaml — the kubectl gateway has its own docker-only
+# suite; the stack leg keeps it off.
+kubeproxy:
+  enabled: false

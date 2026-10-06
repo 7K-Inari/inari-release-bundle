@@ -100,6 +100,11 @@ spec:
               value: {{ .Values.nats.streamReplicas | quote }}
             - name: INARI_OIDC_ISSUER_URL
               value: {{ include "inari-server.oidcIssuerUrl" . | quote }}
+            {{- if and .Values.kubeproxy.enabled .Values.kubeproxy.publicUrl }}
+            # Surfaced as proxyUrl in cluster access-info (gateway mode).
+            - name: INARI_KUBEPROXY_PUBLIC_URL
+              value: {{ .Values.kubeproxy.publicUrl | quote }}
+            {{- end }}
             - name: INARI_KEYCLOAK_BASE_URL
               value: {{ .Values.keycloak.baseUrl | quote }}
             - name: INARI_KEYCLOAK_REALM
