@@ -18,7 +18,8 @@ scripts/e2e/
 ├── api/
 │   └── api_schema_e2e_test.go    # API ↔ OpenAPI schema conformance (Go, tag e2e)
 ├── kubectl/
-│   └── kubectl-access.sh         # control-plane-only kubectl access scenario
+│   ├── kubectl-access.sh         # control-plane-only kubectl access scenario
+│   └── kubectl-tunnel.sh         # gateway-mode chain: kubeproxy → tunnel-agent → apiserver
 ├── lib/
 │   └── ui-proxy.mjs              # single-origin shim shared by the UI suites
 └── stack/                      # golden-path suite — provisions AND asserts (self-contained Go
@@ -46,6 +47,7 @@ scripts/e2e/
 | Golden path (nightly, incl. quarantined Go tests) | `stack/` (Go suite) | same as the fast leg, plus `-args -include-quarantined` so `suite.Quarantined` tests run | `e2e-nightly.yaml` job `nightly-stack` → `e2e-stack.yaml` (`mode: nightly`, cron 03:17 UTC + `workflow_dispatch`) | No — nightly only, non-blocking |
 | Console UI e2e (full, incl. quarantine) | `ui/` (Playwright Test) | `npx playwright test --config playwright.config.ci.ts --grep "@p0\|@p1\|@p2"` (includes `@quarantine`, `continue-on-error`) | `e2e-nightly.yaml` job `nightly-stack` → `e2e-stack.yaml` (`mode: nightly`) — same single bring-up as the Go suite | No — nightly only, non-blocking |
 | kubectl access | `kubectl/kubectl-access.sh` | bash script (docker etcd + kube-apiserver; no kind) | not wired into CI yet | No — manual scenario |
+| kubectl tunnel (gateway) | `kubectl/kubectl-tunnel.sh` | bash script (docker etcd + kube-apiserver + Keycloak + postgres + OpenFGA + kubeproxy + tunnel-agent; no kind). Builds `inari/kubeproxy:e2e` and `inari/agent:e2e` from sibling checkouts (`INARI_SERVER_DIR`/`INARI_AGENT_DIR`); asserts impersonation, 503 upgrade path, 410 kill-switch, per-cluster client revoke, max-lifetime reaper | `e2e-nightly.yaml` job `kubectl-tunnel` (builds inari-server at the resolved tag + inari-agent main) | No — nightly only, non-blocking |
 
 ## Workflow call graph
 

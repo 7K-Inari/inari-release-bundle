@@ -18,6 +18,10 @@ name: e2e-nightly
 #                       in 2+ nightly runs within 7 days. Kept in this
 #                       workflow (not the reusable leg) because it needs
 #                       issues:write and downloads artifacts, not a cluster.
+#   4. kubectl-tunnel — docker-only kubectl gateway chain e2e
+#                       (scripts/e2e/kubectl/kubectl-tunnel.sh): kubeproxy
+#                       built from the resolved inari-server tag, tunnel-agent
+#                       built from inari-agent main; no kind cluster.
 #
 # Artifacts (flake report + full Playwright results) are retained 14 days.
 on:
@@ -89,3 +93,62 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node quarantine-issues.mjs
+
+  kubectl-tunnel:
+    # Docker-only kubectl gateway e2e (scripts/e2e/kubectl/kubectl-tunnel.sh):
+    # kubeproxy (built from inari-server at the resolved tag) → tunnel-agent
+    # (built from inari-agent) → real etcd/kube-apiserver/Keycloak/Postgres/
+    # OpenFGA containers. No kind cluster needed. Non-blocking like the rest
+    # of this workflow; failures here ≠ release gate.
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.ref }}
+          path: bundle
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: 7K-Inari/inari-server
+          ref: ${{ needs.resolve.outputs.server-tag }}
+          path: inari-server
+
+      - name: Resolve matching inari-agent ref
+        id: agent
+        run: |
+          if git ls-remote --exit-code https://github.com/7K-Inari/inari-agent.git \
+            "refs/heads/main" >/dev/null 2>&1; then
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "no inari-agent main branch" >&2; exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: 7K-Inari/inari-agent
+          ref: ${{ steps.agent.outputs.ref }}
+          path: inari-agent
+
+      - name: Install kubectl
+        run: |
+          curl -sfL -o kubectl "https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+
+      - name: Run kubectl tunnel e2e
+        working-directory: bundle/scripts/e2e/kubectl
+        env:
+          INARI_SERVER_DIR: ${{ github.workspace }}/inari-server
+          INARI_AGENT_DIR: ${{ github.workspace }}/inari-agent
+        run: ./kubectl-tunnel.sh 2>&1 | tee "$GITHUB_WORKSPACE/tunnel-e2e.log"
+
+      - name: Upload tunnel e2e log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kubectl-tunnel-e2e-log
+          path: tunnel-e2e.log
+          retention-days: 14
+          if-no-files-found: ignore
