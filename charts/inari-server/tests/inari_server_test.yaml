@@ -1,9 +1,12 @@
 suite: inari-server
 templates:
   - deployment.yaml
+  - deployment-kubeproxy.yaml
   - service.yaml
+  - service-kubeproxy.yaml
   - serviceaccount.yaml
   - httproute.yaml
+  - httproute-kubeproxy.yaml
   - pdb.yaml
 tests:
   - it: renders Deployment, Service and ServiceAccount by default
@@ -539,3 +542,64 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: nats.enabled=false requires nats.url (external NATS); the server refuses to boot without JetStream (ADR-0014)
+  - it: renders the kubeproxy Deployment by default, pinned to one replica
+    template: deployment-kubeproxy.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^ghcr\.io/7k-inari/inari-kubeproxy:.+$
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: inari-kubeproxy
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_KUBECTL_ACCESS_ENABLED
+            value: "true"
+  - it: does not render kubeproxy resources when disabled
+    template: deployment-kubeproxy.yaml
+    set:
+      kubeproxy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: renders the kubeproxy Service with the component selector
+    template: service-kubeproxy.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.ports[0].port
+          value: 8090
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: inari-kubeproxy
+  - it: passes kubeproxy.publicUrl to the server as INARI_KUBEPROXY_PUBLIC_URL
+    template: deployment.yaml
+    set:
+      kubeproxy.publicUrl: https://kubectl.example.org
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_KUBEPROXY_PUBLIC_URL
+            value: https://kubectl.example.org
+  - it: renders the kubeproxy HTTPRoute only with kubeproxyHostnames set
+    template: httproute-kubeproxy.yaml
+    set:
+      route.enabled: true
+      gateway.name: gw
+      route.kubeproxyHostnames: ["kubectl.example.org"]
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 8090

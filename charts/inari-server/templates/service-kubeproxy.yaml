@@ -1,0 +1,16 @@
+{{- if .Values.kubeproxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "inari-server.kubeproxyName" . }}
+  labels:
+    {{- include "inari-server.kubeproxyLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.kubeproxy.service.type }}
+  selector:
+    {{- include "inari-server.kubeproxySelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.kubeproxy.service.port }}
+      targetPort: http
+{{- end }}

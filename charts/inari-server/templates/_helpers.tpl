@@ -81,3 +81,24 @@ else the nats subchart's client service (<fullname>-nats).
 {{- printf "nats://%s-nats:4222" (include "inari-server.fullname" .) }}
 {{- end }}
 {{- end }}
+
+{{/*
+kubeproxy (kubectl gateway data plane, ADR-0014 in inari-server): resource
+name and selector labels. Sessions are pinned to one replica.
+*/}}
+{{- define "inari-server.kubeproxyName" -}}
+{{- printf "%s-kubeproxy" (include "inari-server.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "inari-server.kubeproxyLabels" -}}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{ include "inari-server.kubeproxySelectorLabels" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{- define "inari-server.kubeproxySelectorLabels" -}}
+app.kubernetes.io/name: {{ include "inari-server.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: inari-kubeproxy
+{{- end }}
