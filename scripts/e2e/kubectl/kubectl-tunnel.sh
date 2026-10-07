@@ -78,7 +78,7 @@ need() { command -v "$1" >/dev/null || die "missing prerequisite: $1"; }
 need docker; need kubectl; need jq; need curl; need openssl
 
 dump_logs() {
-  for c in "$KP_NAME" "$TA_NAME" "$API_NAME"; do
+  for c in "$KP_NAME" "$TA_NAME" "$API_NAME" "$KC_NAME"; do
     printf '\033[1;33m--- logs: %s ---\033[0m\n' "$c" >&2
     docker logs "$c" 2>&1 | tail -30 >&2 || true
   done
