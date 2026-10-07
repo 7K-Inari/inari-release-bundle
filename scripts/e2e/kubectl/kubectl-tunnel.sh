@@ -211,6 +211,9 @@ docker create --name "$KC_NAME" --network "$NETWORK" --ip "$KC_IP" --network-ali
   -e KC_HTTPS_CERTIFICATE_KEY_FILE=/kc-tls.key \
   -e KC_HEALTH_ENABLED=true \
   "$KC_IMAGE" start-dev >/dev/null
+# openssl writes keys 0600 owned by the host uid; the container's keycloak
+# user (uid 1000) must be able to read them regardless of the runner uid.
+chmod 644 "$WORKDIR_E2E/keycloak.crt" "$WORKDIR_E2E/keycloak.key"
 docker cp "$WORKDIR_E2E/keycloak.crt" "$KC_NAME:/kc-tls.crt"
 docker cp "$WORKDIR_E2E/keycloak.key" "$KC_NAME:/kc-tls.key"
 docker start "$KC_NAME" >/dev/null
