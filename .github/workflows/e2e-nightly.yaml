@@ -109,10 +109,14 @@ jobs:
           ref: ${{ github.ref }}
           path: bundle
 
+      # kubeproxy (cmd/inari-kubeproxy) is not in any inari-server release
+      # tag yet — the resolved server-tag (chart appVersion, v3.0.0) predates
+      # it, and the script aborts on the missing cmd/inari-kubeproxy dir.
+      # Build from main until a release tag contains kubeproxy.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: 7K-Inari/inari-server
-          ref: ${{ needs.resolve.outputs.server-tag }}
+          ref: main
           path: inari-server
 
       - name: Resolve matching inari-agent ref
@@ -142,7 +146,8 @@ jobs:
         env:
           INARI_SERVER_DIR: ${{ github.workspace }}/inari-server
           INARI_AGENT_DIR: ${{ github.workspace }}/inari-agent
-        run: ./kubectl-tunnel.sh 2>&1 | tee "$GITHUB_WORKSPACE/tunnel-e2e.log"
+        # pipefail so a script failure fails the step despite the tee.
+        run: bash -o pipefail -c './kubectl-tunnel.sh 2>&1 | tee "$GITHUB_WORKSPACE/tunnel-e2e.log"'
 
       - name: Upload tunnel e2e log
         if: always()
