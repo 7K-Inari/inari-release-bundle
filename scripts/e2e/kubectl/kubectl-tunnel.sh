@@ -78,7 +78,7 @@ need() { command -v "$1" >/dev/null || die "missing prerequisite: $1"; }
 need docker; need kubectl; need jq; need curl; need openssl
 
 dump_logs() {
-  for c in "$KP_NAME" "$TA_NAME" "$API_NAME"; do
+  for c in "$KP_NAME" "$TA_NAME" "$API_NAME" "$KC_NAME"; do
     printf '\033[1;33m--- logs: %s ---\033[0m\n' "$c" >&2
     docker logs "$c" 2>&1 | tail -30 >&2 || true
   done
@@ -211,6 +211,9 @@ docker create --name "$KC_NAME" --network "$NETWORK" --ip "$KC_IP" --network-ali
   -e KC_HTTPS_CERTIFICATE_KEY_FILE=/kc-tls.key \
   -e KC_HEALTH_ENABLED=true \
   "$KC_IMAGE" start-dev >/dev/null
+# openssl writes keys 0600 owned by the host uid; the container's keycloak
+# user (uid 1000) must be able to read them regardless of the runner uid.
+chmod 644 "$WORKDIR_E2E/keycloak.crt" "$WORKDIR_E2E/keycloak.key"
 docker cp "$WORKDIR_E2E/keycloak.crt" "$KC_NAME:/kc-tls.crt"
 docker cp "$WORKDIR_E2E/keycloak.key" "$KC_NAME:/kc-tls.key"
 docker start "$KC_NAME" >/dev/null
@@ -273,10 +276,15 @@ docker exec "$PG_NAME" psql -U inari -d inari -v ON_ERROR_STOP=1 -q \
       ON CONFLICT (id) DO NOTHING"
 
 # --- 4. Keycloak realm provisioning ------------------------------------------
-ADMIN_TOKEN=$(xcurl "https://keycloak:8443/realms/master/protocol/openid-connect/token" \
-  -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin | jq -r .access_token)
+# The admin-cli token expires after 60s (master realm default) but the
+# assertion cases below run for minutes — mint a fresh token per kc call.
+admin_token() {
+  xcurl "https://keycloak:8443/realms/master/protocol/openid-connect/token" \
+    -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin | jq -r .access_token
+}
+ADMIN_TOKEN=$(admin_token)
 [ -n "$ADMIN_TOKEN" ] && [ "$ADMIN_TOKEN" != null ] || die "keycloak admin token failed"
-kc() { xcurl -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" "$@"; }
+kc() { xcurl -H "Authorization: Bearer $(admin_token)" -H "Content-Type: application/json" "$@"; }
 
 log "creating realm $REALM + organization $ORG + group $GROUP_PATH + user $USERNAME"
 kc -X POST -d '{"realm":"'$REALM'","enabled":true,"organizationsEnabled":true}' -o /dev/null \
@@ -677,5 +685,26 @@ for i in $(seq 1 10); do
 done
 [ "$n" -ge 1 ] || die "no cluster.kubectl_proxy_close outbox row with reason=max_lifetime (watch output: $WATCH_OUT)"
 log "  watch cut by reaper with max_lifetime close reason"
+
+log "case 6: clean session replacement — heartbeat row survives (access-info must not flap)"
+# Regression gate for the M1W7 live-run flapping bug (inari-server PR #152):
+# a clean agent restart replaces the stream; kubeproxy must KEEP the
+# cluster_tunnel_heartbeats row on clean disconnect / eviction so
+# access-info tunnelAvailable never flaps false for a live tunnel.
+docker restart "$TA_NAME" >/dev/null
+flap_seen=""
+for i in $(seq 1 12); do
+  n=$(docker exec "$PG_NAME" psql -U inari -d inari -tAc \
+    "SELECT count(*) FROM cluster_tunnel_heartbeats
+     WHERE cluster_id='$CLUSTER_ID' AND last_seen_at > now() - interval '20 seconds'" 2>/dev/null || echo 0)
+  if [ "$n" = "0" ]; then flap_seen=1; break; fi
+  sleep 1
+done
+[ -z "$flap_seen" ] || die "heartbeat row disappeared during clean agent restart — access-info would flap tunnelAvailable=false (regression of inari-server#152)"
+wait_heartbeat 1
+CODE=$(docker exec "$TOOLS_NAME" curl -s -o /dev/null -w '%{http_code}' -m 10 \
+  -H "Authorization: Bearer $(user_token)" "$PROXY_URL_HTTP/api/v1/namespaces")
+[ "$CODE" = 200 ] || die "post-restart request returned $CODE, want 200 (replaced session must serve traffic)"
+log "  heartbeat row never dropped; replaced session serves 200"
 
 log "ALL ASSERTIONS PASSED — kubeproxy → tunnel-agent → apiserver gateway chain works"
