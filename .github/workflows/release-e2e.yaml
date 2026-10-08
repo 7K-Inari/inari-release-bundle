@@ -235,6 +235,9 @@ jobs:
       server-src-ref: ${{ needs.resolve.outputs.server-src-ref }}
       image-tag: ${{ needs.resolve.outputs.image-tag }}
       build-from-ref: ${{ needs.resolve.outputs.build-from-ref }}
-      cosign-verify: ${{ needs.resolve.outputs.cosign-verify }}
+      # Job outputs are always strings; the reusable input is type boolean
+      # and rejects a bare string ("workflow_call input type mismatch" —
+      # the golden-path job never even appears on the run). Coerce here.
+      cosign-verify: ${{ needs.resolve.outputs.cosign-verify == 'true' }}
       branch-hint: ${{ github.head_ref || github.ref_name }}
       retention-days: 7
