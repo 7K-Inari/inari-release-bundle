@@ -164,6 +164,15 @@ spec:
             - name: INARI_KUBECTL_ACCESS_ENABLED
               value: {{ .Values.kubeproxy.kubectlAccessEnabled | quote }}
             {{- end }}
+            # External feature-flag provider (ADR-0016): OFREP backend
+            # (flipt subchart or flagsProvider.url) for external-allowed
+            # platform flags only; kill-switches stay DB-authoritative.
+            {{- if or .Values.flipt.enabled .Values.flagsProvider.url }}
+            - name: INARI_FLAGS_PROVIDER
+              value: "ofrep"
+            - name: INARI_FLAGS_PROVIDER_URL
+              value: {{ include "inari-server.flagsProviderUrl" . | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

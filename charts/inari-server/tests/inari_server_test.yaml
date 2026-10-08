@@ -587,6 +587,48 @@ tests:
           content:
             name: INARI_KUBECTL_ACCESS_ENABLED
             value: "false"
+  - it: renders no external flags-provider env by default (DB provider only)
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_FLAGS_PROVIDER
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_FLAGS_PROVIDER_URL
+  - it: wires the OFREP provider at the flipt subchart service when flipt.enabled
+    template: deployment.yaml
+    set:
+      flipt.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_FLAGS_PROVIDER
+            value: "ofrep"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_FLAGS_PROVIDER_URL
+            value: "http://RELEASE-NAME-inari-server-flipt:8080/ofrep"
+  - it: prefers an explicit external OFREP URL over the subchart
+    template: deployment.yaml
+    set:
+      flagsProvider:
+        url: "https://flags.example.com/ofrep"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_FLAGS_PROVIDER
+            value: "ofrep"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_FLAGS_PROVIDER_URL
+            value: "https://flags.example.com/ofrep"
   - it: does not render kubeproxy resources when disabled
     template: deployment-kubeproxy.yaml
     set:

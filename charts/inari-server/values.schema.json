@@ -172,6 +172,18 @@
         "streamReplicas": { "type": "integer", "minimum": 1 }
       }
     },
+    "flagsProvider": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" }
+      }
+    },
+    "flipt": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
     "extraEnv": { "type": "array" },
     "agent": {
       "type": "object",

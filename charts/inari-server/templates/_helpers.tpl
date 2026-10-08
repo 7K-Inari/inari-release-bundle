@@ -83,6 +83,19 @@ else the nats subchart's client service (<fullname>-nats).
 {{- end }}
 
 {{/*
+OFREP URL for the external feature-flag provider (ADR-0016): explicit
+flagsProvider.url (BYO/external), else the flipt subchart's HTTP service
+(<fullname>-flipt) with Flipt's OFREP base path.
+*/}}
+{{- define "inari-server.flagsProviderUrl" -}}
+{{- if .Values.flagsProvider.url }}
+{{- .Values.flagsProvider.url }}
+{{- else }}
+{{- printf "http://%s-flipt:8080/ofrep" (include "inari-server.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/*
 kubeproxy (kubectl gateway data plane, ADR-0014 in inari-server): resource
 name and selector labels. Sessions are pinned to one replica.
 */}}
