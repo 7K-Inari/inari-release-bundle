@@ -737,34 +737,20 @@ func provisionAgent(t *testing.T, in AgentInput) {
 		}
 	}
 
-	repo, tag := splitImage(in.AgentImage)
-	// --namespace default: the chart renders and owns the inari-system
-	// Namespace itself, so the release namespace is irrelevant — but it must
-	// be pinned explicitly (in-cluster runners would otherwise resolve the
-	// pod's serviceaccount namespace).
-	// oidcSecret.remotePath: the control plane writes the OIDC client secret
-	// at the trimmed Vault path (secrets.ClusterOIDCPath strips the
-	// "cluster:" type prefix from the cluster ID).
-	err := helm.UpgradeInstall("inari-agent", in.AgentChartDir,
-		"--namespace", "default",
-		"--set", "image.repository="+repo,
-		"--set", "image.tag="+tag,
-		"--set", "image.pullPolicy=IfNotPresent",
-		"--set", "config.tenantID="+in.OrgID,
-		"--set", "config.controlPlane=http://inari-server."+in.Namespace+".svc:8080",
-		"--set", "config.registrationToken="+in.RegToken,
-		"--set", "config.clusterLabels=e2e=true",
-		"--set", "oidcSecret.create=true",
-		"--set", "oidcSecret.secretStore=inari-platform",
-		"--set", "oidcSecret.remotePath=inari/clusters/"+strings.TrimPrefix(in.ClusterID, "cluster:")+"/oidc-client-secret",
-		"--wait", "--timeout", "180s")
-	if err != nil {
-		t.Fatalf("inari-agent install: %v", err)
+	// ESO wiring comes FIRST: `helm --wait` blocks on agent readiness, which
+	// requires the ESO-synced OIDC client secret, which requires the
+	// inari-platform ClusterSecretStore and its Vault token secret to
+	// already exist. Installing the chart first deadlocked deterministically
+	// (helm wait expired at 180s with the agent stuck waiting for the ESO
+	// secret; the store was never applied because the install never
+	// returned) — the Go port's original order was only safe for ESO CRD
+	// retries, not for a blocking --wait. The inari-system Namespace is
+	// chart-owned, so ensure it explicitly before seeding the token secret.
+	if ns, err := kube.Kubectl("create", "namespace", "inari-system", "--dry-run=client", "-o", "yaml"); err != nil {
+		t.Fatalf("rendering inari-system namespace: %v", err)
+	} else if _, err := kube.ApplyStdin(ns); err != nil {
+		t.Fatalf("ensuring inari-system namespace: %v", err)
 	}
-
-	// ESO wiring: the chart's opt-in ExternalSecret pulls from the
-	// ClusterSecretStore the registration response references. ESO retries
-	// the ExternalSecret until the store exists, so this applies after.
 	sec, err := kube.Kubectl("-n", "inari-system", "create", "secret", "generic", "inari-vault-token",
 		"--from-literal=token="+in.VaultDevToken, "--dry-run=client", "-o", "yaml")
 	if err != nil {
@@ -791,6 +777,31 @@ spec:
 `, in.Namespace)
 	if _, err := kube.ApplyStdin(store); err != nil {
 		t.Fatalf("applying inari-platform ClusterSecretStore: %v", err)
+	}
+
+	repo, tag := splitImage(in.AgentImage)
+	// --namespace default: the chart renders and owns the inari-system
+	// Namespace itself, so the release namespace is irrelevant — but it must
+	// be pinned explicitly (in-cluster runners would otherwise resolve the
+	// pod's serviceaccount namespace).
+	// oidcSecret.remotePath: the control plane writes the OIDC client secret
+	// at the trimmed Vault path (secrets.ClusterOIDCPath strips the
+	// "cluster:" type prefix from the cluster ID).
+	err = helm.UpgradeInstall("inari-agent", in.AgentChartDir,
+		"--namespace", "default",
+		"--set", "image.repository="+repo,
+		"--set", "image.tag="+tag,
+		"--set", "image.pullPolicy=IfNotPresent",
+		"--set", "config.tenantID="+in.OrgID,
+		"--set", "config.controlPlane=http://inari-server."+in.Namespace+".svc:8080",
+		"--set", "config.registrationToken="+in.RegToken,
+		"--set", "config.clusterLabels=e2e=true",
+		"--set", "oidcSecret.create=true",
+		"--set", "oidcSecret.secretStore=inari-platform",
+		"--set", "oidcSecret.remotePath=inari/clusters/"+strings.TrimPrefix(in.ClusterID, "cluster:")+"/oidc-client-secret",
+		"--wait", "--timeout", "180s")
+	if err != nil {
+		t.Fatalf("inari-agent install: %v", err)
 	}
 	logf("PASS: inari-agent installed and ESO wired (cluster %s)", in.ClusterID)
 }
