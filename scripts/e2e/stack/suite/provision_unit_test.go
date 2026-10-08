@@ -117,6 +117,14 @@ func TestIsStreamNotFound(t *testing.T) {
 	if !isStreamNotFound(notFound) {
 		t.Fatalf("stream-not-found exec error must be classified as an expected miss")
 	}
+	// Verbatim stderr of `nats stream info INARI_OUTBOX` for a MISSING
+	// stream under the pinned probe image (natsio/nats-box:0.17.0, nats CLI
+	// v0.2.0) — the dominant expected-miss shape in this suite.
+	pinnedCLI := errors.New("kubectl -n inari exec deploy/nats-box -- nats stream info INARI_OUTBOX --server nats:4222 --json: exit status 1\n" +
+		"nats: error: could not pick a Stream to operate on: cannot pick a Stream without a terminal and no Stream name supplied")
+	if !isStreamNotFound(pinnedCLI) {
+		t.Fatalf("pinned nats-box missing-stream error must be classified as an expected miss")
+	}
 	broken := errors.New("exit status 1\nerror: context deadline exceeded: connection refused")
 	if isStreamNotFound(broken) {
 		t.Fatalf("generic probe failure must NOT be classified as stream-not-found")

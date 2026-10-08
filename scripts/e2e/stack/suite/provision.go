@@ -584,8 +584,22 @@ func parseOutboxStreamInfo(out string, wantReplicas int) (bool, string) {
 // isStreamNotFound reports whether an exec error is the nats CLI's
 // stream-not-found — the expected state while the server has not ensured
 // the stream yet. Any other exec error means the PROBE is broken.
+//
+// Two shapes are recognized, both verified against the pinned probe image
+// (natsio/nats-box:0.17.0, nats CLI v0.2.0):
+//   - "stream not found (10059)" — the lookup failure some CLI versions
+//     print directly;
+//   - "could not pick a Stream to operate on" — what nats-box:0.17.0
+//     actually prints for a missing stream (the CLI falls back to
+//     interactive stream selection after the lookup fails, then aborts
+//     because kubectl exec has no terminal).
 func isStreamNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "stream not found")
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "stream not found") ||
+		strings.Contains(msg, "could not pick a Stream")
 }
 
 // ProvisionStack is TestProvisionStack: every helm install/upgrade of the
