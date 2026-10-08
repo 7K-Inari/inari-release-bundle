@@ -9,9 +9,12 @@ name: release-e2e
 #                           against that exact tag (the artifact being
 #                           released, not a floating branch).
   #   3. golden-path        — kind-based golden path (HA matrix preserved),
-  #                           preferring the published cosign-signed image
-  #                           ghcr.io/7k-inari/inari-server:vX.Y.Z over a
-  #                           rebuild. Delegated to the reusable
+  #                           running the unsigned "edge" image of the latest
+  #                           inari-server main merge by default (the suite
+  #                           asserts behavior newer than the last published
+  #                           release; dispatch inputs can pin a published,
+  #                           cosign-signed image or a build-from-ref repair
+  #                           instead). Delegated to the reusable
   #                           e2e-stack.yaml (migration phase 4), which runs
   #                           the Go stack suite (-tags=e2e: provisions the
   #                           whole stack in-process AND asserts it), then
@@ -138,6 +141,7 @@ jobs:
       image-tag: ${{ steps.resolve.outputs.image-tag }}
       build-from-ref: ${{ steps.resolve.outputs.build-from-ref }}
       server-src-ref: ${{ steps.resolve.outputs.server-src-ref }}
+      cosign-verify: ${{ steps.resolve.outputs.cosign-verify }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -157,24 +161,35 @@ jobs:
             exit 1
           fi
           server_tag="v${app_version#v}"
-          # GHCR image tags are UNPREFIXED (1.8.0), while git tags are
-          # v-prefixed (v1.8.0) — verified against the registry.
-          image_tag="${IMAGE_TAG_OVERRIDE:-${app_version#v}}"
           echo "app-version=$app_version" >> "$GITHUB_OUTPUT"
           echo "server-tag=$server_tag" >> "$GITHUB_OUTPUT"
-          echo "image-tag=$image_tag" >> "$GITHUB_OUTPUT"
           # Sentinel "none": empty job outputs are dropped from the needs
           # context, so comparing against '' is unreliable downstream.
           echo "build-from-ref=${BUILD_FROM_REF:-none}" >> "$GITHUB_OUTPUT"
-          # With an image override the golden path's inari-server source
-          # checkout (migrations dir for the HA(c) count) must track the
-          # override — edge tracks the latest main merge.
+          # Golden-path server under test: the unsigned "edge" image (latest
+          # inari-server main merge) BY DEFAULT, with the source checkout on
+          # main to match. The released appVersion image predates behavior
+          # the suite asserts (ADR-0014 outbox — the Oct 2026 INARI_OUTBOX
+          # golden-path failure: every leg burned 2m waiting for a stream a
+          # Sep-24 server never creates). edge is unsigned → cosign off.
+          # Explicit dispatch overrides keep the old semantics: a published
+          # version tag image (cosign-signed) or a build-from-ref repair.
           if [ -n "$IMAGE_TAG_OVERRIDE" ]; then
+            echo "image-tag=$IMAGE_TAG_OVERRIDE" >> "$GITHUB_OUTPUT"
             echo "server-src-ref=main" >> "$GITHUB_OUTPUT"
-          else
+            echo "cosign-verify=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "$BUILD_FROM_REF" ]; then
+            # GHCR image tags are UNPREFIXED (1.8.0), git tags are v-prefixed.
+            echo "image-tag=${app_version#v}" >> "$GITHUB_OUTPUT"
             echo "server-src-ref=$server_tag" >> "$GITHUB_OUTPUT"
+            echo "cosign-verify=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image-tag=edge" >> "$GITHUB_OUTPUT"
+            echo "server-src-ref=main" >> "$GITHUB_OUTPUT"
+            echo "cosign-verify=false" >> "$GITHUB_OUTPUT"
           fi
-          # The Release PR must point at a published server tag.
+          # The Release PR must still point at a published server tag — the
+          # server-integration job tests exactly that artifact.
           if ! git ls-remote --exit-code https://github.com/7K-Inari/inari-server.git "refs/tags/$server_tag" >/dev/null 2>&1; then
             echo "inari-server tag $server_tag does not exist — refuse to gate an unpublished server" >&2
             exit 1
@@ -220,6 +235,6 @@ jobs:
       server-src-ref: ${{ needs.resolve.outputs.server-src-ref }}
       image-tag: ${{ needs.resolve.outputs.image-tag }}
       build-from-ref: ${{ needs.resolve.outputs.build-from-ref }}
-      cosign-verify: ${{ github.event.inputs.image-tag == '' }}
+      cosign-verify: ${{ needs.resolve.outputs.cosign-verify }}
       branch-hint: ${{ github.head_ref || github.ref_name }}
       retention-days: 7
