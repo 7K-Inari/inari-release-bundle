@@ -570,6 +570,23 @@ tests:
           content:
             name: INARI_KUBECTL_ACCESS_ENABLED
             value: "false"
+  - it: renders no env kill-switch on the server Deployment by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_KUBECTL_ACCESS_ENABLED
+  - it: pins the env kill-switch on the server Deployment too when explicitly set
+    template: deployment.yaml
+    set:
+      kubeproxy.kubectlAccessEnabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_KUBECTL_ACCESS_ENABLED
+            value: "false"
   - it: does not render kubeproxy resources when disabled
     template: deployment-kubeproxy.yaml
     set:
