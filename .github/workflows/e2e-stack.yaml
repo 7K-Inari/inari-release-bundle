@@ -348,6 +348,9 @@ jobs:
         working-directory: inari-server
         run: |
           set -euo pipefail
+          # server-src-ref=main has no e2e/ dir (assets relocated to the
+          # bundle in inari-server #122; released tags still have one).
+          mkdir -p e2e
           cp "${{ github.workspace }}/bundle/scripts/e2e/api/api_schema_e2e_test.go" e2e/
           make export-openapi
           kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
