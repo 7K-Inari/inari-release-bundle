@@ -180,6 +180,44 @@ nats:
           cpu: 50m
           memory: 128Mi
 
+# External feature-flag provider (ADR-0016 follow-up). When flipt.enabled
+# (below) or flagsProvider.url is set, the server is configured with
+# INARI_FLAGS_PROVIDER=ofrep. Authority rule: the external provider serves
+# only platform-scoped product/rollout flags; kill-switches
+# (kubectl_access.enabled) and cluster-scoped flags stay DB-authoritative,
+# and the kubeproxy data plane never uses the external provider.
+flagsProvider:
+  # External OFREP endpoint (overrides the flipt subchart service when set).
+  url: ""
+
+# Optional Flipt subchart: fully open source (Apache-2.0) feature-flag
+# backend with a built-in UI and OSS OIDC login. Disabled by default.
+flipt:
+  enabled: false
+  flipt:
+    config:
+      db:
+        # Default sqlite file (dev posture). For production point Flipt at
+        # the platform Postgres:
+        # url: postgres://flipt:<password>@<postgres-host>:5432/flipt?sslmode=require
+        url: file:/var/opt/flipt/flipt.db
+      # OIDC login for the Flipt UI (free in OSS) — example for the platform
+      # Keycloak; create a confidential `flipt` client in the realm first.
+      # authentication:
+      #   required: true
+      #   session:
+      #     domain: flipt.example.com
+      #   methods:
+      #     oidc:
+      #       enabled: true
+      #       providers:
+      #         inari:
+      #           issuer_url: https://keycloak.example.com/realms/inari
+      #           client_id: flipt
+      #           client_secret: <from-secret>
+      #           redirect_address: https://flipt.example.com
+      #           scopes: [openid, profile, email]
+
 # OIDC issuer for token validation. Defaults to
 # <keycloak.baseUrl>/realms/<keycloak.realm> when empty.
 oidc:
