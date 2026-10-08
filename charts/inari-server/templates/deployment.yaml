@@ -156,6 +156,14 @@ spec:
                   optional: true
             - name: INARI_AGENT_FLOAT_LATEST
               value: {{ .Values.agent.floatLatest | quote }}
+            # Kill-switch v2 env escape hatch (ADR-0016): an explicitly set
+            # value pins the flag on BOTH binaries — setting it on kubeproxy
+            # alone recreates the per-binary split-brain (proxy 410s while
+            # access-info still reports enabled).
+            {{- if ne .Values.kubeproxy.kubectlAccessEnabled nil }}
+            - name: INARI_KUBECTL_ACCESS_ENABLED
+              value: {{ .Values.kubeproxy.kubectlAccessEnabled | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

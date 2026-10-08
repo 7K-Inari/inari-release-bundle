@@ -707,4 +707,74 @@ CODE=$(docker exec "$TOOLS_NAME" curl -s -o /dev/null -w '%{http_code}' -m 10 \
 [ "$CODE" = 200 ] || die "post-restart request returned $CODE, want 200 (replaced session must serve traffic)"
 log "  heartbeat row never dropped; replaced session serves 200"
 
+# case 7: runtime feature flags (kill-switch v2, ADR-0016) — the DB-backed
+# kubectl_access.enabled flag drives the proxy without env/restart.
+# API-driven transitions are covered by inari-server integration tests; here
+# we exercise propagation (DB row → kubeproxy) and the env precedence rule.
+set_flag() { # scope scope_key value(""|"true"|"false"; "" = delete row)
+  local scope="$1" skey="$2" val="$3"
+  if [ -z "$val" ]; then
+    docker exec "$PG_NAME" psql -U inari -d inari -v ON_ERROR_STOP=1 -q \
+      -c "DELETE FROM feature_flags WHERE flag_key='kubectl_access.enabled' AND scope='$scope' AND scope_key='$skey'"
+  else
+    docker exec "$PG_NAME" psql -U inari -d inari -v ON_ERROR_STOP=1 -q \
+      -c "INSERT INTO feature_flags (flag_key, scope, scope_key, value, updated_by)
+          VALUES ('kubectl_access.enabled','$scope','$skey','$val','e2e')
+          ON CONFLICT (flag_key, scope, scope_key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()"
+  fi
+}
+wait_proxy_code() { # want timeout_s — polls until the user request returns $want
+  local want="$1" timeout="$2" code="" i
+  for i in $(seq 1 "$timeout"); do
+    code=$(docker exec "$TOOLS_NAME" curl -s -o /dev/null -w '%{http_code}' -m 5 \
+      -H "Authorization: Bearer $(user_token)" "$PROXY_URL_HTTP/api/v1/namespaces" 2>/dev/null)
+    [ "$code" = "$want" ] && return 0
+    sleep 2
+  done
+  die "proxy status never became $want within $((timeout * 2))s (last: ${code:-none})"
+}
+
+log "case 7a: runtime platform disable → 410 + tunnel rejected, re-enable restores"
+start_kubeproxy  # no env override: runtime flag controls
+wait_heartbeat 1
+set_flag platform "" false
+wait_proxy_code 410 20
+reject_seen=""
+for i in $(seq 1 15); do
+  docker logs "$TA_NAME" 2>&1 | tail -50 | grep -qi "disabled by platform policy\|unavailable" && { reject_seen=1; break; }
+  sleep 2
+done
+[ -n "$reject_seen" ] || die "agent log shows no tunnel rejection after runtime platform disable"
+log "  runtime platform flag off: 410 for users; agent stream rejected"
+set_flag platform "" ""
+# The agent's backoff ratchets while rejected; restart it to bound recovery
+# time (no-restart recovery within the backoff ceiling is covered by the Go
+# integration tests).
+docker restart "$TA_NAME" >/dev/null
+wait_heartbeat 1
+wait_proxy_code 200 30
+log "  row removed: access restored"
+
+log "case 7b: cluster-scoped override disables only this cluster"
+set_flag cluster "$CLUSTER_ID" false
+wait_proxy_code 410 20
+set_flag cluster "$CLUSTER_ID" ""
+docker restart "$TA_NAME" >/dev/null
+wait_heartbeat 1
+wait_proxy_code 200 30
+log "  cluster override off → 410; cleared → restored"
+
+log "case 7c: env explicitly SET beats runtime flag (precedence)"
+set_flag platform "" false
+wait_proxy_code 410 20
+start_kubeproxy -e INARI_KUBECTL_ACCESS_ENABLED=true
+# Env true wins over the runtime false: the flag gate no longer 410s. The
+# agent reconnects and requests reach the apiserver.
+wait_heartbeat 1
+wait_proxy_code 200 40
+set_flag platform "" ""
+start_kubeproxy
+wait_heartbeat 1
+log "  env override true served traffic despite runtime false; restored to runtime control"
+
 log "ALL ASSERTIONS PASSED — kubeproxy → tunnel-agent → apiserver gateway chain works"

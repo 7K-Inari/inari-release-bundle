@@ -85,8 +85,13 @@ kubeproxy:
   # LB/Gateway in front). Surfaced as proxyUrl in cluster access-info;
   # empty = gateway mode not advertised to users.
   publicUrl: ""
-  # Global kill switch: false → 410 for users, tunnel streams rejected.
-  kubectlAccessEnabled: true
+  # Kill-switch v2 (ADR-0016): kubectl access is controlled at runtime via
+  # the feature-flags API by default. Set true/false here only as an explicit
+  # env override — an explicitly set value wins over any runtime flag, and the
+  # chart pins it on BOTH inari-server and inari-kubeproxy (setting it on one
+  # binary only recreates the per-binary split-brain).
+  # null = unset (runtime flag controls; recommended).
+  kubectlAccessEnabled: null
   # Abuse bounds (ADR-0014): per-connection re-auth bound and open timeout.
   maxTunnelLifetime: 60m
   openResultTimeout: 30s
