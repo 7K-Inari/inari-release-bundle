@@ -744,14 +744,11 @@ func provisionAgent(t *testing.T, in AgentInput) {
 	// (helm wait expired at 180s with the agent stuck waiting for the ESO
 	// secret; the store was never applied because the install never
 	// returned) — the Go port's original order was only safe for ESO CRD
-	// retries, not for a blocking --wait. The inari-system Namespace is
-	// chart-owned, so ensure it explicitly before seeding the token secret.
-	if ns, err := kube.Kubectl("create", "namespace", "inari-system", "--dry-run=client", "-o", "yaml"); err != nil {
-		t.Fatalf("rendering inari-system namespace: %v", err)
-	} else if _, err := kube.ApplyStdin(ns); err != nil {
-		t.Fatalf("ensuring inari-system namespace: %v", err)
-	}
-	sec, err := kube.Kubectl("-n", "inari-system", "create", "secret", "generic", "inari-vault-token",
+	// retries, not for a blocking --wait. The token secret lives in the
+	// always-present default namespace: pre-creating the chart-owned
+	// inari-system namespace makes helm refuse the install (missing
+	// release ownership metadata).
+	sec, err := kube.Kubectl("-n", "default", "create", "secret", "generic", "inari-vault-token",
 		"--from-literal=token="+in.VaultDevToken, "--dry-run=client", "-o", "yaml")
 	if err != nil {
 		t.Fatalf("rendering inari-vault-token secret: %v", err)
@@ -772,7 +769,7 @@ spec:
       auth:
         tokenSecretRef:
           name: inari-vault-token
-          namespace: inari-system
+          namespace: default
           key: token
 `, in.Namespace)
 	if _, err := kube.ApplyStdin(store); err != nil {
