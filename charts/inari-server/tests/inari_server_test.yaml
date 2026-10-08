@@ -556,11 +556,20 @@ tests:
       - equal:
           path: metadata.labels["app.kubernetes.io/component"]
           value: inari-kubeproxy
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INARI_KUBECTL_ACCESS_ENABLED
+  - it: renders the env kill-switch override only when explicitly set
+    template: deployment-kubeproxy.yaml
+    set:
+      kubeproxy.kubectlAccessEnabled: false
+    asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: INARI_KUBECTL_ACCESS_ENABLED
-            value: "true"
+            value: "false"
   - it: does not render kubeproxy resources when disabled
     template: deployment-kubeproxy.yaml
     set:

@@ -76,8 +76,10 @@ spec:
               value: {{ include "inari-server.oidcIssuerUrl" . | quote }}
             - name: INARI_KUBEPROXY_LISTEN_ADDR
               value: {{ printf ":%d" (int .Values.kubeproxy.service.port) | quote }}
+            {{- if ne .Values.kubeproxy.kubectlAccessEnabled nil }}
             - name: INARI_KUBECTL_ACCESS_ENABLED
               value: {{ .Values.kubeproxy.kubectlAccessEnabled | quote }}
+            {{- end }}
             - name: INARI_KUBEPROXY_MAX_TUNNEL_LIFETIME
               value: {{ .Values.kubeproxy.maxTunnelLifetime | quote }}
             - name: INARI_KUBEPROXY_OPEN_RESULT_TIMEOUT

@@ -88,7 +88,7 @@
           "required": ["type", "port"]
         },
         "publicUrl": { "type": "string" },
-        "kubectlAccessEnabled": { "type": "boolean" },
+        "kubectlAccessEnabled": { "type": ["boolean", "null"] },
         "maxTunnelLifetime": { "type": "string" },
         "openResultTimeout": { "type": "string" },
         "connByteCap": { "type": "integer", "minimum": 1 },
