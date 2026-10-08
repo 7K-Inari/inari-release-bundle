@@ -172,7 +172,10 @@ async function api(method, url, { token, body } = {}) {
       status: res.status,
     });
   }
-  return res.status === 204 ? null : res.json();
+  // Several OK responses carry no body (KC POST /users answers 201-empty,
+  // PUTs answer 204): res.json() would throw "Unexpected end of JSON input".
+  const text = await res.text();
+  return text === "" ? null : JSON.parse(text);
 }
 
 function kcAdminToken() {
