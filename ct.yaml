@@ -3,10 +3,11 @@ target-branch: main
 chart-dirs:
   - charts
 # Subchart repositories ct resolves during dependency build (inari-server's
-# optional redis dependency + NATS subchart).
+# optional redis dependency + NATS subchart + Flipt subchart).
 chart-repos:
   - bitnami=https://charts.bitnami.com/bitnami
   - nats=https://nats-io.github.io/k8s/helm/charts
+  - flipt=https://flipt-io.github.io/helm-charts
 # Version bumps are owned by release-please; ct's increment check would
 # block annotation-only Chart.yaml changes and duplicate the Release PR.
 check-version-increment: false
