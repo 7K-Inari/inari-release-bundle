@@ -502,34 +502,90 @@ func installConsole(c *ProvisionConfig) error {
 // awaitOutboxStream polls until the server ensures the INARI_OUTBOX stream
 // at boot (ADR-0014; app-level, no k8s condition). Replicas match the leg:
 // R=3 on HA (3-node JetStream), R=1 on the trimmed non-HA single node.
+//
+// Diagnostics hardening (Oct 2026 postmortem): a bare "stream never formed"
+// hid two very different root causes — the probe itself broken (nats-box
+// exec erroring, indistinguishable from a missing stream because exec
+// errors were swallowed) and the deployed server image predating ADR-0014
+// (it never creates the stream). Track the last probe error and the last
+// mismatch detail, and surface both in the timeout message. The
+// stream-not-found exec error is the ONLY expected miss; any other probe
+// error is recorded verbatim.
 func awaitOutboxStream(c *ProvisionConfig) error {
 	wantReplicas := 1
 	if c.HA {
 		wantReplicas = 3
 	}
-	return poll.Until(120*time.Second, 5*time.Second, func() (bool, error) {
+	var lastProbeErr error
+	var lastDetail string
+	err := poll.Until(120*time.Second, 5*time.Second, func() (bool, error) {
 		out, err := kube.ExecInPod(c.Namespace, "deploy/nats-box",
 			"nats", "stream", "info", "INARI_OUTBOX", "--server", "nats:4222", "--json")
 		if err != nil {
-			return false, nil // not created yet: keep polling
-		}
-		var doc struct {
-			Config struct {
-				Replicas int      `json:"num_replicas"`
-				Subjects []string `json:"subjects"`
-			} `json:"config"`
-		}
-		if json.Unmarshal([]byte(out), &doc) != nil {
+			if isStreamNotFound(err) {
+				lastDetail = "stream does not exist yet"
+			} else {
+				// Probe itself failed (nats-box not ready, CLI/auth
+				// regression, …): remember it — if every attempt fails this
+				// way the timeout message must say so instead of implying
+				// the server never created the stream.
+				lastProbeErr = err
+			}
 			return false, nil
 		}
-		subjectOK := false
-		for _, s := range doc.Config.Subjects {
-			if s == "inari.outbox.>" {
-				subjectOK = true
-			}
-		}
-		return doc.Config.Replicas == wantReplicas && subjectOK, nil
+		formed, detail := parseOutboxStreamInfo(out, wantReplicas)
+		lastDetail = detail
+		return formed, nil
 	})
+	if err == nil {
+		return nil
+	}
+	msg := fmt.Sprintf("%v (last state: %s)", err, lastDetail)
+	if lastProbeErr != nil {
+		msg += fmt.Sprintf("; last probe exec error: %v", lastProbeErr)
+	}
+	msg += ". If the deployed server image predates ADR-0014 it never creates " +
+		"the stream — check `kubectl -n " + c.Namespace + " logs deploy/inari-server` " +
+		"for eventbus/NATS lines and verify the image tag matches the source under test"
+	return fmt.Errorf("%s", msg)
+}
+
+// parseOutboxStreamInfo interprets one `nats stream info --json` payload:
+// formed only when the replica count matches the leg AND the outbox subject
+// filter is present. The detail string always describes what was seen, so a
+// mismatch (or garbage output) is diagnosable from the failure message.
+func parseOutboxStreamInfo(out string, wantReplicas int) (bool, string) {
+	var doc struct {
+		Config struct {
+			Replicas int      `json:"num_replicas"`
+			Subjects []string `json:"subjects"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		return false, fmt.Sprintf("unparseable stream info: %.120s", out)
+	}
+	subjectOK := false
+	for _, s := range doc.Config.Subjects {
+		if s == "inari.outbox.>" {
+			subjectOK = true
+		}
+	}
+	if doc.Config.Replicas != wantReplicas {
+		return false, fmt.Sprintf("stream exists with num_replicas=%d (want %d), subjects=%v",
+			doc.Config.Replicas, wantReplicas, doc.Config.Subjects)
+	}
+	if !subjectOK {
+		return false, fmt.Sprintf("stream exists with num_replicas=%d but missing subject inari.outbox.> (subjects=%v)",
+			doc.Config.Replicas, doc.Config.Subjects)
+	}
+	return true, fmt.Sprintf("stream formed (num_replicas=%d, subjects=%v)", doc.Config.Replicas, doc.Config.Subjects)
+}
+
+// isStreamNotFound reports whether an exec error is the nats CLI's
+// stream-not-found — the expected state while the server has not ensured
+// the stream yet. Any other exec error means the PROBE is broken.
+func isStreamNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "stream not found")
 }
 
 // ProvisionStack is TestProvisionStack: every helm install/upgrade of the

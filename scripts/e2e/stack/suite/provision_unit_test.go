@@ -5,6 +5,7 @@
 package suite
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -54,6 +55,75 @@ func TestKindConfigYAML(t *testing.T) {
 			t.Fatalf("empty node image must not render an image line:\n%s", cfg)
 		}
 	})
+}
+
+func TestParseOutboxStreamInfo(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		out          string
+		wantReplicas int
+		wantFormed   bool
+		wantDetail   string
+	}{
+		{
+			name:         "formed R=1",
+			out:          `{"config":{"num_replicas":1,"subjects":["inari.outbox.>"]}}`,
+			wantReplicas: 1,
+			wantFormed:   true,
+		},
+		{
+			name:         "formed R=3",
+			out:          `{"config":{"num_replicas":3,"subjects":["inari.outbox.>"]}}`,
+			wantReplicas: 3,
+			wantFormed:   true,
+		},
+		{
+			name:         "replica mismatch is reported",
+			out:          `{"config":{"num_replicas":1,"subjects":["inari.outbox.>"]}}`,
+			wantReplicas: 3,
+			wantFormed:   false,
+			wantDetail:   "num_replicas=1 (want 3)",
+		},
+		{
+			name:         "subject mismatch is reported",
+			out:          `{"config":{"num_replicas":1,"subjects":["other.>"]}}`,
+			wantReplicas: 1,
+			wantFormed:   false,
+			wantDetail:   "missing subject inari.outbox.>",
+		},
+		{
+			name:         "unparseable output is reported",
+			out:          `No Streams defined`,
+			wantReplicas: 1,
+			wantFormed:   false,
+			wantDetail:   "unparseable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			formed, detail := parseOutboxStreamInfo(tc.out, tc.wantReplicas)
+			if formed != tc.wantFormed {
+				t.Fatalf("parseOutboxStreamInfo formed = %v, want %v (detail %q)", formed, tc.wantFormed, detail)
+			}
+			if tc.wantDetail != "" && !strings.Contains(detail, tc.wantDetail) {
+				t.Fatalf("detail %q missing %q", detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestIsStreamNotFound(t *testing.T) {
+	notFound := errors.New("kubectl -n inari exec deploy/nats-box -- nats stream info INARI_OUTBOX --server nats:4222 --json: exit status 1\n" +
+		"nats: error: could not lookup Stream INARI_OUTBOX: stream not found (10059)")
+	if !isStreamNotFound(notFound) {
+		t.Fatalf("stream-not-found exec error must be classified as an expected miss")
+	}
+	broken := errors.New("exit status 1\nerror: context deadline exceeded: connection refused")
+	if isStreamNotFound(broken) {
+		t.Fatalf("generic probe failure must NOT be classified as stream-not-found")
+	}
+	if isStreamNotFound(nil) {
+		t.Fatalf("nil error must not be classified as stream-not-found")
+	}
 }
 
 func TestAudContains(t *testing.T) {
