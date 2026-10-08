@@ -793,6 +793,12 @@ spec:
 		"--set", "config.controlPlane=http://inari-server."+in.Namespace+".svc:8080",
 		"--set", "config.registrationToken="+in.RegToken,
 		"--set", "config.clusterLabels=e2e=true",
+		// kubectlTunnel defaults on, but kubeproxyURL is empty by default
+		// and the tunnel-agent fails fast without it, so helm --wait can
+		// never succeed. The golden path asserts the agent chain only; the
+		// tunnel chain is covered by the dedicated kubectl-tunnel e2e
+		// (e2e-nightly). Disable it here.
+		"--set", "kubectlTunnel.enabled=false",
 		"--set", "oidcSecret.create=true",
 		"--set", "oidcSecret.secretStore=inari-platform",
 		"--set", "oidcSecret.remotePath=inari/clusters/"+strings.TrimPrefix(in.ClusterID, "cluster:")+"/oidc-client-secret",
