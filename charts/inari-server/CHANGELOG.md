@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0](https://github.com/7K-Inari/inari-release-bundle/compare/inari-server-v0.1.9...inari-server-v0.2.0) (2026-10-09)
+
+
+### Features
+
+* **flipt:** optional Flipt subchart wired as the OFREP flag provider ([#92](https://github.com/7K-Inari/inari-release-bundle/issues/92)) ([f50221c](https://github.com/7K-Inari/inari-release-bundle/commit/f50221cd727153853a95b064990298a3e9615c82))
+* **inari-server:** wire agent compat ConfigMap into server env ([#55](https://github.com/7K-Inari/inari-release-bundle/issues/55)) ([351bee2](https://github.com/7K-Inari/inari-release-bundle/commit/351bee28baccf6a2e06277eb02bb51db7951dd68))
+* **kubeproxy:** runtime kubectl-access flag chart default + e2e case 7 (kill-switch v2) ([#91](https://github.com/7K-Inari/inari-release-bundle/issues/91)) ([1a150a8](https://github.com/7K-Inari/inari-release-bundle/commit/1a150a89b7368432e6d9cea80e155b98203a0763))
+* **release:** centralize charts in inari-release-bundle + per-merge edge releases ([#54](https://github.com/7K-Inari/inari-release-bundle/issues/54)) ([65b30c1](https://github.com/7K-Inari/inari-release-bundle/commit/65b30c1cced4af9d8fcea202c9ede0f6d4ebbd75))
+
 ## [0.1.9](https://github.com/7K-Inari/inari-server/compare/inari-server-chart-v0.1.8...inari-server-chart-v0.1.9) (2026-09-24)
 
 
