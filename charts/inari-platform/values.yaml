@@ -70,7 +70,7 @@ keycloak:
   # Pin Keycloak to a version matched with the operator. Setting
   # keycloak.image also renders startOptimized: false on the Keycloak CR
   # (the operator assumes custom images are already augmented).
-  image: quay.io/keycloak/keycloak:26.3.2
+  image: quay.io/keycloak/keycloak:26.8.0
   # Override the in-cluster/admin backchannel base URL. Empty = derived
   # (bundled: http://keycloak-service:8080; external: keycloak.external.baseUrl).
   baseUrl: ""
