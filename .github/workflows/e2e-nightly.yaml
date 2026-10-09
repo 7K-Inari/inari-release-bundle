@@ -46,7 +46,7 @@ jobs:
       server-tag: ${{ steps.resolve.outputs.server-tag }}
       image-tag: ${{ steps.resolve.outputs.image-tag }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Resolve inari-server tag from chart appVersion
         id: resolve
         run: |
@@ -84,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Quarantine sweep (file/dedupe e2e-flake issues)
         # Files an `e2e-flake` issue for any test flaky in 2+ nightly runs
         # within 7 days; comments on the existing open issue for the same
@@ -104,7 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.ref }}
           path: bundle
@@ -113,7 +113,7 @@ jobs:
       # tag yet — the resolved server-tag (chart appVersion, v3.0.0) predates
       # it, and the script aborts on the missing cmd/inari-kubeproxy dir.
       # Build from main until a release tag contains kubeproxy.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: 7K-Inari/inari-server
           ref: main
@@ -129,7 +129,7 @@ jobs:
             echo "no inari-agent main branch" >&2; exit 1
           fi
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: 7K-Inari/inari-agent
           ref: ${{ steps.agent.outputs.ref }}
@@ -151,7 +151,7 @@ jobs:
 
       - name: Upload tunnel e2e log
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kubectl-tunnel-e2e-log
           path: tunnel-e2e.log

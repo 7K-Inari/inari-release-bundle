@@ -102,14 +102,14 @@ jobs:
       IMAGE_REF: ghcr.io/7k-inari/inari-server:${{ inputs.image-tag }}
     steps:
       - name: Checkout inari-server (Go suites + migrations dir)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: 7K-Inari/inari-server
           ref: ${{ inputs.server-src-ref }}
           path: inari-server
 
       - name: Checkout bundle (charts under test)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.bundle-ref }}
           path: bundle
@@ -127,7 +127,7 @@ jobs:
           fi
 
       - name: Checkout inari-agent
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: 7K-Inari/inari-agent
           ref: ${{ steps.agent.outputs.ref }}
@@ -146,7 +146,7 @@ jobs:
           fi
 
       - name: Checkout inari-operator (operator + console smoke charts)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: 7K-Inari/inari-operator
           ref: ${{ steps.operator.outputs.ref }}
@@ -157,14 +157,14 @@ jobs:
         # module (the nested module under scripts/e2e/stack).
         # cache-dependency-path: the module is nested, so setup-go's
         # default go.sum discovery would miss it and cache nothing.
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: bundle/scripts/e2e/stack/go.mod
           cache-dependency-path: bundle/scripts/e2e/stack/go.sum
 
       - name: Install cosign
         if: inputs.build-from-ref == 'none' && inputs.cosign-verify
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Pull and verify published server image
         # Prefer the cosign-signed artifact that actually ships over a
@@ -190,7 +190,7 @@ jobs:
         # agent tag to pull) — the GHA layer cache turns every rebuild
         # after the first into a cache replay. The server repair-path
         # build below uses the same cache backend (own scope).
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build server image from ref
         # Repair path for unreleased combos.
@@ -231,7 +231,7 @@ jobs:
       # the HA leg (kind load targets every node of the cluster).
       - name: Cache e2e image tar
         id: imgcache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/e2e-images/images.tar
           key: e2e-images-${{ runner.os }}-${{ hashFiles('bundle/scripts/e2e/stack/testdata/images.txt') }}
@@ -299,7 +299,7 @@ jobs:
         # version fails loudly (version not found) — the correct signal to
         # regenerate images.txt.
         id: helmcache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cache/helm
@@ -369,7 +369,7 @@ jobs:
           hashFiles('bundle/scripts/e2e/ui/package-lock.json') }}" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.pwkey.outputs.key }}
@@ -427,7 +427,7 @@ jobs:
 
       - name: Upload flake report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ui-e2e-flakes-${{ env.LEG }}
           path: bundle/scripts/e2e/ui/test-results/flake-report.json
@@ -438,7 +438,7 @@ jobs:
         # Gate: failure-only (PR #63 convention). Nightly: always — the
         # full results feed the flake/quarantine triage.
         if: failure() || inputs.mode == 'nightly'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ui-e2e-${{ env.LEG }}
           path: |
@@ -488,7 +488,7 @@ jobs:
 
       - name: Upload Go test JSON + diagnostics on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: golden-path-go-${{ env.LEG }}
           path: |
