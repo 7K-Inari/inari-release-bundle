@@ -502,34 +502,104 @@ func installConsole(c *ProvisionConfig) error {
 // awaitOutboxStream polls until the server ensures the INARI_OUTBOX stream
 // at boot (ADR-0014; app-level, no k8s condition). Replicas match the leg:
 // R=3 on HA (3-node JetStream), R=1 on the trimmed non-HA single node.
+//
+// Diagnostics hardening (Oct 2026 postmortem): a bare "stream never formed"
+// hid two very different root causes — the probe itself broken (nats-box
+// exec erroring, indistinguishable from a missing stream because exec
+// errors were swallowed) and the deployed server image predating ADR-0014
+// (it never creates the stream). Track the last probe error and the last
+// mismatch detail, and surface both in the timeout message. The
+// stream-not-found exec error is the ONLY expected miss; any other probe
+// error is recorded verbatim.
 func awaitOutboxStream(c *ProvisionConfig) error {
 	wantReplicas := 1
 	if c.HA {
 		wantReplicas = 3
 	}
-	return poll.Until(120*time.Second, 5*time.Second, func() (bool, error) {
+	var lastProbeErr error
+	var lastDetail string
+	err := poll.Until(120*time.Second, 5*time.Second, func() (bool, error) {
 		out, err := kube.ExecInPod(c.Namespace, "deploy/nats-box",
 			"nats", "stream", "info", "INARI_OUTBOX", "--server", "nats:4222", "--json")
 		if err != nil {
-			return false, nil // not created yet: keep polling
-		}
-		var doc struct {
-			Config struct {
-				Replicas int      `json:"num_replicas"`
-				Subjects []string `json:"subjects"`
-			} `json:"config"`
-		}
-		if json.Unmarshal([]byte(out), &doc) != nil {
+			if isStreamNotFound(err) {
+				lastDetail = "stream does not exist yet"
+			} else {
+				// Probe itself failed (nats-box not ready, CLI/auth
+				// regression, …): remember it — if every attempt fails this
+				// way the timeout message must say so instead of implying
+				// the server never created the stream.
+				lastProbeErr = err
+			}
 			return false, nil
 		}
-		subjectOK := false
-		for _, s := range doc.Config.Subjects {
-			if s == "inari.outbox.>" {
-				subjectOK = true
-			}
-		}
-		return doc.Config.Replicas == wantReplicas && subjectOK, nil
+		formed, detail := parseOutboxStreamInfo(out, wantReplicas)
+		lastDetail = detail
+		return formed, nil
 	})
+	if err == nil {
+		return nil
+	}
+	msg := fmt.Sprintf("%v (last state: %s)", err, lastDetail)
+	if lastProbeErr != nil {
+		msg += fmt.Sprintf("; last probe exec error: %v", lastProbeErr)
+	}
+	msg += ". If the deployed server image predates ADR-0014 it never creates " +
+		"the stream — check `kubectl -n " + c.Namespace + " logs deploy/inari-server` " +
+		"for eventbus/NATS lines and verify the image tag matches the source under test"
+	return fmt.Errorf("%s", msg)
+}
+
+// parseOutboxStreamInfo interprets one `nats stream info --json` payload:
+// formed only when the replica count matches the leg AND the outbox subject
+// filter is present. The detail string always describes what was seen, so a
+// mismatch (or garbage output) is diagnosable from the failure message.
+func parseOutboxStreamInfo(out string, wantReplicas int) (bool, string) {
+	var doc struct {
+		Config struct {
+			Replicas int      `json:"num_replicas"`
+			Subjects []string `json:"subjects"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		return false, fmt.Sprintf("unparseable stream info: %.120s", out)
+	}
+	subjectOK := false
+	for _, s := range doc.Config.Subjects {
+		if s == "inari.outbox.>" {
+			subjectOK = true
+		}
+	}
+	if doc.Config.Replicas != wantReplicas {
+		return false, fmt.Sprintf("stream exists with num_replicas=%d (want %d), subjects=%v",
+			doc.Config.Replicas, wantReplicas, doc.Config.Subjects)
+	}
+	if !subjectOK {
+		return false, fmt.Sprintf("stream exists with num_replicas=%d but missing subject inari.outbox.> (subjects=%v)",
+			doc.Config.Replicas, doc.Config.Subjects)
+	}
+	return true, fmt.Sprintf("stream formed (num_replicas=%d, subjects=%v)", doc.Config.Replicas, doc.Config.Subjects)
+}
+
+// isStreamNotFound reports whether an exec error is the nats CLI's
+// stream-not-found — the expected state while the server has not ensured
+// the stream yet. Any other exec error means the PROBE is broken.
+//
+// Two shapes are recognized, both verified against the pinned probe image
+// (natsio/nats-box:0.17.0, nats CLI v0.2.0):
+//   - "stream not found (10059)" — the lookup failure some CLI versions
+//     print directly;
+//   - "could not pick a Stream to operate on" — what nats-box:0.17.0
+//     actually prints for a missing stream (the CLI falls back to
+//     interactive stream selection after the lookup fails, then aborts
+//     because kubectl exec has no terminal).
+func isStreamNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "stream not found") ||
+		strings.Contains(msg, "could not pick a Stream")
 }
 
 // ProvisionStack is TestProvisionStack: every helm install/upgrade of the
@@ -667,35 +737,18 @@ func provisionAgent(t *testing.T, in AgentInput) {
 		}
 	}
 
-	repo, tag := splitImage(in.AgentImage)
-	// --namespace default: the chart renders and owns the inari-system
-	// Namespace itself, so the release namespace is irrelevant — but it must
-	// be pinned explicitly (in-cluster runners would otherwise resolve the
-	// pod's serviceaccount namespace).
-	// oidcSecret.remotePath: the control plane writes the OIDC client secret
-	// at the trimmed Vault path (secrets.ClusterOIDCPath strips the
-	// "cluster:" type prefix from the cluster ID).
-	err := helm.UpgradeInstall("inari-agent", in.AgentChartDir,
-		"--namespace", "default",
-		"--set", "image.repository="+repo,
-		"--set", "image.tag="+tag,
-		"--set", "image.pullPolicy=IfNotPresent",
-		"--set", "config.tenantID="+in.OrgID,
-		"--set", "config.controlPlane=http://inari-server."+in.Namespace+".svc:8080",
-		"--set", "config.registrationToken="+in.RegToken,
-		"--set", "config.clusterLabels=e2e=true",
-		"--set", "oidcSecret.create=true",
-		"--set", "oidcSecret.secretStore=inari-platform",
-		"--set", "oidcSecret.remotePath=inari/clusters/"+strings.TrimPrefix(in.ClusterID, "cluster:")+"/oidc-client-secret",
-		"--wait", "--timeout", "180s")
-	if err != nil {
-		t.Fatalf("inari-agent install: %v", err)
-	}
-
-	// ESO wiring: the chart's opt-in ExternalSecret pulls from the
-	// ClusterSecretStore the registration response references. ESO retries
-	// the ExternalSecret until the store exists, so this applies after.
-	sec, err := kube.Kubectl("-n", "inari-system", "create", "secret", "generic", "inari-vault-token",
+	// ESO wiring comes FIRST: `helm --wait` blocks on agent readiness, which
+	// requires the ESO-synced OIDC client secret, which requires the
+	// inari-platform ClusterSecretStore and its Vault token secret to
+	// already exist. Installing the chart first deadlocked deterministically
+	// (helm wait expired at 180s with the agent stuck waiting for the ESO
+	// secret; the store was never applied because the install never
+	// returned) — the Go port's original order was only safe for ESO CRD
+	// retries, not for a blocking --wait. The token secret lives in the
+	// always-present default namespace: pre-creating the chart-owned
+	// inari-system namespace makes helm refuse the install (missing
+	// release ownership metadata).
+	sec, err := kube.Kubectl("-n", "default", "create", "secret", "generic", "inari-vault-token",
 		"--from-literal=token="+in.VaultDevToken, "--dry-run=client", "-o", "yaml")
 	if err != nil {
 		t.Fatalf("rendering inari-vault-token secret: %v", err)
@@ -716,11 +769,42 @@ spec:
       auth:
         tokenSecretRef:
           name: inari-vault-token
-          namespace: inari-system
+          namespace: default
           key: token
 `, in.Namespace)
 	if _, err := kube.ApplyStdin(store); err != nil {
 		t.Fatalf("applying inari-platform ClusterSecretStore: %v", err)
+	}
+
+	repo, tag := splitImage(in.AgentImage)
+	// --namespace default: the chart renders and owns the inari-system
+	// Namespace itself, so the release namespace is irrelevant — but it must
+	// be pinned explicitly (in-cluster runners would otherwise resolve the
+	// pod's serviceaccount namespace).
+	// oidcSecret.remotePath: the control plane writes the OIDC client secret
+	// at the trimmed Vault path (secrets.ClusterOIDCPath strips the
+	// "cluster:" type prefix from the cluster ID).
+	err = helm.UpgradeInstall("inari-agent", in.AgentChartDir,
+		"--namespace", "default",
+		"--set", "image.repository="+repo,
+		"--set", "image.tag="+tag,
+		"--set", "image.pullPolicy=IfNotPresent",
+		"--set", "config.tenantID="+in.OrgID,
+		"--set", "config.controlPlane=http://inari-server."+in.Namespace+".svc:8080",
+		"--set", "config.registrationToken="+in.RegToken,
+		"--set", "config.clusterLabels=e2e=true",
+		// kubectlTunnel defaults on, but kubeproxyURL is empty by default
+		// and the tunnel-agent fails fast without it, so helm --wait can
+		// never succeed. The golden path asserts the agent chain only; the
+		// tunnel chain is covered by the dedicated kubectl-tunnel e2e
+		// (e2e-nightly). Disable it here.
+		"--set", "kubectlTunnel.enabled=false",
+		"--set", "oidcSecret.create=true",
+		"--set", "oidcSecret.secretStore=inari-platform",
+		"--set", "oidcSecret.remotePath=inari/clusters/"+strings.TrimPrefix(in.ClusterID, "cluster:")+"/oidc-client-secret",
+		"--wait", "--timeout", "180s")
+	if err != nil {
+		t.Fatalf("inari-agent install: %v", err)
 	}
 	logf("PASS: inari-agent installed and ESO wired (cluster %s)", in.ClusterID)
 }

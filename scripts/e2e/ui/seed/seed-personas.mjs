@@ -172,7 +172,10 @@ async function api(method, url, { token, body } = {}) {
       status: res.status,
     });
   }
-  return res.status === 204 ? null : res.json();
+  // Several OK responses carry no body (KC POST /users answers 201-empty,
+  // PUTs answer 204): res.json() would throw "Unexpected end of JSON input".
+  const text = await res.text();
+  return text === "" ? null : JSON.parse(text);
 }
 
 function kcAdminToken() {
@@ -265,8 +268,14 @@ async function joinOrganization(at, userId, username) {
   const orgs = await api("GET", `${KC_URL}/admin/realms/${KC_REALM}/organizations?search=${encodeURIComponent(TENANT)}&exact=true`, { token: at });
   const org = orgs.find((o) => o.name === TENANT || o.alias === TENANT) || orgs[0];
   if (!org) die(`KC organization for tenant "${TENANT}" not found (golden-path did not create the tenant?)`);
-  // PUT membership is idempotent (204).
-  await api("PUT", `${KC_URL}/admin/realms/${KC_REALM}/organizations/${org.id}/members/${userId}`, { token: at });
+  // KC 26.3 removed PUT .../members/{userId} (405): membership is now
+  // POST .../members with the user ID as a JSON string body (201), and a
+  // duplicate add answers 409 — treat that as success (was: idempotent PUT).
+  try {
+    await api("POST", `${KC_URL}/admin/realms/${KC_REALM}/organizations/${org.id}/members`, { token: at, body: userId });
+  } catch (err) {
+    if (err.status !== 409) throw err;
+  }
   log(`${username} joined KC organization ${TENANT}`);
   return org.id;
 }

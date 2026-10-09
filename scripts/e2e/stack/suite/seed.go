@@ -109,12 +109,32 @@ func seedKeycloakAndTenant(t *testing.T, e *Env, c *ProvisionConfig) (seedResult
 		return true, nil
 	}, "tenant creation (organization.keycloakOrgId)")
 
-	// Register the cluster and issue the agent registration token.
+	// Register the cluster and issue the agent registration token. Bounded
+	// polls cover asynchronous authz materialization: on ADR-0014 servers
+	// the FGA tuples granting clusters.register (tenant teams) and the
+	// per-cluster relations are written by the outbox relay + tuple-writer
+	// consumer AFTER the create call returns, so an immediate follow-up
+	// call 403s. Pre-ADR-0014 servers wrote tuples synchronously; the poll
+	// is a no-op there.
 	logf("registering cluster + issuing token")
-	clusterID, orgID, err := e.API.RegisterCluster("e2e-self", map[string]string{"e2e": "true"})
-	require.NoError(t, err)
-	regToken, err := e.API.IssueClusterToken(clusterID)
-	require.NoError(t, err)
+	var clusterID, orgID string
+	poll.Eventually(t, 120*time.Second, 5*time.Second, func() (bool, error) {
+		id, org, err := e.API.RegisterCluster("e2e-self", map[string]string{"e2e": "true"})
+		if err != nil || id == "" {
+			return false, nil // authz tuples not materialized yet: keep polling
+		}
+		clusterID, orgID = id, org
+		return true, nil
+	}, "cluster registration (clusters_register FGA tuple)")
+	var regToken string
+	poll.Eventually(t, 120*time.Second, 5*time.Second, func() (bool, error) {
+		tok, err := e.API.IssueClusterToken(clusterID)
+		if err != nil || tok == "" {
+			return false, nil // per-cluster tuples not materialized yet
+		}
+		regToken = tok
+		return true, nil
+	}, "cluster token issue (per-cluster FGA tuples)")
 
 	logf("installing agent via the inari-agent Helm chart")
 	provisionAgent(t, AgentInput{
