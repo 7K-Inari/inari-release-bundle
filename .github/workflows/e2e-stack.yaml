@@ -411,6 +411,15 @@ jobs:
             --reuse-values --set keycloakUrl="$KC"
           kubectl -n inari rollout status deployment/inari-console --timeout=180s
 
+          # The rollout replaced the console pod, killing the 18080 forward
+          # established above (kubectl port-forward binds to the pod it
+          # resolved at connect time and never re-resolves). Re-establish
+          # it — otherwise the ui-proxy's upstream is dead and the SPA
+          # never loads ("upstream error: connect ECONNREFUSED :18080").
+          pkill -f "kubectl -n inari port-forward svc/inari-console" 2>/dev/null || true
+          kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1 &
+          sleep 3
+
           node scripts/e2e/lib/ui-proxy.mjs &
           PROXY_PID=$!
           trap 'kill $PROXY_PID 2>/dev/null || true' EXIT
