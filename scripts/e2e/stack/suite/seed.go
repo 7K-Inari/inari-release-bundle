@@ -80,6 +80,18 @@ func seedKeycloakAndTenant(t *testing.T, e *Env, c *ProvisionConfig) (seedResult
 	require.NoError(t, e.KC.EnsureClientScope(at, "basic", basicScope, kcClient))
 	require.NoError(t, e.KC.EnsureClientScope(at, "organization", organizationScope, kcClient))
 
+	// Same suppression hits the realm-imported inari-ui client: the realm
+	// JSON lists organization/basic in its defaultClientScopes, but the
+	// import drops assignments for scopes that do not exist yet at import
+	// time. Without them the console's keycloak-js init dies with
+	// invalid_scope (openid organization:*) and the whole UI e2e fails at
+	// the auth setup. Re-attach (idempotent).
+	uiClient, err := e.KC.FindClient(at, "inari-ui")
+	require.NoError(t, err)
+	require.NotEmpty(t, uiClient, "realm-imported inari-ui client missing")
+	require.NoError(t, e.KC.EnsureClientScope(at, "basic", basicScope, uiClient))
+	require.NoError(t, e.KC.EnsureClientScope(at, "organization", organizationScope, uiClient))
+
 	// Sanity: a token must carry sub and aud=inari-server before we proceed.
 	probe, err := e.KC.UserToken()
 	require.NoError(t, err)
