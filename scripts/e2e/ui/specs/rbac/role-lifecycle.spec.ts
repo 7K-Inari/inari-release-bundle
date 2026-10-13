@@ -120,7 +120,10 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
 
     await poll(
       async () => expect(roles.roleRow(ROLE_NAME).first()).toBeVisible(),
-      { timeout: 20_000, interval: 1_000, message: "role row after create" },
+      // 60s, not 20s: verified in CI that the row renders (screenshot at
+      // teardown shows it) but the create → editor close → refetch cycle
+      // through the ui-proxy port-forwards can exceed 20s on a cold runner.
+      { timeout: 60_000, interval: 1_000, message: "role row after create" },
     );
   });
 
