@@ -406,7 +406,11 @@ jobs:
           grep -q "keycloak-service.inari.svc" /etc/hosts || \
             echo "127.0.0.2 keycloak-service.inari.svc" | sudo tee -a /etc/hosts
           KC=http://keycloak-service.inari.svc:8080
-          export KC_URL="$KC" KC_HOST="keycloak-service.inari.svc:8080"
+          # API_BASE must include /api/v1: the ui-proxy routes /api/* to the
+          # server and everything else to the console — without the prefix
+          # the suite's REST client got the SPA's index.html ("<!doctype").
+          export KC_URL="$KC" KC_HOST="keycloak-service.inari.svc:8080" \
+            API_BASE="http://127.0.0.1:8080/api/v1"
 
           # Fresh port-forwards (a prior step's may have died).
           pkill -f "kubectl -n inari port-forward" 2>/dev/null || true

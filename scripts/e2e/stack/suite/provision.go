@@ -461,11 +461,17 @@ func installOperator(c *ProvisionConfig) error {
 // pod instead — same assertions (SPA index + config.js contents), no
 // port-forward fragility, consistent with every other HTTP call.
 func installConsole(c *ProvisionConfig) error {
+	// bundle.tag: the UI e2e asserts console behavior from inari-ui MAIN
+	// (access console, role engine — none of it is in the last pinned
+	// release), exactly like the server-under-test tracks the edge image.
+	// Default to the moving edge bundle; CONSOLE_BUNDLE_TAG pins a release
+	// for release-combo verification.
 	if err := helm.UpgradeInstall("inari-console", c.ConsoleChartDir,
 		"--namespace", c.Namespace,
 		"--set", "keycloakUrl=http://"+c.kcFQDN(),
 		"--set", "keycloakRealm=inari",
 		"--set", "nginx.corsOrigins={http://"+c.kcFQDN()+"}",
+		"--set", "bundle.tag="+envOr("CONSOLE_BUNDLE_TAG", "edge"),
 		"--wait", "--timeout", "5m"); err != nil {
 		return err
 	}
