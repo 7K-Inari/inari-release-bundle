@@ -244,6 +244,11 @@ async function ensureUser(at, { username, password }) {
         username,
         enabled: true,
         email: `${username}@inari.local`,
+        // KC 26.3's declarative user profile marks firstName/lastName
+        // required; without them login lands on the "Update Account
+        // Information" form and the browser flow stalls.
+        firstName: username,
+        lastName: "E2E",
         emailVerified: true,
         credentials: [{ type: "password", value: password, temporary: false }],
       },
@@ -258,8 +263,12 @@ async function ensureUser(at, { username, password }) {
   // KC 26.x: create alone can leave the account unverified / with required
   // actions — force the final state (same lesson as the golden-path seeding).
   // Never touches groups: personas must NOT join platform-admins.
+  // PUT /users/{id} is a FULL replace: merge onto the stored user so the
+  // declarative-profile attributes (firstName/lastName/email) survive —
+  // wiping them forces "Update Account Information" at first login.
+  const stored = (await kc("GET", `/users?username=${encodeURIComponent(username)}&exact=true`))[0];
   await kc("PUT", `/users/${id}`, {
-    body: { emailVerified: true, requiredActions: [], enabled: true },
+    body: { ...stored, emailVerified: true, requiredActions: [], enabled: true },
   });
   return id;
 }
