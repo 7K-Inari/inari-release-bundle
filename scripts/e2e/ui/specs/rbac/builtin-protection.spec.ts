@@ -167,19 +167,33 @@ test.describe("built-in role protection @p0 @rbac", () => {
     await gotoAccessTab(page, TeamsRolesTabPage.LABEL, () => tab.marker());
     await expect(tab.roleSelect(display)).toBeVisible();
     await tab.selectRoleForTeam(display, BUILTIN_ROLES.viewer);
+    // Capture the save response directly: on the kind stack the PUT can
+    // take minutes (FGA guardrail writes under runner CPU starvation) and
+    // the error card only renders after it resolves — measuring the network
+    // response separates slow-environment from a missing UI error surface.
+    const saveResp = page.waitForResponse(
+      (r) =>
+        r.request().method() === "PUT" &&
+        /\/api\/v1\/tenants\/[^/]+\/rbac\/mappings$/.test(new URL(r.url()).pathname),
+      { timeout: 300_000 },
+    );
     await tab.saveChanges();
+    const saveRes = await saveResp;
+    expect(
+      saveRes.status(),
+      `demote PUT expected the 409 guardrail, got ${saveRes.status()}`,
+    ).toBe(409);
 
-    // The UI must surface the server's 409 (roles_http.go: "at least one
-    // team must retain the tenant.admin permission"). Polled: the PUT
-    // mappings response can take tens of seconds through the stack, and the
-    // card only renders once it resolves.
+    // The 409 is confirmed on the wire; the card is the UI surfacing of it
+    // (roles_http.go: "at least one team must retain the tenant.admin
+    // permission") and should follow promptly.
     await poll(
       async () => {
         await expect(tab.errorCard()).toBeVisible();
         await expect(tab.errorCard()).toContainText("tenant.admin");
         return true;
       },
-      { timeout: 240_000, interval: 2_000, message: "tenant.admin 409 error card" },
+      { timeout: 60_000, interval: 1_000, message: "tenant.admin 409 error card" },
     );
 
     // State unchanged, observed via the API (polled — no immediate

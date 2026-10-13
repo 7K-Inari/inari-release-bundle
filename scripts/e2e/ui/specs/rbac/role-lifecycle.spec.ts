@@ -21,7 +21,7 @@ import { PERSONAS } from "../../fixtures/auth";
 import { uniqueName } from "../../fixtures/org";
 import { ApiClient } from "../../helpers/api";
 import { TENANT_NAME, TENANT_SLUG } from "../../helpers/env";
-import { poll } from "../../helpers/poll";
+import { poll, pollWithReload } from "../../helpers/poll";
 import { AccessPage } from "../../pages/access/access.page";
 import { MembersTabPage } from "../../pages/access/members.page";
 import { RolesTabPage } from "../../pages/access/roles.page";
@@ -207,9 +207,17 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
       teamRes.ok(),
       `create team POST returned ${teamRes.status()}: ${await teamRes.text().catch(() => "")}`,
     ).toBeTruthy();
-    await poll(
+    await pollWithReload(
+      async () => {
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await gotoAccessTab(page, MembersTabPage.LABEL);
+        await expect(members.marker()).toBeVisible();
+      },
       async () => expect(members.teamCard(TEAM_NAME)).toBeVisible(),
-      { timeout: 90_000, interval: 1_000, message: "team card after create" },
+      // 150s total: kind write + refetch latency is trace-verified at
+      // 60-100s; the reload halfway forces a clean render of the persisted
+      // state when the SPA's in-place update stalls under runner load.
+      { timeout: 150_000, interval: 2_000, message: "team card after create" },
     );
   });
 
