@@ -182,6 +182,11 @@ function kcAdminToken() {
   // Same credential the former inline workflow block used: the
   // inari-platform-admin client credentials from the inari-keycloak-admin
   // secret (client id is fixed; only the secret is cluster-generated).
+  // SEED_KC_ADMIN_CLIENT_SECRET skips the kubectl read — required when the
+  // runner's kubeconfig can't reach the inari namespace (e.g. executors
+  // limited to the kandev namespace on the live platform cluster).
+  const fromEnv = (process.env.SEED_KC_ADMIN_CLIENT_SECRET || "").trim();
+  if (fromEnv) return clientCredentialsToken("inari-platform-admin", fromEnv);
   const b64 = execFileSync(
     "kubectl",
     ["-n", NAMESPACE, "get", "secret", "inari-keycloak-admin", "-o", "jsonpath={.data.client-secret}"],
