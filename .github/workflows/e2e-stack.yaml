@@ -413,12 +413,26 @@ jobs:
 
           # The rollout replaced the console pod, killing the 18080 forward
           # established above (kubectl port-forward binds to the pod it
-          # resolved at connect time and never re-resolves). Re-establish
-          # it — otherwise the ui-proxy's upstream is dead and the SPA
-          # never loads ("upstream error: connect ECONNREFUSED :18080").
-          pkill -f "kubectl -n inari port-forward svc/inari-console" 2>/dev/null || true
+          # resolved at connect time and never re-resolves) — and any of
+          # the forwards can quietly drop during the long npm/playwright
+          # install that follows. Re-establish ALL of them right before the
+          # browser run; otherwise the SPA can't load (ui-proxy upstream
+          # ECONNREFUSED) or keycloak-js can't reach the IdP.
+          pkill -f "kubectl -n inari port-forward" 2>/dev/null || true
           kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1 &
+          kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
+          kubectl -n inari port-forward svc/keycloak-service 18091:8080 >/dev/null 2>&1 &
           sleep 3
+          # The forwards must actually accept connections before the proxy
+          # and the browser hit them (a pending forward fails identically
+          # to a dead one).
+          for url in http://127.0.0.1:18080 http://127.0.0.1:18090/healthz http://127.0.0.1:18091/realms/inari; do
+            for i in $(seq 1 30); do
+              curl -sf -o /dev/null "$url" && break
+              [ "$i" = 30 ] && { echo "port-forward for $url never came up" >&2; exit 1; }
+              sleep 2
+            done
+          done
 
           node scripts/e2e/lib/ui-proxy.mjs &
           PROXY_PID=$!
