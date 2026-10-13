@@ -1,6 +1,6 @@
 # NATS JetStream for the e2e platform stack — provisioned HA from day one
 # (99.9% availability initiative): M1's outbox→NATS dispatcher lands on an
-# already-clustered substrate. Chart: nats/nats 1.3.2 (version pinned in
+# already-clustered substrate. Chart: nats/nats 2.15.1 (version pinned in
 # suite/provision.go). Single-node kind must still schedule all three pods, so
 # spreading below is soft (ScheduleAnyway), never required.
 fullnameOverride: nats
