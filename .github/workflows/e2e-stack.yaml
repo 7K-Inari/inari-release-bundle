@@ -433,6 +433,16 @@ jobs:
               sleep 2
             done
           done
+          # Diagnostics for the browser-side auth init: the served SPA config
+          # MUST point keycloakUrl at the browser-reachable forward, and KC's
+          # discovery document must be fetchable cross-origin (keycloak-js).
+          echo "--- served config.js ---"
+          curl -sf http://127.0.0.1:18080/config.js || echo "config.js NOT served"
+          echo "--- KC discovery (browser path) ---"
+          curl -sf -H "Origin: http://127.0.0.1:8080" \
+            http://127.0.0.1:18091/realms/inari/.well-known/openid-configuration \
+            | head -c 400 || echo "discovery NOT fetchable"
+          echo
 
           node scripts/e2e/lib/ui-proxy.mjs &
           PROXY_PID=$!
