@@ -29,7 +29,12 @@ export async function poll<T>(
   for (;;) {
     try {
       lastValue = await fn();
+      // Truthy value: caller signalled success. `undefined` from a void fn
+      // (e.g. `async () => expect(locator).toBeVisible()`): resolved without
+      // throwing, so the assertion passed — success per the docstring.
+      // Other falsy values (false/0/""/null) mean "keep polling".
       if (lastValue) return lastValue;
+      if (lastValue === undefined) return undefined as T;
     } catch (err) {
       lastError = err;
     }

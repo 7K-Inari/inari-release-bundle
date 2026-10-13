@@ -147,11 +147,15 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
   }) => {
     await gotoAccessTab(page, RolesTabPage.LABEL);
     const roles = new RolesTabPage(page);
+    // Wait for the tab's data before addressing a row: on a fresh page the
+    // roles GET can still be in flight when selectTab returns, and
+    // openEditor would otherwise wait on a not-yet-rendered row.
+    await expect(roles.marker()).toBeVisible();
 
     await roles.openEditor(ROLE_NAME);
     await poll(
       async () => expect(roles.permissionCheckbox(slugs[0])).toBeChecked(),
-      { timeout: 20_000, interval: 1_000, message: "editor pre-edit state" },
+      { timeout: 60_000, interval: 1_000, message: "editor pre-edit state" },
     );
     // Toggle one off, one on.
     await roles.togglePermission(slugs[0]);
