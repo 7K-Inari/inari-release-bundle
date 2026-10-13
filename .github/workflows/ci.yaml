@@ -86,7 +86,7 @@ jobs:
           version: v3.14.0
 
       - name: Set up helm-unittest
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.1.2
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --verify=false --version v1.1.2
 
       - name: Shellcheck scripts
         run: |
