@@ -39,7 +39,7 @@ tests:
     asserts:
       - equal:
           path: spec.image
-          value: quay.io/keycloak/keycloak:26.3.2
+          value: quay.io/keycloak/keycloak:26.8.1
       - equal:
           path: spec.startOptimized
           value: false
