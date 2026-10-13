@@ -61,9 +61,9 @@ interface MyPermissions {
 }
 
 test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
-  // 300s: the create test alone budgets 90s for the POST + 120s for the row
-  // poll on a cold kind runner.
-  test.setTimeout(300_000);
+  // 420s: kind-stack write paths routinely take 60-100s end-to-end
+  // (trace-verified); create budgets 120s for the POST + 90s for the card.
+  test.setTimeout(420_000);
 
   let slugs: string[] = [];
 
@@ -192,10 +192,24 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     const members = new MembersTabPage(page);
     await expect(members.marker()).toBeVisible();
 
+    // Capture the create response: kind-stack write paths (DB + FGA tuple
+    // writes through throttled pods) routinely take 60-100s end-to-end
+    // (trace-verified), so the poll must start from a resolved create.
+    const createdTeam = page.waitForResponse(
+      (r) =>
+        r.request().method() === "POST" &&
+        /\/api\/v1\/tenants\/[^/]+\/teams$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    );
     await members.createTeam(TEAM_NAME);
+    const teamRes = await createdTeam;
+    expect(
+      teamRes.ok(),
+      `create team POST returned ${teamRes.status()}: ${await teamRes.text().catch(() => "")}`,
+    ).toBeTruthy();
     await poll(
       async () => expect(members.teamCard(TEAM_NAME)).toBeVisible(),
-      { timeout: 20_000, interval: 1_000, message: "team card after create" },
+      { timeout: 90_000, interval: 1_000, message: "team card after create" },
     );
   });
 
@@ -207,7 +221,7 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     const display = teamDisplayName(TEAM_NAME);
     await poll(
       async () => expect(matrix.roleSelect(display)).toBeVisible(),
-      { timeout: 20_000, interval: 1_000, message: "team row in matrix" },
+      { timeout: 60_000, interval: 1_000, message: "team row in matrix" },
     );
     await matrix.selectRoleForTeam(display, `E2E ${ROLE_NAME}`);
     await matrix.saveChanges();
@@ -223,7 +237,7 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
         await expect(matrix.saveButton()).toBeDisabled();
         await expect(matrix.saveButton()).toHaveText("Save changes");
       },
-      { timeout: 20_000, interval: 1_000, message: "matrix save settled (draft cleared)" },
+      { timeout: 120_000, interval: 2_000, message: "matrix save settled (draft cleared)" },
     );
 
     // After the whole-set replace the matrix refetches; the row must re-read
@@ -235,7 +249,7 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
           .evaluate((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent ?? "");
         return selected.includes(ROLE_NAME);
       },
-      { timeout: 20_000, interval: 1_000, message: "matrix re-read with custom role" },
+      { timeout: 90_000, interval: 1_000, message: "matrix re-read with custom role" },
     );
   });
 
@@ -248,7 +262,7 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     await poll(
       async () =>
         expect(members.memberEntry(TEAM_NAME, MEMBER.username)).toBeVisible(),
-      { timeout: 20_000, interval: 1_000, message: "member listed in team" },
+      { timeout: 90_000, interval: 1_000, message: "member listed in team" },
     );
   });
 

@@ -140,10 +140,11 @@ test.describe("built-in role protection @p0 @rbac", () => {
   test("demoting the last admin team surfaces the tenant.admin 409 and changes nothing @p0 @rbac", async ({
     page,
   }) => {
-    // The save round-trip through the ui-proxy port-forwards can exceed the
-    // 20s expect default on a cold runner (verified in CI: the error card
-    // renders in the teardown screenshot after the assertion expired).
-    test.setTimeout(180_000);
+    // The save round-trip on the kind stack is trace-verified to take
+    // 100s+ end-to-end (DB + FGA guardrail writes through throttled pods):
+    // screencast shows zero screen updates between the click and well past
+    // the 90s mark, then the card. Budget accordingly.
+    test.setTimeout(420_000);
     const api = await ApiClient.forPersona();
     const org = await api.resolveOrgSlug(TENANT_NAME);
 
@@ -178,7 +179,7 @@ test.describe("built-in role protection @p0 @rbac", () => {
         await expect(tab.errorCard()).toContainText("tenant.admin");
         return true;
       },
-      { timeout: 90_000, interval: 1_000, message: "tenant.admin 409 error card" },
+      { timeout: 240_000, interval: 2_000, message: "tenant.admin 409 error card" },
     );
 
     // State unchanged, observed via the API (polled — no immediate
