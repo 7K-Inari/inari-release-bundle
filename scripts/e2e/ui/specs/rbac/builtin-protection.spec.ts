@@ -140,6 +140,10 @@ test.describe("built-in role protection @p0 @rbac", () => {
   test("demoting the last admin team surfaces the tenant.admin 409 and changes nothing @p0 @rbac", async ({
     page,
   }) => {
+    // The save round-trip through the ui-proxy port-forwards can exceed the
+    // 20s expect default on a cold runner (verified in CI: the error card
+    // renders in the teardown screenshot after the assertion expired).
+    test.setTimeout(180_000);
     const api = await ApiClient.forPersona();
     const org = await api.resolveOrgSlug(TENANT_NAME);
 
@@ -165,9 +169,17 @@ test.describe("built-in role protection @p0 @rbac", () => {
     await tab.saveChanges();
 
     // The UI must surface the server's 409 (roles_http.go: "at least one
-    // team must retain the tenant.admin permission").
-    await expect(tab.errorCard()).toBeVisible();
-    await expect(tab.errorCard()).toContainText("tenant.admin");
+    // team must retain the tenant.admin permission"). Polled: the PUT
+    // mappings response can take tens of seconds through the stack, and the
+    // card only renders once it resolves.
+    await poll(
+      async () => {
+        await expect(tab.errorCard()).toBeVisible();
+        await expect(tab.errorCard()).toContainText("tenant.admin");
+        return true;
+      },
+      { timeout: 90_000, interval: 1_000, message: "tenant.admin 409 error card" },
+    );
 
     // State unchanged, observed via the API (polled — no immediate
     // post-mutation assertions).

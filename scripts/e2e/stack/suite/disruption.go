@@ -322,6 +322,19 @@ func haPodKill(t *testing.T, e *Env) {
 		return strings.Contains(bindings, "  name: tenant-"+e.Tenant+"-viewers-admin\n"), nil
 	}, "HA(a): outbox relay/consumers processing rbac.mappings.updated after the pod loss")
 
+	// Restore the pre-disruption mapping (viewers→editor, set in cluster.go):
+	// the console UI suite runs after this phase and its built-in-protection
+	// spec requires exactly one admin-bearing team in the org.
+	require.NoError(t, e.API.PutRBACMappings("viewers", "editor"),
+		"HA(a): restoring viewers→editor mapping failed")
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		bindings, err := gitShow(repo, "baseline/rbac/clusterrolebindings.yaml")
+		if err != nil {
+			return false, nil
+		}
+		return strings.Contains(bindings, "  name: tenant-"+e.Tenant+"-viewers-editor\n"), nil
+	}, "HA(a): outbox relay processing the viewers→editor restore")
+
 	// Durable-consumer failover evidence: the shared outbox-rbac-materialize
 	// group kept acking after the pod loss (ack floor advanced past the
 	// pre-kill deliveries).

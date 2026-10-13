@@ -61,7 +61,9 @@ interface MyPermissions {
 }
 
 test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
-  test.setTimeout(180_000);
+  // 300s: the create test alone budgets 90s for the POST + 120s for the row
+  // poll on a cold kind runner.
+  test.setTimeout(300_000);
 
   let slugs: string[] = [];
 
@@ -116,14 +118,27 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     for (const slug of slugs.slice(0, 3)) {
       await roles.togglePermission(slug);
     }
+    // Capture the create response explicitly: the POST can take tens of
+    // seconds through the ui-proxy port-forwards on a cold runner (verified
+    // in CI — a 60s poll expired while the row rendered just after), so the
+    // poll below must start from a resolved create, not from the click.
+    const created = page.waitForResponse(
+      (r) =>
+        r.request().method() === "POST" &&
+        /\/api\/v1\/tenants\/[^/]+\/roles$/.test(new URL(r.url()).pathname),
+      { timeout: 90_000 },
+    );
     await roles.submitEditor();
+    const createRes = await created;
+    expect(
+      createRes.ok(),
+      `create role POST returned ${createRes.status()}: ${await createRes.text().catch(() => "")}`,
+    ).toBeTruthy();
 
     await poll(
       async () => expect(roles.roleRow(ROLE_NAME).first()).toBeVisible(),
-      // 60s, not 20s: verified in CI that the row renders (screenshot at
-      // teardown shows it) but the create → editor close → refetch cycle
-      // through the ui-proxy port-forwards can exceed 20s on a cold runner.
-      { timeout: 60_000, interval: 1_000, message: "role row after create" },
+      // 120s: covers editor close + list refetch after a slow create.
+      { timeout: 120_000, interval: 1_000, message: "role row after create" },
     );
   });
 
