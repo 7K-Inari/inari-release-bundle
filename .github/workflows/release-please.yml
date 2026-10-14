@@ -18,7 +18,7 @@ jobs:
   release-pr:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
       - name: Skip on release merges
@@ -46,7 +46,7 @@ jobs:
       # x-release-please-version annotations + per-chart CHANGELOGs).
       # Tags/Releases are created by release.yaml when the PR is merged.
       - if: steps.gate.outputs.skip != 'true'
-        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           skip-github-release: true
