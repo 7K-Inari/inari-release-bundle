@@ -47,21 +47,22 @@ jobs:
       image-tag: ${{ steps.resolve.outputs.image-tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Resolve inari-server tag from chart appVersion
+      - name: Resolve inari-server under test (edge image from main)
         id: resolve
         run: |
           set -euo pipefail
+          # The nightly tracks inari-server MAIN via the unsigned "edge"
+          # image (published per main merge by inari-server's edge
+          # workflow). Pinning the released appVersion image made the
+          # golden path assert outbox behavior (ADR-0014) that the release
+          # did not contain yet — see the INARI_OUTBOX golden-path failure
+          # postmortem (Oct 2026). cosign-verify=false is passed below
+          # because edge images are not signed.
           app_version="$(awk '/^appVersion:/ {print $2}' charts/inari-server/Chart.yaml | tr -d '"')"
-          server_tag="v${app_version#v}"
-          # GHCR image tags are UNPREFIXED (1.8.0), git tags are v-prefixed.
-          echo "server-tag=$server_tag" >> "$GITHUB_OUTPUT"
-          echo "image-tag=${app_version#v}" >> "$GITHUB_OUTPUT"
-          if ! git ls-remote --exit-code https://github.com/7K-Inari/inari-server.git \
-            "refs/tags/$server_tag" >/dev/null 2>&1; then
-            echo "inari-server tag $server_tag does not exist" >&2
-            exit 1
-          fi
-          echo "resolved inari-server tag: $server_tag"
+          echo "chart appVersion (released combo, informational): $app_version"
+          echo "server-tag=main" >> "$GITHUB_OUTPUT"
+          echo "image-tag=edge" >> "$GITHUB_OUTPUT"
+          echo "resolved inari-server under test: main (image tag edge)"
 
   nightly-stack:
     needs: resolve
@@ -75,6 +76,7 @@ jobs:
       bundle-ref: ${{ github.ref }}
       server-src-ref: ${{ needs.resolve.outputs.server-tag }}
       image-tag: ${{ needs.resolve.outputs.image-tag }}
+      cosign-verify: false # edge image is unsigned (see resolve step)
       branch-hint: main
       retention-days: 14
 

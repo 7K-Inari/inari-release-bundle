@@ -99,8 +99,13 @@ async function main() {
   try {
     report = JSON.parse(readFileSync(input, "utf8"));
   } catch (err) {
-    console.error(`report-flakes: cannot read/parse ${input}: ${err.message}`);
-    process.exit(1);
+    // The step is documented as "never fails": a missing report means the
+    // Playwright run itself never happened (an earlier step failed and the
+    // UI e2e was skipped) — that failure is already surfaced by the step
+    // that caused it. Warn and exit 0 instead of masking it with a second,
+    // misleading failure.
+    console.warn(`report-flakes: no report at ${input} (UI e2e did not run?) — skipping: ${err.message}`);
+    process.exit(0);
   }
 
   const flakeReport = buildFlakeReport(report, process.env);

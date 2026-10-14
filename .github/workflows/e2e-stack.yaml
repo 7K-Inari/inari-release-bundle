@@ -348,6 +348,9 @@ jobs:
         working-directory: inari-server
         run: |
           set -euo pipefail
+          # server-src-ref=main has no e2e/ dir (assets relocated to the
+          # bundle in inari-server #122; released tags still have one).
+          mkdir -p e2e
           cp "${{ github.workspace }}/bundle/scripts/e2e/api/api_schema_e2e_test.go" e2e/
           make export-openapi
           kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
@@ -389,13 +392,31 @@ jobs:
           GREP_INVERT: ${{ inputs.mode == 'nightly' && '' || '--grep-invert @quarantine' }}
         run: |
           set -euo pipefail
-          KC=http://127.0.0.1:18091
+          # The provisioner pins KC's hostname to the in-cluster issuer
+          # (keycloak-service.inari.svc:8080, strict) so server-side OIDC is
+          # consistent — but KC renders that hostname into the login FORM
+          # action and the discovery endpoints, and a browser on the runner
+          # cannot resolve it (the username submit POSTed to
+          # keycloak-service.inari.svc:8080 and died). Map the issuer
+          # hostname to a dedicated loopback alias and forward KC there on
+          # its canonical port: the browser then talks to KC at the EXACT
+          # issuer URL, so forms, redirects, discovery and token iss all
+          # line up without touching the pinned hostname. 127.0.0.2 keeps
+          # 8080 free for the ui-proxy on 127.0.0.1.
+          grep -q "keycloak-service.inari.svc" /etc/hosts || \
+            echo "127.0.0.2 keycloak-service.inari.svc" | sudo tee -a /etc/hosts
+          KC=http://keycloak-service.inari.svc:8080
+          # API_BASE must include /api/v1: the ui-proxy routes /api/* to the
+          # server and everything else to the console — without the prefix
+          # the suite's REST client got the SPA's index.html ("<!doctype").
+          export KC_URL="$KC" KC_HOST="keycloak-service.inari.svc:8080" \
+            API_BASE="http://127.0.0.1:8080/api/v1"
 
           # Fresh port-forwards (a prior step's may have died).
           pkill -f "kubectl -n inari port-forward" 2>/dev/null || true
           kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1 &
           kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
-          kubectl -n inari port-forward svc/keycloak-service 18091:8080 >/dev/null 2>&1 &
+          kubectl -n inari port-forward --address 127.0.0.2 svc/keycloak-service 8080:8080 >/dev/null 2>&1 &
           sleep 3
 
           # Seed the e2e personas (idempotent) and whitelist the browser
@@ -403,14 +424,73 @@ jobs:
           # before browser install — if the membership API is broken (P0).
           node scripts/e2e/ui/seed/seed-personas.mjs
 
-          # Point the SPA's Keycloak URL at the browser-reachable forward.
+          # Point the SPA's Keycloak URL at the browser-reachable KC (which
+          # is also the issuer URL, so no hostname mismatch anywhere).
           helm upgrade inari-console charts/inari-console --namespace inari \
             --reuse-values --set keycloakUrl="$KC"
           kubectl -n inari rollout status deployment/inari-console --timeout=180s
 
-          node scripts/e2e/lib/ui-proxy.mjs &
+          # The rollout replaced the console pod, killing the 18080 forward
+          # established above (kubectl port-forward binds to the pod it
+          # resolved at connect time and never re-resolves) — and any of
+          # the forwards can quietly drop during the long npm/playwright
+          # install that follows. Re-establish ALL of them right before the
+          # browser run; otherwise the SPA can't load (ui-proxy upstream
+          # ECONNREFUSED) or keycloak-js can't reach the IdP.
+          pkill -f "kubectl -n inari port-forward" 2>/dev/null || true
+          # Supervised forwards: kubectl port-forward dies silently on
+          # apiserver watch resets / pod churn and never reconnects, which
+          # stalled the browser suite mid-run for minutes at random points
+          # (the migrating "renderer stall" failures). A supervise loop
+          # restarts each forward the moment it exits.
+          while :; do kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1; sleep 1; done &
+          while :; do kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1; sleep 1; done &
+          while :; do kubectl -n inari port-forward --address 127.0.0.2 svc/keycloak-service 8080:8080 >/dev/null 2>&1; sleep 1; done &
+          sleep 3
+          # The forwards must actually accept connections before the proxy
+          # and the browser hit them (a pending forward fails identically
+          # to a dead one).
+          for url in http://127.0.0.1:18080 http://127.0.0.1:18090/healthz "$KC/realms/inari"; do
+            for i in $(seq 1 30); do
+              curl -sf -o /dev/null "$url" && break
+              [ "$i" = 30 ] && { echo "port-forward for $url never came up" >&2; exit 1; }
+              sleep 2
+            done
+          done
+          # Diagnostics for the browser-side auth init: the served SPA config
+          # MUST point keycloakUrl at the browser-reachable forward, and KC's
+          # discovery document must be fetchable cross-origin (keycloak-js).
+          echo "--- served config.js ---"
+          curl -sf http://127.0.0.1:18080/config.js || echo "config.js NOT served"
+          echo "--- KC discovery (browser path) ---"
+          curl -sf -H "Origin: http://127.0.0.1:8080" \
+            "$KC/realms/inari/.well-known/openid-configuration" \
+            | head -c 400 || echo "discovery NOT fetchable"
+          echo
+
+          # Supervised like the forwards: a crashed proxy fails every hop
+          # while all direct probes stay green (observed 2026-10-14).
+          while :; do node scripts/e2e/lib/ui-proxy.mjs; sleep 1; done &
           PROXY_PID=$!
           trap 'kill $PROXY_PID 2>/dev/null || true' EXIT
+
+          # Stall observability: probe every browser-path hop every 15s for
+          # the whole suite and print the timeline at teardown. The migrating
+          # UI failures all smell like a stalled hop; this pinpoints which
+          # one instead of guessing from failure screenshots.
+          PROBE_LOG=/tmp/ui-path-probe.log; : > "$PROBE_LOG"
+          while :; do
+            line="$(date +%H:%M:%S)"
+            for hop in "console-direct http://127.0.0.1:18080/config.js"                        "server-direct http://127.0.0.1:18090/healthz"                        "kc-direct http://keycloak-service.inari.svc:8080/realms/inari/.well-known/openid-configuration"                        "proxy-console http://127.0.0.1:8080/config.js"                        "proxy-api http://127.0.0.1:8080/api/v1/openapi.json"; do
+              name=${hop%% *}; url=${hop#* }
+              code=$(curl -sS -m 5 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo FAIL)
+              line="$line $name=$code"
+            done
+            echo "$line" >> "$PROBE_LOG"
+            sleep 15
+          done &
+          PROBE_PID=$!
+          trap 'kill $PROBE_PID $PROXY_PID 2>/dev/null || true; echo "--- ui path probe ---"; cat /tmp/ui-path-probe.log' EXIT
           cd scripts/e2e/ui
           npm ci
           npx playwright install --with-deps chromium

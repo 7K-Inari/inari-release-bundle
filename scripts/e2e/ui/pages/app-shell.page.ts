@@ -27,8 +27,45 @@ export class AppShellPage {
 
   /** Click a tenant card on the switcher home by its display name. */
   async openTenant(name: string): Promise<void> {
-    await this.page.getByRole("link", { name: new RegExp(name) }).first().click();
-    await this.waitPastLoading();
+    // Verified selection: on slow stacks the card click can land mid-render
+    // and get dropped, leaving the app on the /all view ("Select a specific
+    // tenant to load this view") — every downstream assertion then fails
+    // against the wrong tenant (kind CI, traced via DOM dumps). Selecting
+    // an org triggers a FULL Keycloak re-login (organization scope,
+    // prompt:none) that navigates away and lands on /<slug>/overview, so
+    // verify by URL once the redirect cycle settles — never by reading the
+    // switcher mid-redirect. Re-navigate and re-click until landed,
+    // bounded.
+    const deadline = Date.now() + 90_000;
+    for (;;) {
+      const link = this.page.getByRole("link", { name: new RegExp(name) }).first();
+      if ((await link.count()) === 0) {
+        // Not on the switcher home (e.g. stuck on /all) — go home first.
+        await this.page.goto("/", { waitUntil: "domcontentloaded" });
+        await this.waitForBoot();
+      }
+      const href = await this.page
+        .getByRole("link", { name: new RegExp(name) })
+        .first()
+        .getAttribute("href");
+      const slug = href?.replace(/^\//, "").split("/")[0] || "";
+      await this.page
+        .getByRole("link", { name: new RegExp(name) })
+        .first()
+        .click();
+      try {
+        await this.page.waitForURL(
+          (u) => new URL(u).pathname.startsWith(`/${slug}/`),
+          { timeout: 30_000 },
+        );
+        await this.waitPastLoading();
+        return;
+      } catch {
+        if (Date.now() > deadline) {
+          throw new Error(`openTenant: tenant "${name}" never became active`);
+        }
+      }
+    }
   }
 
   /** Navigate via a sidebar link (exact name match, e.g. "Access"). */

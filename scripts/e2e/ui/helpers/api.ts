@@ -51,8 +51,20 @@ export class ApiClient {
     return new ApiClient(API_BASE, await getToken(username, password));
   }
 
+  // Specs mix both conventions: some pass "/tenants/..." (base carries
+  // the /api/v1 prefix), others the full "/api/v1/tenants/...". Accept
+  // both — strip the prefix when the base already carries it, or the
+  // joined URL 404s (/api/v1/api/v1/...).
+  private url(path: string): string {
+    const normalized =
+      this.base.endsWith("/api/v1") && path.startsWith("/api/v1/")
+        ? path.slice("/api/v1".length)
+        : path;
+    return `${this.base}${normalized}`;
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${this.base}${path}`, {
+    const res = await fetch(this.url(path), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,
@@ -97,7 +109,7 @@ export class ApiClient {
     path: string,
     body?: unknown,
   ): Promise<{ status: number; body: unknown }> {
-    const res = await fetch(`${this.base}${path}`, {
+    const res = await fetch(this.url(path), {
       method,
       headers: {
         authorization: `Bearer ${this.token}`,

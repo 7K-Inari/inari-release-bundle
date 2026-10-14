@@ -42,14 +42,17 @@ import { SettingsPage } from "../../pages/settings/settings.page";
 
 // --- Permission bundles (regression guard) ---------------------------------
 //
-// Exact migration-0029 bundles. admin = the full static permission catalog;
-// operator = admin minus the tenant-administration domain; editor/viewer as
-// seeded. Order-insensitive — compared as sets.
+// Exact built-in bundles: migration 0029 seeded the originals; migration
+// 0031 (kubectl gateway) appended clusters.kubectl to admin + operator.
+// admin = the full static permission catalog; operator = admin minus the
+// tenant-administration domain; editor/viewer as seeded. Order-insensitive —
+// compared as sets.
 
 const OPERATOR_PERMISSIONS = [
   "tenant.read",
   "tenant.members.manage",
   "clusters.register",
+  "clusters.kubectl",
   "cloudaccounts.manage",
   "zones.manage",
   "fleet.manage",
@@ -135,7 +138,7 @@ async function expectSettingsReadOnly(
 
 // --- bundle regression guard (API, dev-admin) -------------------------------
 
-test("seeded built-in role bundles match the migration-0029 matrix @p1 @rbac", async () => {
+test("seeded built-in role bundles match the migration-0029+0031 matrix @p1 @rbac", async () => {
   const api = await ApiClient.forPersona();
   const org = await api.resolveOrgSlug(TENANT_NAME);
   const listed = await api.get<{ roles?: { name: string; permissions?: string[] }[] | null }>(
@@ -149,7 +152,7 @@ test("seeded built-in role bundles match the migration-0029 matrix @p1 @rbac", a
       expect(actual, `built-in role "${role}" must exist in E2E Org`).toBeTruthy();
       expect(
         [...(actual ?? [])].sort(),
-        `bundle drift for built-in role "${role}" (migration 0029)`,
+        `bundle drift for built-in role "${role}" (migrations 0029+0031)`,
       ).toEqual([...expected].sort());
     });
   }

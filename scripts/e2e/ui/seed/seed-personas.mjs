@@ -172,13 +172,21 @@ async function api(method, url, { token, body } = {}) {
       status: res.status,
     });
   }
-  return res.status === 204 ? null : res.json();
+  // Several OK responses carry no body (KC POST /users answers 201-empty,
+  // PUTs answer 204): res.json() would throw "Unexpected end of JSON input".
+  const text = await res.text();
+  return text === "" ? null : JSON.parse(text);
 }
 
 function kcAdminToken() {
   // Same credential the former inline workflow block used: the
   // inari-platform-admin client credentials from the inari-keycloak-admin
   // secret (client id is fixed; only the secret is cluster-generated).
+  // SEED_KC_ADMIN_CLIENT_SECRET skips the kubectl read — required when the
+  // runner's kubeconfig can't reach the inari namespace (e.g. executors
+  // limited to the kandev namespace on the live platform cluster).
+  const fromEnv = (process.env.SEED_KC_ADMIN_CLIENT_SECRET || "").trim();
+  if (fromEnv) return clientCredentialsToken("inari-platform-admin", fromEnv);
   const b64 = execFileSync(
     "kubectl",
     ["-n", NAMESPACE, "get", "secret", "inari-keycloak-admin", "-o", "jsonpath={.data.client-secret}"],
@@ -241,6 +249,11 @@ async function ensureUser(at, { username, password }) {
         username,
         enabled: true,
         email: `${username}@inari.local`,
+        // KC 26.3's declarative user profile marks firstName/lastName
+        // required; without them login lands on the "Update Account
+        // Information" form and the browser flow stalls.
+        firstName: username,
+        lastName: "E2E",
         emailVerified: true,
         credentials: [{ type: "password", value: password, temporary: false }],
       },
@@ -255,8 +268,12 @@ async function ensureUser(at, { username, password }) {
   // KC 26.x: create alone can leave the account unverified / with required
   // actions — force the final state (same lesson as the golden-path seeding).
   // Never touches groups: personas must NOT join platform-admins.
+  // PUT /users/{id} is a FULL replace: merge onto the stored user so the
+  // declarative-profile attributes (firstName/lastName/email) survive —
+  // wiping them forces "Update Account Information" at first login.
+  const stored = (await kc("GET", `/users?username=${encodeURIComponent(username)}&exact=true`))[0];
   await kc("PUT", `/users/${id}`, {
-    body: { emailVerified: true, requiredActions: [], enabled: true },
+    body: { ...stored, emailVerified: true, requiredActions: [], enabled: true },
   });
   return id;
 }
@@ -265,8 +282,14 @@ async function joinOrganization(at, userId, username) {
   const orgs = await api("GET", `${KC_URL}/admin/realms/${KC_REALM}/organizations?search=${encodeURIComponent(TENANT)}&exact=true`, { token: at });
   const org = orgs.find((o) => o.name === TENANT || o.alias === TENANT) || orgs[0];
   if (!org) die(`KC organization for tenant "${TENANT}" not found (golden-path did not create the tenant?)`);
-  // PUT membership is idempotent (204).
-  await api("PUT", `${KC_URL}/admin/realms/${KC_REALM}/organizations/${org.id}/members/${userId}`, { token: at });
+  // KC 26.3 removed PUT .../members/{userId} (405): membership is now
+  // POST .../members with the user ID as a JSON string body (201), and a
+  // duplicate add answers 409 — treat that as success (was: idempotent PUT).
+  try {
+    await api("POST", `${KC_URL}/admin/realms/${KC_REALM}/organizations/${org.id}/members`, { token: at, body: userId });
+  } catch (err) {
+    if (err.status !== 409) throw err;
+  }
   log(`${username} joined KC organization ${TENANT}`);
   return org.id;
 }
