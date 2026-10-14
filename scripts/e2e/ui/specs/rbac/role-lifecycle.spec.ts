@@ -61,6 +61,23 @@ interface MyPermissions {
 }
 
 test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
+  // DIAG (kind stall investigation): on any failure, dump what actually
+  // rendered — the failure screenshots are viewport-clipped and the traces
+  // show data arriving without re-render.
+  test.afterEach(async ({ page }, testInfo) => {
+    if (testInfo.status === testInfo.expectedStatus) return;
+    try {
+      const html = await page.content();
+      const text = await page.evaluate(() => document.body.innerText.slice(0, 2500));
+      console.log("[diag] url:", page.url());
+      console.log("[diag] teams-section:", html.includes("Team membership"),
+        "| roles-table:", html.includes("Built-in"),
+        "| loading:", /Loading…/.test(text));
+      console.log("[diag] page text:\n", text);
+    } catch (e) {
+      console.log("[diag] dump failed:", String(e));
+    }
+  });
   // 420s: kind-stack write paths routinely take 60-100s end-to-end
   // (trace-verified); create budgets 120s for the POST + 90s for the card.
   test.setTimeout(420_000);
@@ -271,7 +288,18 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     await gotoAccessTab(page, MembersTabPage.LABEL);
     const members = new MembersTabPage(page);
 
-    await members.showMembers(TEAM_NAME);
+    // DIAG (kind stall investigation): dump the DOM when the click target
+    // never appears — distinguishes "team section never rendered" from
+    // "rendered without the team".
+    try {
+      await members.showMembers(TEAM_NAME);
+    } catch (e) {
+      const body = await page.evaluate(() => document.body.innerText.slice(0, 3000));
+      console.log("[diag] showMembers failed; page text:\n", body);
+      const html = await page.content();
+      console.log("[diag] teams section present:", html.includes("Team membership"), "| team name in DOM:", html.includes(TEAM_NAME));
+      throw e;
+    }
     await members.addMemberToTeam(TEAM_NAME, MEMBER.username);
     await poll(
       async () =>
