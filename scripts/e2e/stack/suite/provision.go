@@ -222,7 +222,7 @@ func installNATS(c *ProvisionConfig) error {
 	if c.HA {
 		values = "nats-values.yaml"
 	}
-	if err := helm.UpgradeInstall("nats", "nats/nats", "--version", "1.3.2",
+	if err := helm.UpgradeInstall("nats", "nats/nats", "--version", "2.15.1",
 		"--namespace", c.Namespace,
 		"-f", testdataFile(values),
 		// e2e-only: preloaded CI images must be used as-is (the chart's
