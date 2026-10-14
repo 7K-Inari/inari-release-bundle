@@ -50,26 +50,3 @@ export async function poll<T>(
   throw new Error(`poll: timed out after ${timeout}ms${what}`);
 }
 
-/**
- * Poll a UI observation, reloading the page once halfway through if the
- * in-place update never lands; `restore` reloads the page and re-navigates
- * to the observation surface. Justification for the reload fallback: on
- * the kind stack the mutation's response and the follow-up refetch both
- * complete (trace-verified), yet the SPA occasionally fails to re-render
- * for minutes under runner CPU starvation; a reload forces a clean render
- * of the already-persisted state. The observation is still polled — the
- * reload only refreshes the view, never the data.
- */
-export async function pollWithReload<T>(
-  restore: () => Promise<void>,
-  fn: () => Promise<T>,
-  { timeout, interval, message }: PollOptions,
-): Promise<T> {
-  const half = Math.floor(timeout / 2);
-  try {
-    return await poll(fn, { timeout: half, interval, message });
-  } catch {
-    await restore();
-    return poll(fn, { timeout: timeout - half, interval, message });
-  }
-}
