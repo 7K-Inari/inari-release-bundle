@@ -453,6 +453,19 @@ jobs:
               '{"spec":{"type":"NodePort","ports":[{"port":'$2',"nodePort":'$3'}]}}'
           done
 
+          # Wait for the re-patched NodePort routes to actually accept
+          # connections before seeding: the nodePort switch above (30082 ->
+          # 30081 for KC) races kube-proxy/iptables programming, and a fetch
+          # in that window fails instantly ("seed-personas: FAIL: fetch
+          # failed", observed 2026-10-14).
+          for url in "http://127.0.0.1:18090/healthz" "$KC/realms/inari"; do
+            for i in $(seq 1 30); do
+              curl -sf -o /dev/null "$url" && break
+              [ "$i" = 30 ] && { echo "endpoint $url never came up" >&2; exit 1; }
+              sleep 2
+            done
+          done
+
           # Seed the e2e personas (idempotent) and whitelist the browser
           # origin on the realm-imported inari-ui client. Fails the job here —
           # before browser install — if the membership API is broken (P0).

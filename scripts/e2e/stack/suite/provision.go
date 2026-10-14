@@ -592,10 +592,10 @@ func parseOutboxStreamInfo(out string, wantReplicas int) (bool, string) {
 // the stream yet. Any other exec error means the PROBE is broken.
 //
 // Two shapes are recognized, both verified against the pinned probe image
-// (natsio/nats-box:0.17.0, nats CLI v0.2.0):
+// (natsio/nats-box:0.20.0, nats CLI v0.3.x):
 //   - "stream not found (10059)" — the lookup failure some CLI versions
 //     print directly;
-//   - "could not pick a Stream to operate on" — what nats-box:0.17.0
+//   - "could not pick a Stream to operate on" — what nats-box:0.20.0
 //     actually prints for a missing stream (the CLI falls back to
 //     interactive stream selection after the lookup fails, then aborts
 //     because kubectl exec has no terminal).

@@ -21,10 +21,10 @@ quay.io/keycloak/keycloak-operator:26.3.2
 quay.io/keycloak/keycloak:26.3.2
 adorsys/keycloak-config-cli:6.5.1-26
 
-# nats/nats chart 1.3.2
-nats:2.11.1-binary-alpine
-natsio/nats-box:0.17.0
-natsio/nats-server-config-reloader:0.17.1
+# nats/nats chart 2.15.1
+nats:2.15.1-alpine
+natsio/nats-box:0.20.0
+natsio/nats-server-config-reloader:0.24.0
 
 # openfga/openfga chart 0.2.27
 openfga/openfga:v1.8.9
