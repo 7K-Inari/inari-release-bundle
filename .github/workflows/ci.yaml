@@ -105,6 +105,18 @@ jobs:
       - name: helm unittest
         run: helm unittest charts/inari-platform charts/inari-server charts/inari-console
 
+      - name: e2e helper unit tests
+        # The .mjs/.ts decision-logic tests for the e2e harness (seed planner,
+        # flake reporter, quarantine automation, poll contract) — previously
+        # only run locally, so a contract break (e.g. poll's void-fn rule)
+        # shipped silently.
+        run: |
+          node --test --experimental-strip-types \
+            scripts/e2e/ui/helpers/poll.test.ts \
+            scripts/e2e/ui/seed/seed-personas.test.mjs \
+            scripts/e2e/ui/report-flakes.test.mjs \
+            scripts/e2e/ui/quarantine-issues.test.mjs
+
       - name: chart-testing lint
         run: ct lint --config ct.yaml
 

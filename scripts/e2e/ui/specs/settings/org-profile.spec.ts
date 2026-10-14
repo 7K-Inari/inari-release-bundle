@@ -11,7 +11,8 @@
 // emission is asynchronous). The 120s test timeout keeps the project default
 // (60s) from killing it.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "../../fixtures/failure-dump";
+import type { Page } from "@playwright/test";
 
 import { uniqueName } from "../../fixtures/org";
 import { ApiClient } from "../../helpers/api";

@@ -33,7 +33,8 @@
 // propagation polls around the two switches. The describe-level 300s test
 // timeout keeps the project default (60s) from killing them.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "../../fixtures/failure-dump";
+import type { Page } from "@playwright/test";
 
 import { uniqueName } from "../../fixtures/org";
 import { ApiClient } from "../../helpers/api";

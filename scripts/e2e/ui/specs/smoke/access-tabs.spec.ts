@@ -7,7 +7,7 @@
 // (inari-ui #85), so this doubles as the regression guard for the
 // stale-bundle incident of 2026-10-01.
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../fixtures/failure-dump";
 
 import { TENANT_NAME } from "../../helpers/env";
 import { AccessPage } from "../../pages/access/access.page";

@@ -16,7 +16,8 @@
 
 import { randomBytes } from "node:crypto";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "../../fixtures/failure-dump";
+import type { Page } from "@playwright/test";
 
 import { ApiClient } from "../../helpers/api";
 import { TENANT_NAME } from "../../helpers/env";
