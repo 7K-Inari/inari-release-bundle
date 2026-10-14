@@ -14,7 +14,7 @@
 // SHARED, so the spec restores the original values through the same UI path
 // before it exits (spec independence — see README rule 4).
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../fixtures/failure-dump";
 
 import { uniqueName } from "../../fixtures/org";
 import { ApiClient } from "../../helpers/api";

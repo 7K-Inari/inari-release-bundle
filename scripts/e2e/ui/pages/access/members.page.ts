@@ -1,8 +1,8 @@
 // Access → Members tab page object. Marker text ("Org-wide membership") and
 // the Teams section markup come from inari-ui
-// src/pages/access/members-tab.tsx. No assertions.
+// src/pages/access/members-tab.tsx. The only assertion is the enabled-wait in showMembers (capability-gate settle, not a post-mutation check).
 
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 export class MembersTabPage {
   static readonly LABEL = "Members";
@@ -59,7 +59,14 @@ export class MembersTabPage {
 
   /** Expand a team's Members panel. */
   async showMembers(teamName: string): Promise<void> {
-    await this.teamCard(teamName).getByRole("button", { name: "Members" }).click();
+    // The card's buttons render DISABLED until /me/permissions resolves
+    // (CapabilityGate mode="disable") — a plain click hangs on the
+    // enabled-actionability check forever when that fetch is slow. Wait
+    // for enabled first so a permissions-fetch stall fails with a clear
+    // message instead of an opaque click timeout.
+    const btn = this.teamCard(teamName).getByRole("button", { name: "Members" });
+    await expect(btn).toBeEnabled({ timeout: 60_000 });
+    await btn.click();
   }
 
   /** Add an org member to a team via the debounced search picker. */

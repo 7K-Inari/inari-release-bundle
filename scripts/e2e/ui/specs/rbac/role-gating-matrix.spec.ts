@@ -25,7 +25,8 @@
 // inari-ui capability-gate.tsx (manageMembers/manageTeams/manageRbac) and
 // settings-nav.ts (admin-only settings entries).
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "../../fixtures/failure-dump";
+import type { Page } from "@playwright/test";
 
 import { PERSONAS, authFile, type Persona } from "../../fixtures/auth";
 import { ApiClient } from "../../helpers/api";

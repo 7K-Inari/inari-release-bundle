@@ -278,6 +278,18 @@ jobs:
             echo "    extraMounts:"
             echo "      - hostPath: /tmp/inari-e2e-git"
             echo "        containerPath: /git"
+            # NodePort mappings for the browser path (UI e2e): no per-connection
+            # port-forward state to lose mid-suite (the migrating UI stalls).
+            echo "    extraPortMappings:"
+            echo "      - containerPort: 30080  # inari-console -> host 127.0.0.1:18080"
+            echo "        hostPort: 18080"
+            echo "      - containerPort: 30090  # inari-server -> host 127.0.0.1:18090"
+            echo "        hostPort: 18090"
+            echo "      - containerPort: 30081  # keycloak -> host 127.0.0.2:8080 (browser)"
+            echo "        hostPort: 8080"
+            echo '        listenAddress: "127.0.0.2"'
+            echo "      - containerPort: 30082  # keycloak -> host 127.0.0.1:18091 (api-schema step)"
+            echo "        hostPort: 18091"
           } > /tmp/kind-config.yaml
           t0=$(date +%s)
           kind create cluster --name inari-e2e --config /tmp/kind-config.yaml --wait 60s
@@ -353,9 +365,22 @@ jobs:
           mkdir -p e2e
           cp "${{ github.workspace }}/bundle/scripts/e2e/api/api_schema_e2e_test.go" e2e/
           make export-openapi
-          kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
-          kubectl -n inari port-forward svc/keycloak-service 18091:8080 >/dev/null 2>&1 &
-          sleep 3 # port-forwards need a moment before accepting connections
+          # NodePort (see the UI step): stable across pod churn; no
+          # port-forward to die silently mid-step.
+          kubectl -n inari patch svc inari-server --type=strategic -p \
+            '{"spec":{"type":"NodePort","ports":[{"port":8080,"nodePort":30090}]}}'
+          kubectl -n inari patch svc keycloak-service --type=strategic -p \
+            '{"spec":{"type":"NodePort","ports":[{"port":8080,"nodePort":30082}]}}'
+          # KC for this step stays on 127.0.0.1:18091 (no browser here, so no
+          # issuer-hostname mapping needed) — via NodePort 30082 on the
+          # control-plane container's second mapping.
+          for url in http://127.0.0.1:18090/healthz http://127.0.0.1:18091/realms/inari; do
+            for i in $(seq 1 30); do
+              curl -sf -o /dev/null "$url" && break
+              [ "$i" = 30 ] && { echo "endpoint $url never came up" >&2; exit 1; }
+              sleep 2
+            done
+          done
           E2E_BASE_URL=http://127.0.0.1:18090 \
           E2E_KEYCLOAK_URL=http://127.0.0.1:18091 \
           E2E_OPENAPI="${{ github.workspace }}/inari-server/dist/openapi.yaml" \
@@ -412,12 +437,21 @@ jobs:
           export KC_URL="$KC" KC_HOST="keycloak-service.inari.svc:8080" \
             API_BASE="http://127.0.0.1:8080/api/v1"
 
-          # Fresh port-forwards (a prior step's may have died).
+          # NodePort, not port-forwards: kind extraPortMappings (control-plane
+          # container) carry host 18080/18090/127.0.0.2:8080 straight to the
+          # Services, immune to pod churn and apiserver watch resets — the
+          # failure mode behind the migrating UI-suite stalls (2026-10-14).
+          # kubectl port-forward remains in use only inside the Go suite.
           pkill -f "kubectl -n inari port-forward" 2>/dev/null || true
-          kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1 &
-          kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
-          kubectl -n inari port-forward --address 127.0.0.2 svc/keycloak-service 8080:8080 >/dev/null 2>&1 &
-          sleep 3
+          # KC's nodePort is handed off: 30082 (api-schema step) -> 30081
+          # here (browser path via the 127.0.0.2 issuer alias).
+          for spec in "inari-console 80 30080" "inari-server 8080 30090" "keycloak-service 8080 30081"; do
+            set -- $spec
+            # Strategic merge: Service ports merge by the "port" key, so
+            # targetPort/name survive; only type + nodePort change.
+            kubectl -n inari patch svc "$1" --type=strategic -p \
+              '{"spec":{"type":"NodePort","ports":[{"port":'$2',"nodePort":'$3'}]}}'
+          done
 
           # Seed the e2e personas (idempotent) and whitelist the browser
           # origin on the realm-imported inari-ui client. Fails the job here —
@@ -430,30 +464,17 @@ jobs:
             --reuse-values --set keycloakUrl="$KC"
           kubectl -n inari rollout status deployment/inari-console --timeout=180s
 
-          # The rollout replaced the console pod, killing the 18080 forward
-          # established above (kubectl port-forward binds to the pod it
-          # resolved at connect time and never re-resolves) — and any of
-          # the forwards can quietly drop during the long npm/playwright
-          # install that follows. Re-establish ALL of them right before the
-          # browser run; otherwise the SPA can't load (ui-proxy upstream
-          # ECONNREFUSED) or keycloak-js can't reach the IdP.
-          pkill -f "kubectl -n inari port-forward" 2>/dev/null || true
-          # Supervised forwards: kubectl port-forward dies silently on
-          # apiserver watch resets / pod churn and never reconnects, which
-          # stalled the browser suite mid-run for minutes at random points
-          # (the migrating "renderer stall" failures). A supervise loop
-          # restarts each forward the moment it exits.
-          while :; do kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1; sleep 1; done &
-          while :; do kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1; sleep 1; done &
-          while :; do kubectl -n inari port-forward --address 127.0.0.2 svc/keycloak-service 8080:8080 >/dev/null 2>&1; sleep 1; done &
-          sleep 3
-          # The forwards must actually accept connections before the proxy
-          # and the browser hit them (a pending forward fails identically
-          # to a dead one).
+          # The console rollout may reset the Service back to ClusterIP (the
+          # chart renders type: ClusterIP) — re-assert the NodePort mapping.
+          kubectl -n inari patch svc inari-console --type=strategic -p \
+            '{"spec":{"type":"NodePort","ports":[{"port":80,"nodePort":30080}]}}'
+          # The endpoints must actually accept connections before the proxy
+          # and the browser hit them (a pending NodePort route fails
+          # identically to a dead forward).
           for url in http://127.0.0.1:18080 http://127.0.0.1:18090/healthz "$KC/realms/inari"; do
             for i in $(seq 1 30); do
               curl -sf -o /dev/null "$url" && break
-              [ "$i" = 30 ] && { echo "port-forward for $url never came up" >&2; exit 1; }
+              [ "$i" = 30 ] && { echo "endpoint for $url never came up" >&2; exit 1; }
               sleep 2
             done
           done
@@ -479,6 +500,12 @@ jobs:
           # UI failures all smell like a stalled hop; this pinpoints which
           # one instead of guessing from failure screenshots.
           PROBE_LOG=/tmp/ui-path-probe.log; : > "$PROBE_LOG"
+          # Fail-fast: when the proxy hop dies 3 probes running, every
+          # browser/API call is failing and the suite can only burn timeouts
+          # for 10-20min (observed 2026-10-14, proxy crash). Kill playwright
+          # so the run fails in seconds WITH the probe timeline, instead of
+          # after a wall of misleading per-test timeouts.
+          consecutive_proxy_fail=0
           while :; do
             line="$(date +%H:%M:%S)"
             for hop in "console-direct http://127.0.0.1:18080/config.js"                        "server-direct http://127.0.0.1:18090/healthz"                        "kc-direct http://keycloak-service.inari.svc:8080/realms/inari/.well-known/openid-configuration"                        "proxy-console http://127.0.0.1:8080/config.js"                        "proxy-api http://127.0.0.1:8080/api/v1/openapi.json"; do
@@ -487,6 +514,16 @@ jobs:
               line="$line $name=$code"
             done
             echo "$line" >> "$PROBE_LOG"
+            if echo "$line" | grep -q "proxy-console=000FAIL"; then
+              consecutive_proxy_fail=$((consecutive_proxy_fail+1))
+            else
+              consecutive_proxy_fail=0
+            fi
+            if [ "$consecutive_proxy_fail" -ge 3 ]; then
+              echo "$(date +%H:%M:%S) FATAL: proxy hop dead 3 probes in a row — killing the suite (see timeline above)" >> "$PROBE_LOG"
+              pkill -f "playwright test" || true
+              consecutive_proxy_fail=0
+            fi
             sleep 15
           done &
           PROBE_PID=$!

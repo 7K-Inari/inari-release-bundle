@@ -2,7 +2,7 @@
 // table markup come from inari-ui src/pages/access/roles-tab.tsx. No
 // assertions.
 
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 export class RolesTabPage {
   static readonly LABEL = "Roles";
@@ -62,12 +62,15 @@ export class RolesTabPage {
 
   /** Open the create-role editor. */
   async newRole(): Promise<void> {
+    await expect(this.newRoleButton()).toBeEnabled({ timeout: 60_000 });
     await this.newRoleButton().click();
   }
 
   /** Open the editor for an existing role. */
   async openEditor(roleName: string): Promise<void> {
-    await this.roleRow(roleName).getByRole("button", { name: "Edit" }).click();
+    const btn = this.roleRow(roleName).first().getByRole("button", { name: "Edit" });
+    await expect(btn).toBeEnabled({ timeout: 60_000 });
+    await btn.click();
   }
 
   /** "Name" input inside the role editor card. */
@@ -118,6 +121,11 @@ export class RolesTabPage {
    * caller must register `page.once("dialog", ...)` before invoking this.
    */
   async deleteRole(roleName: string): Promise<void> {
-    await this.roleRow(roleName).getByRole("button", { name: "Delete" }).click();
+    // Capability-gated: renders disabled until /me/permissions resolves —
+    // wait for enabled or a slow permissions fetch fails as an opaque
+    // click timeout (the 2026-10-14 kind stall class).
+    const btn = this.roleRow(roleName).first().getByRole("button", { name: "Delete" });
+    await expect(btn).toBeEnabled({ timeout: 60_000 });
+    await btn.click();
   }
 }
