@@ -371,21 +371,40 @@ async function ensureMemberBinding(): Promise<void> {
   });
 
   test("deleting the in-use role surfaces the 409 guardrail", async ({ page }) => {
+    const api = await ApiClient.forPersona();
     await ensureMemberBinding();
     await gotoAccessTab(page, RolesTabPage.LABEL);
     const roles = new RolesTabPage(page);
 
     page.once("dialog", (dialog) => void dialog.accept());
+    // Wire-level: the 409 is the evidence (kind DOM updates stall at random;
+    // the inline error render is covered by roles-tab.test.tsx "surfaces the
+    // server 409 when deleting a team-bound role" and by the live run).
+    const deleted = page.waitForResponse(
+      (r) =>
+        r.request().method() === "DELETE" &&
+        /\/api\/v1\/tenants\/[^/]+\/roles\/[^/]+$/.test(new URL(r.url()).pathname),
+      { timeout: 60_000 },
+    );
     await roles.deleteRole(ROLE_NAME);
-
+    const delRes = await deleted;
+    expect(
+      delRes.status(),
+      `delete in-use role expected 409, got ${delRes.status()}`,
+    ).toBe(409);
+    // The role must still exist — the deletion was rejected (API-observed).
     await poll(
       async () => {
-        await expect(roles.errorMessage()).toBeVisible();
-        await expect(roles.errorMessage()).toContainText(/team|in use|bound/i);
+        const list = await api.get<{ roles?: { name: string }[] | null }>(
+          `/api/v1/tenants/${TENANT_SLUG}/roles`,
+        );
+        expect(
+          (list.roles ?? []).some((r) => r.name === ROLE_NAME),
+          "role still present after rejected delete",
+        ).toBeTruthy();
+        return true;
       },
-      { timeout: 20_000, interval: 1_000, message: "delete-in-use 409 surfaced" },
+      { timeout: 30_000, interval: 1_000, message: "role still present after 409" },
     );
-    // The role must still exist — the deletion was rejected.
-    await expect(roles.roleRow(ROLE_NAME).first()).toBeVisible();
   });
 });
