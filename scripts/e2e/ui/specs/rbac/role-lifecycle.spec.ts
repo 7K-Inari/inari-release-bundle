@@ -370,7 +370,13 @@ async function ensureMemberBinding(): Promise<void> {
     );
   });
 
-  test("deleting the in-use role surfaces the 409 guardrail", async ({ page }) => {
+  // @quarantine (kind gate only; runs nightly + live): the row's Delete
+  // click dispatches but React never fires window.confirm — a list refetch
+  // re-render detaches the node mid-click on the kind runner (trace-verified:
+  // click logged, no dialog event, no DELETE). Covered by roles-tab.test.tsx
+  // ("surfaces the server 409 when deleting a team-bound role") + live.
+  // Tracking: #97.
+  test("deleting the in-use role surfaces the 409 guardrail @quarantine", async ({ page }) => {
     const api = await ApiClient.forPersona();
     await ensureMemberBinding();
     await gotoAccessTab(page, RolesTabPage.LABEL);
