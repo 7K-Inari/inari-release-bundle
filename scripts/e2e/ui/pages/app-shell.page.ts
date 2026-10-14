@@ -30,9 +30,13 @@ export class AppShellPage {
     // Verified selection: on slow stacks the card click can land mid-render
     // and get dropped, leaving the app on the /all view ("Select a specific
     // tenant to load this view") — every downstream assertion then fails
-    // against the wrong tenant (kind CI, traced via DOM dumps). Re-navigate
-    // home and re-click until the switcher shows the tenant, bounded.
-    const deadline = Date.now() + 60_000;
+    // against the wrong tenant (kind CI, traced via DOM dumps). Selecting
+    // an org triggers a FULL Keycloak re-login (organization scope,
+    // prompt:none) that navigates away and lands on /<slug>/overview, so
+    // verify by URL once the redirect cycle settles — never by reading the
+    // switcher mid-redirect. Re-navigate and re-click until landed,
+    // bounded.
+    const deadline = Date.now() + 90_000;
     for (;;) {
       const link = this.page.getByRole("link", { name: new RegExp(name) }).first();
       if ((await link.count()) === 0) {
@@ -40,21 +44,27 @@ export class AppShellPage {
         await this.page.goto("/", { waitUntil: "domcontentloaded" });
         await this.waitForBoot();
       }
+      const href = await this.page
+        .getByRole("link", { name: new RegExp(name) })
+        .first()
+        .getAttribute("href");
+      const slug = href?.replace(/^\//, "").split("/")[0] || "";
       await this.page
         .getByRole("link", { name: new RegExp(name) })
         .first()
         .click();
-      await this.waitPastLoading();
-      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      const active = await this.switcherButton()
-        .textContent()
-        .then((t) => norm(t ?? "").includes(norm(name)))
-        .catch(() => false);
-      if (active) return;
-      if (Date.now() > deadline) {
-        throw new Error(`openTenant: tenant "${name}" never became active`);
+      try {
+        await this.page.waitForURL(
+          (u) => new URL(u).pathname.startsWith(`/${slug}/`),
+          { timeout: 30_000 },
+        );
+        await this.waitPastLoading();
+        return;
+      } catch {
+        if (Date.now() > deadline) {
+          throw new Error(`openTenant: tenant "${name}" never became active`);
+        }
       }
-      await this.page.waitForTimeout(1_000);
     }
   }
 
