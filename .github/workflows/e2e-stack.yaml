@@ -471,6 +471,24 @@ jobs:
           node scripts/e2e/lib/ui-proxy.mjs &
           PROXY_PID=$!
           trap 'kill $PROXY_PID 2>/dev/null || true' EXIT
+
+          # Stall observability: probe every browser-path hop every 15s for
+          # the whole suite and print the timeline at teardown. The migrating
+          # UI failures all smell like a stalled hop; this pinpoints which
+          # one instead of guessing from failure screenshots.
+          PROBE_LOG=/tmp/ui-path-probe.log; : > "$PROBE_LOG"
+          while :; do
+            line="$(date +%H:%M:%S)"
+            for hop in "console-direct http://127.0.0.1:18080/config.js"                        "server-direct http://127.0.0.1:18090/healthz"                        "kc-direct http://keycloak-service.inari.svc:8080/realms/inari/.well-known/openid-configuration"                        "proxy-console http://127.0.0.1:8080/config.js"                        "proxy-api http://127.0.0.1:8080/api/v1/openapi.json"; do
+              name=${hop%% *}; url=${hop#* }
+              code=$(curl -sS -m 5 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo FAIL)
+              line="$line $name=$code"
+            done
+            echo "$line" >> "$PROBE_LOG"
+            sleep 15
+          done &
+          PROBE_PID=$!
+          trap 'kill $PROBE_PID $PROXY_PID 2>/dev/null || true; echo "--- ui path probe ---"; cat /tmp/ui-path-probe.log' EXIT
           cd scripts/e2e/ui
           npm ci
           npx playwright install --with-deps chromium
