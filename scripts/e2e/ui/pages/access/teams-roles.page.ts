@@ -1,8 +1,8 @@
 // Access → Teams & Roles tab page object. Marker text ("Assign each team a
 // role") and the matrix markup come from inari-ui
-// src/pages/access/role-matrix.tsx. No assertions.
+// src/pages/access/role-matrix.tsx. Enabled-waits only (capability-gate settle); no content assertions.
 
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 export class TeamsRolesTabPage {
   static readonly LABEL = "Teams & Roles";
@@ -27,6 +27,7 @@ export class TeamsRolesTabPage {
 
   /** Pick a role for a team by its option label (display name or slug). */
   async selectRoleForTeam(teamDisplay: string, roleLabel: string): Promise<void> {
+    await expect(this.roleSelect(teamDisplay)).toBeEnabled({ timeout: 60_000 });
     await this.roleSelect(teamDisplay).selectOption({ label: roleLabel });
   }
 
@@ -36,6 +37,7 @@ export class TeamsRolesTabPage {
 
   /** Persist the drafted matrix (whole-set replace server-side). */
   async saveChanges(): Promise<void> {
+    await expect(this.saveButton()).toBeEnabled({ timeout: 60_000 });
     await this.saveButton().click();
   }
 
