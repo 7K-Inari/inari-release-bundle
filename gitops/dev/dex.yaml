@@ -16,7 +16,7 @@ spec:
   source:
     repoURL: https://charts.dexidp.io
     chart: dex
-    targetRevision: 0.25.2
+    targetRevision: 0.26.0
     helm:
       values: |
         fullnameOverride: dex-dev
