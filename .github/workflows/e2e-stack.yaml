@@ -285,9 +285,11 @@ jobs:
             echo "        hostPort: 18080"
             echo "      - containerPort: 30090  # inari-server -> host 127.0.0.1:18090"
             echo "        hostPort: 18090"
-            echo "      - containerPort: 30081  # keycloak -> host 127.0.0.2:8080"
+            echo "      - containerPort: 30081  # keycloak -> host 127.0.0.2:8080 (browser)"
             echo "        hostPort: 8080"
             echo '        listenAddress: "127.0.0.2"'
+            echo "      - containerPort: 30082  # keycloak -> host 127.0.0.1:18091 (api-schema step)"
+            echo "        hostPort: 18091"
           } > /tmp/kind-config.yaml
           t0=$(date +%s)
           kind create cluster --name inari-e2e --config /tmp/kind-config.yaml --wait 60s
@@ -363,9 +365,22 @@ jobs:
           mkdir -p e2e
           cp "${{ github.workspace }}/bundle/scripts/e2e/api/api_schema_e2e_test.go" e2e/
           make export-openapi
-          kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
-          kubectl -n inari port-forward svc/keycloak-service 18091:8080 >/dev/null 2>&1 &
-          sleep 3 # port-forwards need a moment before accepting connections
+          # NodePort (see the UI step): stable across pod churn; no
+          # port-forward to die silently mid-step.
+          kubectl -n inari patch svc inari-server --type=strategic -p \
+            '{"spec":{"type":"NodePort","ports":[{"port":8080,"nodePort":30090}]}}'
+          kubectl -n inari patch svc keycloak-service --type=strategic -p \
+            '{"spec":{"type":"NodePort","ports":[{"port":8080,"nodePort":30082}]}}'
+          # KC for this step stays on 127.0.0.1:18091 (no browser here, so no
+          # issuer-hostname mapping needed) — via NodePort 30082 on the
+          # control-plane container's second mapping.
+          for url in http://127.0.0.1:18090/healthz http://127.0.0.1:18091/realms/inari; do
+            for i in $(seq 1 30); do
+              curl -sf -o /dev/null "$url" && break
+              [ "$i" = 30 ] && { echo "endpoint $url never came up" >&2; exit 1; }
+              sleep 2
+            done
+          done
           E2E_BASE_URL=http://127.0.0.1:18090 \
           E2E_KEYCLOAK_URL=http://127.0.0.1:18091 \
           E2E_OPENAPI="${{ github.workspace }}/inari-server/dist/openapi.yaml" \
@@ -428,6 +443,8 @@ jobs:
           # failure mode behind the migrating UI-suite stalls (2026-10-14).
           # kubectl port-forward remains in use only inside the Go suite.
           pkill -f "kubectl -n inari port-forward" 2>/dev/null || true
+          # KC's nodePort is handed off: 30082 (api-schema step) -> 30081
+          # here (browser path via the 127.0.0.2 issuer alias).
           for spec in "inari-console 80 30080" "inari-server 8080 30090" "keycloak-service 8080 30081"; do
             set -- $spec
             # Strategic merge: Service ports merge by the "port" key, so
