@@ -468,7 +468,9 @@ jobs:
             | head -c 400 || echo "discovery NOT fetchable"
           echo
 
-          node scripts/e2e/lib/ui-proxy.mjs &
+          # Supervised like the forwards: a crashed proxy fails every hop
+          # while all direct probes stay green (observed 2026-10-14).
+          while :; do node scripts/e2e/lib/ui-proxy.mjs; sleep 1; done &
           PROXY_PID=$!
           trap 'kill $PROXY_PID 2>/dev/null || true' EXIT
 

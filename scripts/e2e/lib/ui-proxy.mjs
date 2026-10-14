@@ -63,6 +63,12 @@ function proxy(req, res, upstream) {
     out.destroy(new Error("ui-proxy upstream timeout"));
   });
   out.on("error", (err) => {
+    // Headers may already be flushed (stall mid-body): never writeHead
+    // twice — that throws ERR_HTTP_HEADERS_SENT and kills the process.
+    if (res.headersSent) {
+      res.destroy(err);
+      return;
+    }
     res.writeHead(502, { "content-type": "text/plain" });
     res.end(`ui-proxy upstream error: ${err.message}`);
   });
