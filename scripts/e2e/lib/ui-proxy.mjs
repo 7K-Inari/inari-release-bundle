@@ -39,6 +39,16 @@ function proxy(req, res, upstream) {
       path: req.url,
       method: req.method,
       headers: { ...req.headers, host: upstream.host },
+      // No keep-alive to the port-forwards: a kubectl port-forward stream
+      // that died silently would otherwise be reused, hanging the request
+      // until TCP timeout (observed as multi-minute browser stalls). A fresh
+      // socket per request fails fast against a dead forward, and the
+      // supervisor loop in e2e-stack.yaml restarts the forward.
+      agent: new http.Agent({ keepAlive: false }),
+      // Fail fast instead of hanging forever on a stalled stream: the
+      // browser's fetch rejects, the app's error state renders, and the
+      // next poll/suite retry re-attempts against the restarted forward.
+      timeout: 30_000,
     },
     (up) => {
       const headers = {};
@@ -49,6 +59,9 @@ function proxy(req, res, upstream) {
       up.pipe(res);
     },
   );
+  out.on("timeout", () => {
+    out.destroy(new Error("ui-proxy upstream timeout"));
+  });
   out.on("error", (err) => {
     res.writeHead(502, { "content-type": "text/plain" });
     res.end(`ui-proxy upstream error: ${err.message}`);

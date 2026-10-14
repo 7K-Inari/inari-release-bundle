@@ -438,9 +438,14 @@ jobs:
           # browser run; otherwise the SPA can't load (ui-proxy upstream
           # ECONNREFUSED) or keycloak-js can't reach the IdP.
           pkill -f "kubectl -n inari port-forward" 2>/dev/null || true
-          kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1 &
-          kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1 &
-          kubectl -n inari port-forward --address 127.0.0.2 svc/keycloak-service 8080:8080 >/dev/null 2>&1 &
+          # Supervised forwards: kubectl port-forward dies silently on
+          # apiserver watch resets / pod churn and never reconnects, which
+          # stalled the browser suite mid-run for minutes at random points
+          # (the migrating "renderer stall" failures). A supervise loop
+          # restarts each forward the moment it exits.
+          while :; do kubectl -n inari port-forward svc/inari-console 18080:80 >/dev/null 2>&1; sleep 1; done &
+          while :; do kubectl -n inari port-forward svc/inari-server 18090:8080 >/dev/null 2>&1; sleep 1; done &
+          while :; do kubectl -n inari port-forward --address 127.0.0.2 svc/keycloak-service 8080:8080 >/dev/null 2>&1; sleep 1; done &
           sleep 3
           # The forwards must actually accept connections before the proxy
           # and the browser hit them (a pending forward fails identically
