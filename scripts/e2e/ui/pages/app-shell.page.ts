@@ -27,8 +27,35 @@ export class AppShellPage {
 
   /** Click a tenant card on the switcher home by its display name. */
   async openTenant(name: string): Promise<void> {
-    await this.page.getByRole("link", { name: new RegExp(name) }).first().click();
-    await this.waitPastLoading();
+    // Verified selection: on slow stacks the card click can land mid-render
+    // and get dropped, leaving the app on the /all view ("Select a specific
+    // tenant to load this view") — every downstream assertion then fails
+    // against the wrong tenant (kind CI, traced via DOM dumps). Re-navigate
+    // home and re-click until the switcher shows the tenant, bounded.
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const link = this.page.getByRole("link", { name: new RegExp(name) }).first();
+      if ((await link.count()) === 0) {
+        // Not on the switcher home (e.g. stuck on /all) — go home first.
+        await this.page.goto("/", { waitUntil: "domcontentloaded" });
+        await this.waitForBoot();
+      }
+      await this.page
+        .getByRole("link", { name: new RegExp(name) })
+        .first()
+        .click();
+      await this.waitPastLoading();
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const active = await this.switcherButton()
+        .textContent()
+        .then((t) => norm(t ?? "").includes(norm(name)))
+        .catch(() => false);
+      if (active) return;
+      if (Date.now() > deadline) {
+        throw new Error(`openTenant: tenant "${name}" never became active`);
+      }
+      await this.page.waitForTimeout(1_000);
+    }
   }
 
   /** Navigate via a sidebar link (exact name match, e.g. "Access"). */
