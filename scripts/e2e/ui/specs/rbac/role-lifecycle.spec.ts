@@ -274,7 +274,7 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     );
   });
 
-  test("add e2e-member to the team @quarantine", async ({ page }) => {
+  test("add e2e-member to the team", async ({ page }) => {
     await gotoAccessTab(page, MembersTabPage.LABEL);
     const members = new MembersTabPage(page);
 
@@ -287,7 +287,7 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     );
   });
 
-  test("custom role propagates to e2e-member's /me/permissions @quarantine", async () => {
+  test("custom role propagates to e2e-member's /me/permissions", async () => {
     // OrgTeamSync + the /me/permissions cache are interval-based: poll with
     // a 120s budget (see header). Uses e2e-member's direct-grant token.
     const memberApi = await ApiClient.forPersona(MEMBER.username, MEMBER.password);
@@ -304,7 +304,7 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     );
   });
 
-  test("deleting the in-use role surfaces the 409 guardrail @quarantine", async ({ page }) => {
+  test("deleting the in-use role surfaces the 409 guardrail", async ({ page }) => {
     await gotoAccessTab(page, RolesTabPage.LABEL);
     const roles = new RolesTabPage(page);
 
