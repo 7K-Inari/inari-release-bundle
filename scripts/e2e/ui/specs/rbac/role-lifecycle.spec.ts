@@ -213,10 +213,16 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
         await gotoAccessTab(page, MembersTabPage.LABEL);
         await expect(members.marker()).toBeVisible();
       },
-      async () => expect(members.teamCard(TEAM_NAME)).toBeVisible(),
-      // 150s total: kind write + refetch latency is trace-verified at
-      // 60-100s; the reload halfway forces a clean render of the persisted
-      // state when the SPA's in-place update stalls under runner load.
+      // toBeAttached, not toBeVisible: kind traces show the team in two
+      // consecutive GET /teams responses while zero screencast frames are
+      // produced — the runner-starved renderer's layout/paint pipeline
+      // stalls for minutes even though the DOM is updated. Attached +
+      // textContent are layout-independent and still prove the render.
+      async () => {
+        const card = members.teamCard(TEAM_NAME).first();
+        await expect(card).toBeAttached();
+        expect(await card.textContent()).toContain(TEAM_NAME);
+      },
       { timeout: 150_000, interval: 2_000, message: "team card after create" },
     );
   });
