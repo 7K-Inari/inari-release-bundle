@@ -1,0 +1,67 @@
+{{- if .Values.keycloak.enabled }}
+{{- if not .Values.keycloak.issuerBaseURL }}
+{{- fail "keycloak.issuerBaseURL is required when keycloak.enabled=true — public base URL of the hub Keycloak, used for status.issuerURL" }}
+{{- end }}
+# Claim XRD replacing the operator's KeycloakRealm catalog item (sunset plan
+# D1): hub-side self-service tenant realms via provider-keycloak.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xtenantrealms.identity.inari.io
+  labels:
+    {{- include "inari-platform-graphs.labels" . | nindent 4 }}
+spec:
+  scope: Namespaced
+  group: identity.inari.io
+  names:
+    kind: XTenantRealm
+    plural: xtenantrealms
+    singular: xtenantrealm
+  claimNames:
+    kind: TenantRealm
+    plural: tenantrealms
+    singular: tenantrealm
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - tenantID
+                - namespace
+              properties:
+                tenantID:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                  description: Platform-wide tenant identifier (TenantReference).
+                namespace:
+                  type: string
+                  minLength: 1
+                  description: Tenant namespace on the hub cluster (TenantReference).
+                realm:
+                  type: string
+                  description: Keycloak realm name. Defaults to tenantID.
+                displayName:
+                  type: string
+                  description: Human-friendly realm name.
+                enabled:
+                  type: boolean
+                  default: true
+                  description: Whether the realm is active.
+            status:
+              type: object
+              properties:
+                realm:
+                  type: string
+                  description: Effective realm name created in Keycloak.
+                issuerURL:
+                  type: string
+                  description: OIDC issuer URL of the realm.
+{{- end }}

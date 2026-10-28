@@ -1,0 +1,38 @@
+{{- /* TenantRealm composition body (function-go-templating, Inline source).
+     Tokens @@PROVIDER_CONFIG_REF@@ and @@ISSUER_BASE_URL@@ are substituted by
+     helm from .Values.keycloak.providerConfigRef / .Values.keycloak.issuerBaseURL
+     when templates/keycloak/composition-tenantrealm.yaml renders this file. */ -}}
+{{- $xr := .observed.composite.resource -}}
+{{- $spec := $xr.spec -}}
+{{- $realm := $spec.realm | default $spec.tenantID -}}
+---
+apiVersion: realm.keycloak.m.crossplane.io/v1alpha1
+kind: Realm
+metadata:
+  name: {{ $realm }}
+  namespace: {{ $xr.metadata.namespace }}
+  annotations:
+    crossplane.io/external-name: {{ $realm }}
+    gotemplating.fn.crossplane.io/composition-resource-name: realm
+spec:
+  forProvider:
+    realm: {{ $realm }}
+    {{- if $spec.displayName }}
+    displayName: {{ $spec.displayName | quote }}
+    {{- end }}
+    enabled: {{ $spec.enabled }}
+  deletionPolicy: Delete
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: @@PROVIDER_CONFIG_REF@@
+---
+# Patch the composite status: effective realm name + OIDC issuer URL
+# (operator contract: issuerURL = <base>/realms/<realm>).
+apiVersion: identity.inari.io/v1alpha1
+kind: XTenantRealm
+metadata:
+  name: {{ $xr.metadata.name }}
+  namespace: {{ $xr.metadata.namespace }}
+status:
+  realm: {{ $realm }}
+  issuerURL: "@@ISSUER_BASE_URL@@/realms/{{ $realm }}"
