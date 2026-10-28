@@ -229,6 +229,9 @@ jobs:
               kubectl -n argocd get application "$a" -o jsonpath='{range .status.resources[?(@.status!="Synced")]}{.kind}/{.name}: {.status} {.health.status}{"\n"}{end}' || true
             done
             kubectl get pods -A | grep -v -E "Running|Completed" || true
+            # platform-rgd drift debugging: live RGD vs chart-rendered
+            kubectl get resourcegraphdefinition tenantnamespace -o yaml || true
+            helm template platform-graphs charts/inari-platform-graphs || true
             kubectl -n cnpg-system get pods -o wide || true
             kubectl -n cnpg-system logs -l app.kubernetes.io/instance=cnpg --all-containers --tail=50 || true
             kubectl -n cnpg-system describe pods | tail -60 || true
