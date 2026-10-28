@@ -217,3 +217,116 @@ func targetRevisions(t *testing.T, path string) []string {
 	}
 	return out
 }
+
+// TestGitOpsSourceReposWhitelist asserts every Application source repoURL in
+// gitops/{operators,platform,apps} is covered by the AppProject sourceRepos
+// whitelist — ArgoCD rejects uncovered sources with "repository not
+// permitted by project" at sync time. Codified after the kro registry move
+// (ghcr.io/kro-run -> registry.k8s.io/kro) updated everything except the
+// whitelist. ArgoCD glob semantics: '*' matches within a path segment,
+// '**' crosses separators.
+func TestGitOpsSourceReposWhitelist(t *testing.T) {
+	root := filepath.Join(stackDir(), "..", "..", "..", "gitops")
+	allowed := sourceReposEntries(t, filepath.Join(root, "argocd-project.yaml"))
+	urlRe := regexp.MustCompile(`repoURL:\s*([^\s"']+)`)
+	for _, dir := range []string{"operators", "platform", "apps"} {
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatalf("reading gitops/%s: %v", dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(root, dir, e.Name()))
+			if err != nil {
+				t.Fatalf("reading %s/%s: %v", dir, e.Name(), err)
+			}
+			if !strings.Contains(string(raw), "kind: Application") {
+				continue
+			}
+			for _, m := range urlRe.FindAllStringSubmatch(string(raw), -1) {
+				if !sourceRepoAllowed(allowed, m[1]) {
+					t.Errorf("%s/%s: repoURL %q not covered by argocd-project sourceRepos", dir, e.Name(), m[1])
+				}
+			}
+		}
+	}
+}
+
+// sourceReposEntries extracts the quoted sourceRepos entries from
+// argocd-project.yaml (comment lines inside the block are skipped).
+func sourceReposEntries(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	entryRe := regexp.MustCompile(`^\s+-\s+"([^"]+)"`)
+	var out []string
+	inBlock := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "sourceRepos:") {
+			inBlock = true
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		if m := entryRe.FindStringSubmatch(line); m != nil {
+			out = append(out, m[1])
+			continue
+		}
+		// A non-entry, non-comment line ends the block (e.g. "destinations:").
+		if strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			break
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no sourceRepos entries found in %s", path)
+	}
+	return out
+}
+
+// sourceRepoAllowed reports whether url matches any whitelist entry under
+// ArgoCD glob semantics: '*' matches within a path segment, '**' crosses
+// separators (zero or more segments).
+func sourceRepoAllowed(allowed []string, url string) bool {
+	for _, pat := range allowed {
+		if argoGlobMatch(pat, url) {
+			return true
+		}
+	}
+	return false
+}
+
+// argoGlobMatch matches a URL against an ArgoCD sourceRepos glob. Segment
+// recursion keeps '**' semantics honest: it consumes zero or more whole
+// path segments while '*' stays segment-local.
+func argoGlobMatch(pat, url string) bool {
+	pp, up := strings.Split(pat, "/"), strings.Split(url, "/")
+	var match func(i, j int) bool
+	match = func(i, j int) bool {
+		for i < len(pp) {
+			if pp[i] == "**" {
+				for k := j; k <= len(up); k++ {
+					if match(i+1, k) {
+						return true
+					}
+				}
+				return false
+			}
+			if j >= len(up) {
+				return false
+			}
+			segRe := "^" + strings.ReplaceAll(regexp.QuoteMeta(pp[i]), `\*`, "[^/]*") + "$"
+			if ok, _ := regexp.MatchString(segRe, up[j]); !ok {
+				return false
+			}
+			i++
+			j++
+		}
+		return j == len(up)
+	}
+	return match(0, 0)
+}
