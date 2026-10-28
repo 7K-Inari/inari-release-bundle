@@ -26,8 +26,10 @@ The docker-format manifest.json/repositories files are kept untouched for
 `docker load` consumers. A tar with no dangling content is left unchanged.
 
 Usage: normalize-image-tar.py <image.tar> [<image2.tar> ...]
-Exit code is 0 on success; 1 if an image ends up with nothing runnable
-(indicates a broken pull, not a cosmetic dangling reference).
+Exit code is 0 on success. If no index entry resolves at all (e.g. a
+retagged single image whose index references unexported content), the tar
+is left unchanged with a warning — docker-format consumers (`docker load`)
+are unaffected by OCI index problems.
 """
 
 import json
@@ -120,8 +122,12 @@ def normalize(path):
                 dropped.append(name)
 
         if dropped and not kept:
-            print(f"{path}: all index entries unresolvable: {dropped}", file=sys.stderr)
-            return 1
+            # Nothing resolvable via the OCI index — e.g. a retagged single
+            # image whose index points at unexported content. Consumers using
+            # the docker-format manifest.json (docker load) are unaffected by
+            # index issues, so warn and leave the tar untouched.
+            print(f"{path}: WARNING: no resolvable OCI index entries: {dropped}; leaving tar unchanged", file=sys.stderr)
+            return 0
 
         # No-op fast path: identical descriptor set, nothing hoisted.
         if [d["digest"] for d in kept] == [d["digest"] for d in index.get("manifests", [])]:

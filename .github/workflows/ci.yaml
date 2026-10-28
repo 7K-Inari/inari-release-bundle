@@ -66,7 +66,6 @@ jobs:
           TAG=$(scripts/preload-operator-image.sh --docker-only | tail -1)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           docker save "ghcr.io/7k-inari/inari-operator:${TAG}" -o "$RUNNER_TEMP/operator-image.tar"
-          python3 scripts/ci/normalize-image-tar.py "$RUNNER_TEMP/operator-image.tar"
 
       # Artifacts cross runners more reliably than the cache alone.
       - name: Upload operator image artifact
