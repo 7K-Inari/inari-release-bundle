@@ -1,0 +1,35 @@
+# cert-manager — hub prerequisite of the operator's CertIssuer facade CRD
+# (renders cert-manager ClusterIssuers on the hub). Sunset-scoped: removed in
+# Phase 4 of the operator sunset; tenant-cluster installs are first-class
+# addons (multi-repo GitOps feature), never hub gitops.
+# Pin must match scripts/e2e/stack/suite/provision.go certManagerChartVersion
+# (guarded by TestGitOpsPinParity).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  project: inari
+  source:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    targetRevision: v1.21.3
+    helm:
+      releaseName: cert-manager
+      values: |
+        crds:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # cert-manager CRDs exceed the 256KiB last-applied-configuration
+      # annotation limit; client-side apply fails on them (same as cnpg).
+      - ServerSideApply=true

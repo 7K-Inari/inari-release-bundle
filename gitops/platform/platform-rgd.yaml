@@ -1,0 +1,31 @@
+# Platform RGD/Composition manifests — the KRO ResourceGraphDefinitions and
+# Crossplane Compositions that replace the operator's platform.inari.io CRDs
+# (sunset decisions D1/D6). Wave 1: after KRO (-2) and Crossplane (-3), whose
+# CRDs these manifests instantiate.
+#
+# Content (tenantnamespace RGD, Keycloak compositions) is authored by the
+# sibling task W1-2 — this Application delivers the scaffold so the
+# delivery path exists from day 0. The kustomize dir builds zero objects
+# until then (ArgoCD syncs it Healthy).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-rgd
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: inari
+  source:
+    # TODO: flip to inari-release-bundle.git once the repo rename lands
+    # (GitHub redirects git/HTTP, but ArgoCD repo entries should use the canonical name).
+    repoURL: https://github.com/7K-Inari/inari-helm-charts.git
+    targetRevision: HEAD
+    path: gitops/platform/rgd
+  destination:
+    server: https://kubernetes.default.svc
+    # RGDs/Compositions are cluster-scoped; no namespace.
+    namespace: default
+  syncPolicy:
+    automated:
+      selfHeal: true

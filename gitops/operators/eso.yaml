@@ -1,0 +1,30 @@
+# External Secrets Operator — hub prerequisite: the platform's secret
+# delivery path (e.g. postgresql.auth.existingSecret, OIDC client secrets)
+# assumes ESO. Pin must match scripts/e2e/stack/suite/provision.go
+# esoChartVersion (guarded by TestGitOpsPinParity).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: external-secrets
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  project: inari
+  source:
+    repoURL: https://charts.external-secrets.io
+    chart: external-secrets
+    targetRevision: 2.11.0
+    helm:
+      releaseName: external-secrets
+      values: |
+        installCRDs: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: external-secrets
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
