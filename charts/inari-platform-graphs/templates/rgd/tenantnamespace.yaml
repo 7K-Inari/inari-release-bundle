@@ -33,7 +33,7 @@ spec:
         memory: string
         pods: integer
     status:
-      namespace: ${namespace.metadata.name}
+      namespace: ${tenantns.metadata.name}
     additionalPrinterColumns:
       - name: Tenant
         type: string
@@ -45,7 +45,7 @@ spec:
         type: string
         jsonPath: .status.conditions[?(@.type=="Ready")].status
   resources:
-    - id: namespace
+    - id: tenantns
       template:
         apiVersion: v1
         kind: Namespace
@@ -54,7 +54,7 @@ spec:
           labels:
             platform.inari.io/tenant: ${schema.spec.tenantID}
       readyWhen:
-        - "${namespace.status.phase == 'Active'}"
+        - "${tenantns.status.phase == 'Active'}"
     - id: rolebinding
       template:
         apiVersion: rbac.authorization.k8s.io/v1

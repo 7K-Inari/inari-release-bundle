@@ -61,7 +61,7 @@ tests:
     asserts:
       - equal:
           path: spec.schema.status.namespace
-          value: ${namespace.metadata.name}
+          value: ${tenantns.metadata.name}
       - equal:
           path: spec.schema.additionalPrinterColumns[0].jsonPath
           value: .spec.tenantID
@@ -76,7 +76,7 @@ tests:
     asserts:
       - equal:
           path: spec.resources[0].id
-          value: namespace
+          value: tenantns
       - equal:
           path: spec.resources[0].template.kind
           value: Namespace
@@ -146,8 +146,8 @@ tests:
           path: spec.resources[1].template.subjects
           pattern: ': \[\]\}$'
 
-  - it: marks the namespace readyWhen Active
+  - it: marks the namespace readyWhen Active (resource id "tenantns" — "namespace" is a CEL reserved word)
     asserts:
       - equal:
           path: spec.resources[0].readyWhen[0]
-          value: ${namespace.status.phase == 'Active'}
+          value: ${tenantns.status.phase == 'Active'}
