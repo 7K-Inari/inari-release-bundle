@@ -101,12 +101,11 @@ const (
 	providerKeycloakPackage = "xpkg.crossplane.io/crossplane-contrib/provider-keycloak"
 )
 
-// externalDNSCRDURL is the pinned upstream DNSEndpoint/DNSRecord CRD
-// manifest; the helm chart never installs CRDs.
-func externalDNSCRDURL() string {
-	return "https://raw.githubusercontent.com/kubernetes-sigs/external-dns/" +
-		externalDNSAppVersion + "/config/crd/standard/dnsendpoints.externaldns.k8s.io.yaml"
-}
+// externalDNSCRDBase is the pinned upstream CRD directory; the helm chart
+// never installs CRDs. Both CRDs of the directory are applied, mirroring the
+// gitops Application's directory source (config/crd/standard).
+const externalDNSCRDBase = "https://raw.githubusercontent.com/kubernetes-sigs/external-dns/" +
+	externalDNSAppVersion + "/config/crd/standard"
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -377,8 +376,11 @@ func installCertManager(c *ProvisionConfig) error {
 // Dev-safe no-op values: CRD source + rfc2136 provider pointed at a dead
 // address with no zones — the sync loop never dials out.
 func installExternalDNS(c *ProvisionConfig) error {
-	if _, err := kube.Kubectl("apply", "-f", externalDNSCRDURL()); err != nil {
-		return err
+	for _, crd := range []string{"dnsendpoints", "dnsrecords"} {
+		if _, err := kube.Kubectl("apply", "-f",
+			externalDNSCRDBase+"/"+crd+".externaldns.k8s.io.yaml"); err != nil {
+			return err
+		}
 	}
 	// The controller crashloops listing DNSEndpoints before the CRD exists.
 	if err := kube.WaitCondition("", "condition=established", "120s",
