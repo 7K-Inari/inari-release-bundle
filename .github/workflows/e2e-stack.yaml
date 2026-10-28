@@ -491,8 +491,12 @@ jobs:
 
           # Point the SPA's Keycloak URL at the browser-reachable KC (which
           # is also the issuer URL, so no hostname mismatch anywhere).
+          # --force-conflicts: the NodePort re-patch above owns spec.type via
+          # kubectl-patch, and runner helm (v4) applies server-side by
+          # default — without this the upgrade fails on a .spec.type SSA
+          # conflict. The re-patch after the rollout re-asserts NodePort.
           helm upgrade inari-console charts/inari-console --namespace inari \
-            --reuse-values --set keycloakUrl="$KC"
+            --reuse-values --set keycloakUrl="$KC" --force-conflicts
           kubectl -n inari rollout status deployment/inari-console --timeout=180s
 
           # The console rollout may reset the Service back to ClusterIP (the
