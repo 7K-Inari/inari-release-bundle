@@ -394,6 +394,10 @@ func installExternalDNS(c *ProvisionConfig) error {
 		"--set", "provider.name=rfc2136",
 		"--set", "extraArgs[0]=--rfc2136-host=127.0.0.1",
 		"--set", "extraArgs[1]=--rfc2136-port=5353",
+		// insecure: dev no-op provider (dead address, no TSIG) — without it
+		// external-dns >= v0.23 validates an empty TSIG algorithm and
+		// crashloops at startup ("is not supported TSIG algorithm").
+		"--set", "extraArgs[2]=--rfc2136-insecure=true",
 		"--set", "registry=noop",
 		"--set", "policy=upsert-only",
 		"--set", "interval=15m",
