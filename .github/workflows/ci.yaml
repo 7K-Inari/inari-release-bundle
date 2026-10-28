@@ -38,7 +38,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/ci-images
-          grep -vE '^\s*(#|$)' scripts/ci/images.txt | xargs -P8 -n1 docker pull
+          # ECR Public's anonymous data quota is routinely exhausted on shared
+          # GHA egress IPs ("error from registry: Data limit exceeded"); fall
+          # back to the Docker Hub mirror and retag to the manifest name.
+          if ! docker pull public.ecr.aws/docker/library/redis:7.2.7-alpine; then
+            docker pull mirror.gcr.io/library/redis:7.2.7-alpine
+            docker tag mirror.gcr.io/library/redis:7.2.7-alpine public.ecr.aws/docker/library/redis:7.2.7-alpine
+          fi
+          grep -vE '^\s*(#|$)' scripts/ci/images.txt | grep -vx 'public.ecr.aws/docker/library/redis:7.2.7-alpine' | xargs -P8 -n1 docker pull
           # kind node image must be in the docker daemon before kind create cluster
           grep '^kindest/node:' scripts/ci/images.txt | xargs docker save -o /tmp/ci-images/node.tar
           # everything else is side-loaded into the kind cluster
