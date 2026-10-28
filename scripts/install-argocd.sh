@@ -25,7 +25,9 @@ fi
 # IfNotPresent uses the preloaded image when present (CI side-loads it) and
 # pulls once otherwise.
 if kubectl -n argocd get deployment argocd-redis >/dev/null 2>&1; then
-  kubectl -n argocd patch deployment argocd-redis --type merge -p \
+  # strategic: merges the container entry by name (a JSON merge patch would
+  # replace the whole containers list and blank the image field).
+  kubectl -n argocd patch deployment argocd-redis --type strategic -p \
     '{"spec":{"template":{"spec":{"containers":[{"name":"redis","imagePullPolicy":"IfNotPresent"}]}}}}'
 fi
 
