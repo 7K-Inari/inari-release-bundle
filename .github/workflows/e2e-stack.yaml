@@ -606,6 +606,15 @@ jobs:
           kubectl -n inari get pods -o wide > /tmp/e2e-diag/pods.txt 2>&1
           kubectl -n inari get events --sort-by=.lastTimestamp > /tmp/e2e-diag/events.txt 2>&1
           kubectl -n inari describe pods > /tmp/e2e-diag/describe-pods.txt 2>&1
+          # Hub prereqs (Phase 0 gitops gap): a failure there (e.g.
+          # external-dns Deployment never ready) is invisible from the inari
+          # namespaces alone.
+          kubectl get pods -A -o wide > /tmp/e2e-diag/pods-all.txt 2>&1
+          for ns in cert-manager external-dns external-secrets kro crossplane-system; do
+            kubectl -n "$ns" describe pods > "/tmp/e2e-diag/describe-$ns.txt" 2>&1
+            kubectl -n "$ns" logs --all-pods --all-containers --prefix --tail=300 \
+              > "/tmp/e2e-diag/logs-$ns.txt" 2>&1
+          done
           kubectl -n inari logs -l app.kubernetes.io/name=inari-server --prefix --tail=2000 \
             > /tmp/e2e-diag/inari-server.log 2>&1
           kubectl -n inari logs statefulset/nats --all-containers --tail=500 > /tmp/e2e-diag/nats.log 2>&1
