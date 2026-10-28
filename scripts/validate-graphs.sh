@@ -74,6 +74,7 @@ find "$SCHEMA_DIR" -type f | sed "s|$SCHEMA_DIR/|   |"
 
 echo ">> helm template"
 helm template graphs "$CHART_DIR" \
+  --set keycloak.enabled=true \
   --set keycloak.issuerBaseURL=https://keycloak.example.org \
   > "$WORK/rendered.yaml"
 
@@ -94,7 +95,7 @@ echo ">> kubeconform against pinned CRD schemas"
 
 echo ">> checking composed managed-resource apiVersions against provider-keycloak CRDs"
 missing=0
-for gv in $(grep -hoE '^apiVersion: [a-z0-9./-]+' "$CHART_DIR"/files/*.gotmpl | awk '{print $2}' | sort -u); do
+while IFS= read -r gv; do
   group="${gv%%/*}"
   # Only Crossplane managed resources are checked; the identity.inari.io
   # write-back document targets our own XRD (validated above).
@@ -108,7 +109,7 @@ for gv in $(grep -hoE '^apiVersion: [a-z0-9./-]+' "$CHART_DIR"/files/*.gotmpl | 
     echo "   MISSING CRD schema for composed apiVersion ${gv}"
     missing=1
   fi
-done
+done < <(grep -hoE '^apiVersion: [a-z0-9./-]+' "$CHART_DIR"/files/*.gotmpl | awk '{print $2}' | sort -u)
 [ "$missing" -eq 0 ] || { echo "composed resource reference check FAILED"; exit 1; }
 
 echo "validate-graphs: OK"

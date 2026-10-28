@@ -5,6 +5,11 @@ templates:
   - keycloak/xrd-tenantclient.yaml
   - keycloak/composition-tenantclient.yaml
 tests:
+  - it: renders nothing by default (keycloak.enabled defaults to false)
+    asserts:
+      - hasDocuments:
+          count: 0
+
   - it: renders nothing when keycloak.enabled=false
     set:
       keycloak:
@@ -27,6 +32,7 @@ tests:
     template: keycloak/xrd-tenantrealm.yaml
     set:
       keycloak:
+        enabled: true
         issuerBaseURL: https://keycloak.example.org
     asserts:
       - isKind:
@@ -72,6 +78,7 @@ tests:
     template: keycloak/xrd-tenantclient.yaml
     set:
       keycloak:
+        enabled: true
         issuerBaseURL: https://keycloak.example.org
     asserts:
       - equal:
@@ -106,6 +113,7 @@ tests:
     template: keycloak/composition-tenantrealm.yaml
     set:
       keycloak:
+        enabled: true
         providerConfigRef: hub-keycloak
         issuerBaseURL: https://keycloak.example.org
     asserts:
@@ -147,6 +155,7 @@ tests:
     template: keycloak/composition-tenantclient.yaml
     set:
       keycloak:
+        enabled: true
         providerConfigRef: hub-keycloak
         issuerBaseURL: https://keycloak.example.org
     asserts:

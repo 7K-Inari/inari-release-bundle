@@ -101,7 +101,7 @@ jobs:
           helm dependency build charts/inari-server
           helm lint charts/inari-server
           helm lint charts/inari-console
-          helm lint charts/inari-platform-graphs --set keycloak.issuerBaseURL=https://keycloak.example.org
+          helm lint charts/inari-platform-graphs --set keycloak.enabled=true --set keycloak.issuerBaseURL=https://keycloak.example.org
 
       - name: helm unittest
         run: helm unittest charts/inari-platform charts/inari-server charts/inari-console charts/inari-platform-graphs

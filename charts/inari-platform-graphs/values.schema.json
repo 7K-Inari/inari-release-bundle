@@ -27,15 +27,6 @@
         "issuerBaseURL": {
           "type": "string",
           "description": "Public base URL of the hub Keycloak (no trailing slash); used to project status.issuerURL. Required when keycloak.enabled=true."
-        },
-        "secretDelivery": {
-          "type": "object",
-          "description": "ESO-based delivery of client credentials into tenant namespaces (server-rendered SecretStore + ExternalSecret; see examples/).",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            }
-          }
         }
       }
     }

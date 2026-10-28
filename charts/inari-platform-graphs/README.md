@@ -38,10 +38,9 @@ there is no adoption/migration of operator-created resources (D7).
 | Key | Default | Description |
 |-----|---------|-------------|
 | `tenantNamespace.enabled` | `true` | Render the `tenantnamespace` RGD |
-| `keycloak.enabled` | `true` | Render the Keycloak XRDs + Compositions |
+| `keycloak.enabled` | `false` | Render the Keycloak XRDs + Compositions (requires `issuerBaseURL`; the gitops Application opts in) |
 | `keycloak.providerConfigRef` | `keycloak` | provider-keycloak `ClusterProviderConfig` name |
 | `keycloak.issuerBaseURL` | `""` (required) | Public Keycloak base URL; `status.issuerURL = <issuerBaseURL>/realms/<realm>` |
-| `keycloak.secretDelivery.enabled` | `true` | Documented ESO delivery contract (examples/) is in effect |
 
 ## Client credential delivery
 
@@ -72,7 +71,8 @@ platform repo.
 
 ```sh
 kind create cluster --name graphs-check
-helm install kro oci://registry.k8s.io/kro/charts/kro   # or the W1-1 pin
+helm install kro oci://registry.k8s.io/kro/charts/kro --version 0.9.4 \
+  -n kro --create-namespace   # or the W1-1 pin in gitops/operators/kro.yaml
 helm install graphs charts/inari-platform-graphs \
   --set keycloak.enabled=false   # keycloak claims need Crossplane+provider
 kubectl wait --for=condition=Ready rgd/tenantnamespace --timeout=120s
