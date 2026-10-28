@@ -4,6 +4,7 @@ templates:
   - keycloak/composition-tenantrealm.yaml
   - keycloak/xrd-tenantclient.yaml
   - keycloak/composition-tenantclient.yaml
+  - keycloak/clusterproviderconfig.yaml
 tests:
   - it: renders nothing by default (keycloak.enabled defaults to false)
     asserts:
@@ -189,3 +190,44 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: '\$spec\.clientID \| default \$xr\.metadata\.name'
+
+  - it: renders the ClusterProviderConfig referenced by the compositions
+    template: keycloak/clusterproviderconfig.yaml
+    set:
+      keycloak:
+        enabled: true
+        issuerBaseURL: https://keycloak.example.org
+        providerConfigRef: hub-keycloak
+        providerConfig:
+          enabled: true
+          credentialsSecretRef:
+            name: inari-keycloak-admin
+            namespace: inari
+            key: credentials
+    asserts:
+      - isKind:
+          of: ClusterProviderConfig
+      - equal:
+          path: apiVersion
+          value: keycloak.m.crossplane.io/v1beta1
+      - equal:
+          path: metadata.name
+          value: hub-keycloak
+      - equal:
+          path: spec.credentials.source
+          value: Secret
+      - equal:
+          path: spec.credentials.secretRef
+          value: {name: inari-keycloak-admin, namespace: inari, key: credentials}
+
+  - it: skips the ClusterProviderConfig when providerConfig.enabled=false
+    template: keycloak/clusterproviderconfig.yaml
+    set:
+      keycloak:
+        enabled: true
+        issuerBaseURL: https://keycloak.example.org
+        providerConfig:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

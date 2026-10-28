@@ -27,6 +27,25 @@
         "issuerBaseURL": {
           "type": "string",
           "description": "Public base URL of the hub Keycloak (no trailing slash); used to project status.issuerURL. Required when keycloak.enabled=true."
+        },
+        "providerConfig": {
+          "type": "object",
+          "description": "ClusterProviderConfig referenced by the compositions (keycloak.providerConfigRef).",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "credentialsSecretRef": {
+              "type": "object",
+              "description": "Secret holding provider-keycloak's credentials JSON ({client_id, client_secret, url}).",
+              "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "namespace": {"type": "string", "minLength": 1},
+                "key": {"type": "string", "minLength": 1}
+              },
+              "required": ["name", "namespace", "key"]
+            }
+          }
         }
       }
     }

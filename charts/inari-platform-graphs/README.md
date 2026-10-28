@@ -30,7 +30,7 @@ there is no adoption/migration of operator-created resources (D7).
 | Feature | Requires |
 |---------|----------|
 | `tenantNamespace.enabled` | kro |
-| `keycloak.enabled` | Crossplane (v2), provider-keycloak with a `ClusterProviderConfig` named `keycloak.providerConfigRef`, `function-go-templating` |
+| `keycloak.enabled` | Crossplane (v2), provider-keycloak, `function-go-templating`; the chart can render the `ClusterProviderConfig` itself (`keycloak.providerConfig`) — only the credentials Secret (provider-keycloak JSON format) is external |
 | client secret delivery | ESO (server renders the per-tenant `SecretStore`/`ExternalSecret`, see `examples/`) |
 
 ## Values
@@ -41,6 +41,8 @@ there is no adoption/migration of operator-created resources (D7).
 | `keycloak.enabled` | `false` | Render the Keycloak XRDs + Compositions (requires `issuerBaseURL`; the gitops Application opts in) |
 | `keycloak.providerConfigRef` | `keycloak` | provider-keycloak `ClusterProviderConfig` name |
 | `keycloak.issuerBaseURL` | `""` (required) | Public Keycloak base URL; `status.issuerURL = <issuerBaseURL>/realms/<realm>` |
+| `keycloak.providerConfig.enabled` | `true` | Render the `ClusterProviderConfig` the compositions reference |
+| `keycloak.providerConfig.credentialsSecretRef` | `inari-keycloak-admin`/`inari`/`credentials` | Secret holding provider-keycloak's credentials JSON (`{client_id, client_secret, url}`); the `credentials` key on the inari-platform admin secret is Phase 3 wiring |
 
 ## Client credential delivery
 

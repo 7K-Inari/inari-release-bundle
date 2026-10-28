@@ -1,0 +1,30 @@
+{{- if .Values.keycloak.enabled }}
+{{- if not .Values.keycloak.issuerBaseURL }}
+{{- fail "keycloak.issuerBaseURL is required when keycloak.enabled=true — public base URL of the hub Keycloak, used for status.issuerURL" }}
+{{- end }}
+{{- if .Values.keycloak.providerConfig.enabled }}
+# ClusterProviderConfig for provider-keycloak, referenced by the TenantRealm/
+# TenantClient compositions via keycloak.providerConfigRef (namespaced MRs
+# default providerConfigRef.kind=ClusterProviderConfig).
+#
+# The referenced Secret must hold provider-keycloak's credentials JSON:
+#   {"client_id": "...", "client_secret": "...", "url": "http://keycloak-service.inari.svc:8080"}
+# The inari-platform chart's inari-keycloak-admin Secret carries the admin
+# client credentials as separate keys today; adding the `credentials` JSON
+# key there (or a dedicated ESO-synced secret) is Phase 3 wiring — no
+# credentials live in this chart.
+apiVersion: keycloak.m.crossplane.io/v1beta1
+kind: ClusterProviderConfig
+metadata:
+  name: {{ .Values.keycloak.providerConfigRef }}
+  labels:
+    {{- include "inari-platform-graphs.labels" . | nindent 4 }}
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      name: {{ .Values.keycloak.providerConfig.credentialsSecretRef.name }}
+      namespace: {{ .Values.keycloak.providerConfig.credentialsSecretRef.namespace }}
+      key: {{ .Values.keycloak.providerConfig.credentialsSecretRef.key }}
+{{- end }}
+{{- end }}

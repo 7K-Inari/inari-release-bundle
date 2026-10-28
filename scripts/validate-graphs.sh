@@ -24,6 +24,7 @@ CRD_URLS=(
   "https://raw.githubusercontent.com/crossplane/crossplane/${CROSSPLANE_VERSION}/cluster/crds/apiextensions.crossplane.io_compositions.yaml"
   "https://raw.githubusercontent.com/crossplane-contrib/provider-keycloak/${PROVIDER_KEYCLOAK_VERSION}/package/crds/realm.keycloak.m.crossplane.io_realms.yaml"
   "https://raw.githubusercontent.com/crossplane-contrib/provider-keycloak/${PROVIDER_KEYCLOAK_VERSION}/package/crds/openidclient.keycloak.m.crossplane.io_clients.yaml"
+  "https://raw.githubusercontent.com/crossplane-contrib/provider-keycloak/${PROVIDER_KEYCLOAK_VERSION}/package/crds/keycloak.m.crossplane.io_clusterproviderconfigs.yaml"
 )
 
 WORK="$(mktemp -d)"

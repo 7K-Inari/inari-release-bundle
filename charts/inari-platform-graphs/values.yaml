@@ -20,3 +20,15 @@ keycloak:
   # into the TenantRealm composition to project status.issuerURL
   # ("<issuerBaseURL>/realms/<realm>"). Required when keycloak.enabled=true.
   issuerBaseURL: ""
+  providerConfig:
+    # Render the ClusterProviderConfig the compositions reference
+    # (keycloak.providerConfigRef).
+    enabled: true
+    credentialsSecretRef:
+      # Secret holding provider-keycloak's credentials JSON:
+      # {"client_id","client_secret","url"}. Defaults point at the
+      # inari-platform chart's Keycloak admin secret — its `credentials` JSON
+      # key is Phase 3 wiring; until then claims cannot reconcile.
+      name: inari-keycloak-admin
+      namespace: inari
+      key: credentials
