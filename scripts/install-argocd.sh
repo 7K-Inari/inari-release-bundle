@@ -18,6 +18,17 @@ else
     -f "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_VERSION/manifests/install.yaml"
 fi
 
+# Upstream sets imagePullPolicy=Always on argocd-redis, which bypasses node
+# image caches and re-pulls public.ecr.aws on every pod start — ECR Public's
+# anonymous data quota is routinely exhausted on shared CI egress IPs
+# (ImagePullBackOff), and the whole ArgoCD stack degrades without redis.
+# IfNotPresent uses the preloaded image when present (CI side-loads it) and
+# pulls once otherwise.
+if kubectl -n argocd get deployment argocd-redis >/dev/null 2>&1; then
+  kubectl -n argocd patch deployment argocd-redis --type merge -p \
+    '{"spec":{"template":{"spec":{"containers":[{"name":"redis","imagePullPolicy":"IfNotPresent"}]}}}}'
+fi
+
 log "waiting for argocd-server"
 kubectl -n argocd rollout status deployment/argocd-server --timeout=300s
 kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s
