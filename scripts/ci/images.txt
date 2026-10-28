@@ -51,6 +51,9 @@ xpkg.crossplane.io/crossplane/crossplane:v2.4.3
 # provider-keycloak package v3.2.3 (pulled by Crossplane's package manager
 # over the network; this entry covers the controller Deployment image)
 xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3
+# function-go-templating package v0.13.2 (same: covers the function runtime
+# Deployment image; not in the e2e manifest — the provisioner skips it)
+xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.13.2
 
 # verify / utility jobs
 curlimages/curl:8.10.1
