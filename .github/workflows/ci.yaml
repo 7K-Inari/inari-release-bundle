@@ -125,6 +125,8 @@ jobs:
           # kustomize overlay must build (pulls the upstream keycloak-operator
           # manifests and applies the cluster-wide patch)
           kubectl kustomize gitops/operators/keycloak-operator > /dev/null
+          kubectl kustomize gitops/operators/crossplane-provider-keycloak > /dev/null
+          kubectl kustomize gitops/platform/rgd > /dev/null
           # every Application points at a declared sync wave
           for f in gitops/operators/*.yaml gitops/platform/*.yaml gitops/apps/*.yaml; do
             grep -q 'argocd.argoproj.io/sync-wave' "$f" || { echo "$f: missing sync-wave annotation"; exit 1; }
