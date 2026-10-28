@@ -37,8 +37,9 @@ spec:
             - --rfc2136-port=5353
             # insecure: dev no-op provider (dead address, no TSIG) — without
             # it external-dns >= v0.23 validates an empty TSIG algorithm and
-            # crashloops at startup ("is not supported TSIG algorithm").
-            - --rfc2136-insecure=true
+            # crashloops at startup ("is not supported TSIG algorithm"). Bare
+            # flag: kingpin bool flags reject an explicit "=true".
+            - --rfc2136-insecure
           registry: noop
           policy: upsert-only
           interval: 15m
