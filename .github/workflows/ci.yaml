@@ -24,6 +24,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # ubuntu-26.04 runners default docker to the containerd image store,
+      # whose docker save export breaks kind side-loads downstream (dangling
+      # OCI index entries, attestation unpack failures). Force the classic
+      # image store for save/load fidelity.
+      - name: Use classic docker image store
+        run: |
+          set -euo pipefail
+          if [ -f /etc/docker/daemon.json ]; then
+            jq '.features["containerd-snapshotter"] = false' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json > /dev/null
+          else
+            echo '{"features":{"containerd-snapshotter":false}}' | sudo tee /etc/docker/daemon.json > /dev/null
+          fi
+          sudo systemctl restart docker
+          docker info --format 'storage-driver={{.Driver}}'
+
       - name: Cache CI image tars
         id: imgcache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -148,6 +163,21 @@ jobs:
     needs: [prep, lint-test]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # ubuntu-26.04 runners default docker to the containerd image store,
+      # whose docker save export breaks kind side-loads downstream (dangling
+      # OCI index entries, attestation unpack failures). Force the classic
+      # image store for save/load fidelity.
+      - name: Use classic docker image store
+        run: |
+          set -euo pipefail
+          if [ -f /etc/docker/daemon.json ]; then
+            jq '.features["containerd-snapshotter"] = false' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json > /dev/null
+          else
+            echo '{"features":{"containerd-snapshotter":false}}' | sudo tee /etc/docker/daemon.json > /dev/null
+          fi
+          sudo systemctl restart docker
+          docker info --format 'storage-driver={{.Driver}}'
 
       - name: Restore CI image cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
