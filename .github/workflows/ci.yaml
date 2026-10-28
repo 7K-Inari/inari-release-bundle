@@ -101,9 +101,10 @@ jobs:
           helm dependency build charts/inari-server
           helm lint charts/inari-server
           helm lint charts/inari-console
+          helm lint charts/inari-platform-graphs --set keycloak.issuerBaseURL=https://keycloak.example.org
 
       - name: helm unittest
-        run: helm unittest charts/inari-platform charts/inari-server charts/inari-console
+        run: helm unittest charts/inari-platform charts/inari-server charts/inari-console charts/inari-platform-graphs
 
       - name: e2e helper unit tests
         # The .mjs/.ts decision-logic tests for the e2e harness (seed planner,

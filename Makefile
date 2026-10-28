@@ -33,6 +33,9 @@ lint-gitops: ## Validate gitops/ manifests (kustomize builds of the in-repo over
 test: ## helm-unittest suite
 	helm unittest $(CHART_DIRS)
 
+validate-graphs: ## Validate inari-platform-graphs against pinned KRO/Crossplane/provider-keycloak CRD schemas
+	./scripts/validate-graphs.sh
+
 package: ## Package the chart into dist/
 	mkdir -p dist
 	helm package $(CHART_DIR) -d dist
