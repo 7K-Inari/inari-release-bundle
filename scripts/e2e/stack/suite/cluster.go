@@ -65,14 +65,18 @@ func Cluster(t *testing.T, e *Env) {
 	}, "capabilities streamed (logs: kubectl -n inari-system logs deploy/inari-agent)")
 	t.Logf("capabilities streamed: %d", caps)
 
-	// Heartbeat freshness: lastSeenAt must advance over a quiet window.
+	// Heartbeat freshness: lastSeenAt must advance (throttled to 15s in the
+	// agentgateway). Poll, don't sleep: a stream reconnect mid-window
+	// legitimately stalls the next beat past a fixed 30s sleep.
 	cl1, err := e.API.GetCluster(e.ClusterID)
 	require.NoError(t, err)
-	time.Sleep(30 * time.Second)
-	cl2, err := e.API.GetCluster(e.ClusterID)
-	require.NoError(t, err)
-	assert.NotEqual(t, cl1.LastSeenAt, cl2.LastSeenAt,
-		"heartbeat not advancing (lastSeenAt stuck at %s)", cl1.LastSeenAt)
+	poll.Eventually(t, 120*time.Second, 5*time.Second, func() (bool, error) {
+		cl2, err := e.API.GetCluster(e.ClusterID)
+		if err != nil {
+			return false, nil
+		}
+		return cl2.LastSeenAt != cl1.LastSeenAt, nil
+	}, "heartbeat advancing (lastSeenAt changed; logs: kubectl -n inari-system logs deploy/inari-agent)")
 }
 
 // stateRepo is the materialized tenant state repo on the host (mounted into
