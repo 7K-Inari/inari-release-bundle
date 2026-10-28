@@ -463,7 +463,10 @@ func keycloakLifecycle(c *ProvisionConfig) error {
 	_ = kube.WaitCondition(c.Namespace, "condition=complete", "300s",
 		"job", "-l", "app.kubernetes.io/component=keycloak")
 	patch := fmt.Sprintf(`{"spec":{"hostname":{"hostname":"http://%s","strict":true}}}`, c.kcFQDN())
-	if _, err := kube.Kubectl("-n", c.Namespace, "patch", "keycloak", "keycloak",
+	// Fully qualify the resource: with provider-keycloak installed there are
+	// several keycloak.* groups in discovery, and the bare "keycloak" type
+	// becomes ambiguous for kubectl's shortcut expansion.
+	if _, err := kube.Kubectl("-n", c.Namespace, "patch", "keycloaks.k8s.keycloak.org", "keycloak",
 		"--type", "merge", "-p", patch); err != nil {
 		return err
 	}
