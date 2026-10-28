@@ -29,9 +29,11 @@ tests:
       - equal:
           path: spec.schema.kind
           value: TenantNamespace
-      - equal:
+      # plural must NOT be set: the kro v0.9.4 RGD CRD lacks schema.plural;
+      # setting it prunes the field apiserver-side and ArgoCD never converges
+      # to Synced. kro derives "tenantnamespaces" from the kind.
+      - notExists:
           path: spec.schema.plural
-          value: tenantnamespaces
       - equal:
           path: spec.schema.scope
           value: Namespaced

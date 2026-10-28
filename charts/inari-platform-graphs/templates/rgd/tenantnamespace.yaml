@@ -22,7 +22,9 @@ spec:
     group: stacks.inari.io
     apiVersion: v1alpha1
     kind: TenantNamespace
-    plural: tenantnamespaces
+    # plural is derived ("tenantnamespaces"); do NOT set it explicitly — the
+    # published RGD CRD (kro v0.9.4) lacks schema.plural, the apiserver prunes
+    # it, and ArgoCD then sees a perpetual diff (OutOfSync forever).
     scope: Namespaced
     spec:
       tenantID: string | required=true minLength=1 maxLength=63 pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
