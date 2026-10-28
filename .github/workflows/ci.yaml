@@ -191,6 +191,15 @@ jobs:
       - name: Load kind node image
         run: docker load -i /tmp/ci-images/node.tar
 
+      - name: Tune host for concurrent kind clusters
+        # Two kind clusters (main + DR) plus the full platform stack exhaust
+        # the default inotify limits on the runner; the second cluster's
+        # kubelet then never comes up (kubeadm wait-control-plane timeout).
+        run: |
+          set -euo pipefail
+          sudo sysctl fs.inotify.max_user_watches=524288
+          sudo sysctl fs.inotify.max_user_instances=512
+
       - name: Create kind cluster
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
