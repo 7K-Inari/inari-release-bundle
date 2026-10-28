@@ -47,12 +47,15 @@ there is no adoption/migration of operator-created resources (D7).
 ## Client credential delivery
 
 `TenantClient` (confidential) → provider-keycloak writes
-`<clientID>-keycloak-connection` (key `attribute.client_secret`) into the
+`<claim-name>-keycloak-connection` (key `attribute.client_secret`) into the
 claim's namespace → the server-rendered `ExternalSecret` materializes
 `<secretName>` (default `<claim>-keycloak-client`) with keys
 `client-id` / `client-secret` / `issuer`, mirroring the operator's Secret
-contract. See `examples/keycloak-client-secret-delivery.yaml` for the exact
-per-tenant `ServiceAccount`/`Role`/`RoleBinding`/`SecretStore`/
+contract. **Public clients** (`public: true`) get no connection secret; the
+server renders a plain Secret holding only `client-id`/`issuer` in that
+case (the operator also wrote the Secret for public clients, minus the
+secret key). See `examples/keycloak-client-secret-delivery.yaml` for the
+exact per-tenant `ServiceAccount`/`Role`/`RoleBinding`/`SecretStore`/
 `ExternalSecret` bundle the server renders.
 
 ## Examples
@@ -78,8 +81,9 @@ helm install kro oci://registry.k8s.io/kro/charts/kro --version 0.9.4 \
 helm install graphs charts/inari-platform-graphs \
   --set keycloak.enabled=false   # keycloak claims need Crossplane+provider
 kubectl wait --for=condition=Ready rgd/tenantnamespace --timeout=120s
+kubectl create namespace inari   # instance namespace (server's choice in prod)
 kubectl apply -f charts/inari-platform-graphs/examples/tenantnamespace.yaml \
-  -n inari   # or any existing instance namespace
+  -n inari
 kubectl get tenantnamespace tenant-acme -n inari \
   -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'   # True
 kubectl get namespace tenant-acme --show-labels                    # tenant label

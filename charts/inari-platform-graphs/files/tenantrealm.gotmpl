@@ -9,7 +9,10 @@
 apiVersion: realm.keycloak.m.crossplane.io/v1alpha1
 kind: Realm
 metadata:
-  name: {{ $realm }}
+  # MR name = claim name (always DNS-valid); the realm name lives in
+  # forProvider.realm + external-name, so non-DNS realm names can't break
+  # the composed resource.
+  name: {{ $xr.metadata.name }}
   namespace: {{ $xr.metadata.namespace }}
   annotations:
     crossplane.io/external-name: {{ $realm }}
@@ -27,12 +30,11 @@ spec:
     name: @@PROVIDER_CONFIG_REF@@
 ---
 # Patch the composite status: effective realm name + OIDC issuer URL
-# (operator contract: issuerURL = <base>/realms/<realm>).
+# (operator contract: issuerURL = <base>/realms/<realm>). No
+# composition-resource-name annotation => status-only update of the XR
+# (function-go-templating documented behavior).
 apiVersion: identity.inari.io/v1alpha1
 kind: XTenantRealm
-metadata:
-  name: {{ $xr.metadata.name }}
-  namespace: {{ $xr.metadata.namespace }}
 status:
   realm: {{ $realm }}
   issuerURL: "@@ISSUER_BASE_URL@@/realms/{{ $realm }}"

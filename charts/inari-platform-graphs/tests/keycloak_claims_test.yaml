@@ -176,10 +176,11 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'accessType: \{\{ if \$spec\.public \}\}PUBLIC\{\{ else \}\}CONFIDENTIAL\{\{ end \}\}'
-      # connection secret lands in the claim (tenant) namespace, confidential only
+      # connection secret lands in the claim (tenant) namespace, confidential only;
+      # keyed to the claim name (DNS-valid), not clientID
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
-          pattern: 'writeConnectionSecretToRef:\s+name: \{\{ \$clientID \}\}-keycloak-connection'
+          pattern: 'writeConnectionSecretToRef:\s+name: \{\{ \$xr\.metadata\.name \}\}-keycloak-connection'
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'deletionPolicy: Delete'
