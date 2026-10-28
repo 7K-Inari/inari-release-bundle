@@ -26,6 +26,13 @@ NATS_CHART_VERSION="2.15.1"      # suite/provision.go installNATS
 OPENFGA_CHART_VERSION="0.2.27"   # suite/provision.go installOpenFGA
 VAULT_CHART_VERSION="0.34.1"     # suite/provision.go installVaultESO
 ESO_CHART_VERSION="2.11.0"       # suite/provision.go installVaultESO
+# Phase 0 hub prereqs (gitops/operators/*.yaml ↔ suite/provision.go constants,
+# pin parity guarded by TestGitOpsPinParity)
+CERT_MANAGER_CHART_VERSION="v1.21.3"  # suite/provision.go certManagerChartVersion
+EXTERNAL_DNS_CHART_VERSION="1.23.0"   # suite/provision.go externalDNSChartVersion
+CROSSPLANE_CHART_VERSION="2.4.3"      # suite/provision.go crossplaneChartVersion
+KRO_CHART_VERSION="0.4.1"             # suite/provision.go kroChartVersion (OCI chart)
+PROVIDER_KEYCLOAK_IMAGE="xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3"  # provision.go providerKeycloak*
 REDIS_IMAGE="bitnamilegacy/redis:8.2.1"  # suite/provision.go installServer (HA; registry pinned to docker.io so the rendered ref matches this name)
 CONSOLE_NGINX="nginx:1.27-alpine"            # charts/inari-console values
 CONSOLE_ORAS="ghcr.io/oras-project/oras:v1.3.0" # charts/inari-console values
@@ -41,6 +48,9 @@ helm repo add nats https://nats-io.github.io/k8s/helm/charts/ >/dev/null 2>&1 ||
 helm repo add openfga https://openfga.github.io/helm-charts >/dev/null 2>&1 || true
 helm repo add hashicorp https://helm.releases.hashicorp.com >/dev/null 2>&1 || true
 helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
+helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
+helm repo add external-dns https://kubernetes-sigs.github.io/external-dns/ >/dev/null 2>&1 || true
+helm repo add crossplane https://charts.crossplane.io/stable >/dev/null 2>&1 || true
 helm repo update >/dev/null
 
 # chart_images renders the pinned chart and prints unique image refs.
@@ -78,6 +88,25 @@ helm template gen hashicorp/vault --version "$VAULT_CHART_VERSION" \
 echo
 echo "# external-secrets/external-secrets chart $ESO_CHART_VERSION"
 chart_images external-secrets/external-secrets "$ESO_CHART_VERSION"
+echo
+echo "# jetstack/cert-manager chart $CERT_MANAGER_CHART_VERSION"
+chart_images jetstack/cert-manager "$CERT_MANAGER_CHART_VERSION"
+echo
+echo "# external-dns/external-dns chart $EXTERNAL_DNS_CHART_VERSION"
+# policy is a schema-required value (no default) — render with the same set
+# the gitops Application / provision.go install uses.
+helm template gen external-dns/external-dns --version "$EXTERNAL_DNS_CHART_VERSION" \
+	--set policy=upsert-only 2>/dev/null |
+	grep -oE 'image: *"?[^ "]+' | sed -E 's/^image: *"?//' | sort -u
+echo
+echo "# crossplane/crossplane chart $CROSSPLANE_CHART_VERSION"
+chart_images crossplane/crossplane "$CROSSPLANE_CHART_VERSION"
+echo
+echo "# kro OCI chart $KRO_CHART_VERSION (ghcr.io/kro-run/kro/kro)"
+chart_images oci://ghcr.io/kro-run/kro/kro "$KRO_CHART_VERSION"
+echo
+echo "# crossplane provider-keycloak package (Provider CR, not a helm chart)"
+echo "$PROVIDER_KEYCLOAK_IMAGE"
 echo
 echo "# bitnami/redis subchart (HA leg; e2e pins bitnamilegacy — never cache :latest)"
 echo "$REDIS_IMAGE"

@@ -6,6 +6,9 @@ package suite
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -154,4 +157,63 @@ func TestAudContains(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGitOpsPinParity guards the e2e↔gitops pin contract: the chart/package
+// versions provision.go installs imperatively must equal the targetRevisions
+// of the corresponding gitops Applications (the production install path).
+// renovate.json has no manager matching gitops/*.yaml or provision.go today;
+// if one is ever added it must cover BOTH sides of this test.
+func TestGitOpsPinParity(t *testing.T) {
+	opsDir := filepath.Join(stackDir(), "..", "..", "..", "gitops", "operators")
+	for _, tc := range []struct {
+		name string
+		file string
+		want []string // targetRevisions in spec source order
+	}{
+		{"cert-manager", "cert-manager.yaml", []string{certManagerChartVersion}},
+		// external-dns is multi-source: helm chart, then the upstream CRD
+		// manifest pinned at the chart's appVersion tag.
+		{"external-dns", "external-dns.yaml", []string{externalDNSChartVersion, externalDNSAppVersion}},
+		{"external-secrets", "eso.yaml", []string{esoChartVersion}},
+		{"crossplane", "crossplane.yaml", []string{crossplaneChartVersion}},
+		{"kro", "kro.yaml", []string{kroChartVersion}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := targetRevisions(t, filepath.Join(opsDir, tc.file))
+			if len(got) != len(tc.want) {
+				t.Fatalf("%s: got targetRevisions %v, want %v", tc.file, got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("%s: targetRevision[%d] = %q, want %q (pin constant in provision.go)", tc.file, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+	t.Run("provider-keycloak", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join(opsDir, "crossplane-provider-keycloak", "provider.yaml"))
+		if err != nil {
+			t.Fatalf("reading provider.yaml: %v", err)
+		}
+		want := "package: " + providerKeycloakPackage + ":" + providerKeycloakVersion
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("provider.yaml missing %q", want)
+		}
+	})
+}
+
+// targetRevisions returns every spec source's targetRevision in file order.
+func targetRevisions(t *testing.T, path string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	re := regexp.MustCompile(`targetRevision:\s*([^\s"']+)`)
+	var out []string
+	for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
+		out = append(out, m[1])
+	}
+	return out
 }
