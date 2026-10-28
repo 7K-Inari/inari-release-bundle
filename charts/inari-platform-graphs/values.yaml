@@ -1,0 +1,26 @@
+# inari-platform-graphs — platform resource graphs (KRO RGDs + Crossplane claims).
+
+tenantNamespace:
+  # Render the KRO ResourceGraphDefinition "tenantnamespace"
+  # (stacks.inari.io/v1alpha1 TenantNamespace). Requires kro on the hub.
+  enabled: true
+
+keycloak:
+  # Render the identity.inari.io XRDs + Compositions (TenantRealm/TenantClient)
+  # backed by provider-keycloak. Requires Crossplane + provider-keycloak +
+  # function-go-templating on the hub.
+  enabled: true
+  # Name of the provider-keycloak ClusterProviderConfig the composed managed
+  # resources reference. Installed by the hub gitops stack (gitops/operators).
+  providerConfigRef: keycloak
+  # Public base URL of the hub Keycloak instance (no trailing slash). Baked
+  # into the TenantRealm composition to project status.issuerURL
+  # ("<issuerBaseURL>/realms/<realm>"). Required when keycloak.enabled=true.
+  issuerBaseURL: ""
+  # Client credentials delivery: provider-keycloak writes the client connection
+  # secret (attribute.client_secret) into the claim's (tenant) namespace; the
+  # server renders a namespaced ESO SecretStore + ExternalSecret per tenant to
+  # materialize the <name>-keycloak-client Secret (client-id/client-secret/
+  # issuer). See examples/keycloak-client-secret-delivery.yaml.
+  secretDelivery:
+    enabled: true

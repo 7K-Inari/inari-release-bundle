@@ -1,0 +1,102 @@
+{{- if .Values.tenantNamespace.enabled }}
+# KRO ResourceGraphDefinition replacing the operator's
+# TenantNamespace.platform.inari.io catalog item (sunset plan D6).
+#
+# Children replicate the operator's reconciler output
+# (inari-operator internal/controller/tenantnamespace_controller.go):
+#   Namespace (name = spec.namespace) + RoleBinding "tenant-admin"
+#   (ClusterRole admin; Group subject spec.adminGroup when set)
+#   + default-deny NetworkPolicy "tenant-default-deny"
+#   + optional ResourceQuota "tenant-quota".
+# Child names are literal (the operator never hashed TenantNamespace
+# children); impersonation is dropped (D3); lifecycle via KRO replaces the
+# operator finalizer (deleting the instance deletes the children).
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: tenantnamespace
+  labels:
+    {{- include "inari-platform-graphs.labels" . | nindent 4 }}
+spec:
+  schema:
+    group: stacks.inari.io
+    apiVersion: v1alpha1
+    kind: TenantNamespace
+    plural: tenantnamespaces
+    scope: Namespaced
+    spec:
+      tenantID: string | required=true minLength=1 maxLength=63 pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+      namespace: string | required=true minLength=1
+      adminGroup: string
+      resourceQuota:
+        cpu: string
+        memory: string
+        pods: integer
+    status:
+      namespace: ${namespace.metadata.name}
+    additionalPrinterColumns:
+      - name: Tenant
+        type: string
+        jsonPath: .spec.tenantID
+      - name: Namespace
+        type: string
+        jsonPath: .status.namespace
+      - name: Ready
+        type: string
+        jsonPath: .status.conditions[?(@.type=="Ready")].status
+  resources:
+    - id: namespace
+      template:
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${schema.spec.namespace}
+          labels:
+            platform.inari.io/tenant: ${schema.spec.tenantID}
+      readyWhen:
+        - "${namespace.status.phase == 'Active'}"
+    - id: rolebinding
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: tenant-admin
+          namespace: ${schema.spec.namespace}
+          labels:
+            platform.inari.io/tenant: ${schema.spec.tenantID}
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: admin
+        # Group subject only when adminGroup is set (operator behavior).
+        subjects: '${has(schema.spec.adminGroup) && schema.spec.adminGroup != "" ? [{"kind": "Group", "apiGroup": "rbac.authorization.k8s.io", "name": schema.spec.adminGroup}] : []}'
+    - id: networkpolicy
+      template:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: tenant-default-deny
+          namespace: ${schema.spec.namespace}
+          labels:
+            platform.inari.io/tenant: ${schema.spec.tenantID}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+    - id: resourcequota
+      includeWhen:
+        - ${has(schema.spec.resourceQuota)}
+      template:
+        apiVersion: v1
+        kind: ResourceQuota
+        metadata:
+          name: tenant-quota
+          namespace: ${schema.spec.namespace}
+          labels:
+            platform.inari.io/tenant: ${schema.spec.tenantID}
+        spec:
+          # CEL has no map merge: nested ternary over the three optional
+          # fields (cpu expands to requests+limits, like the operator).
+          hard: '${has(schema.spec.resourceQuota.cpu) && schema.spec.resourceQuota.cpu != "" ? (has(schema.spec.resourceQuota.memory) && schema.spec.resourceQuota.memory != "" ? (has(schema.spec.resourceQuota.pods) && schema.spec.resourceQuota.pods > 0 ? {"requests.cpu": schema.spec.resourceQuota.cpu, "limits.cpu": schema.spec.resourceQuota.cpu, "requests.memory": schema.spec.resourceQuota.memory, "limits.memory": schema.spec.resourceQuota.memory, "pods": string(schema.spec.resourceQuota.pods)} : {"requests.cpu": schema.spec.resourceQuota.cpu, "limits.cpu": schema.spec.resourceQuota.cpu, "requests.memory": schema.spec.resourceQuota.memory, "limits.memory": schema.spec.resourceQuota.memory}) : (has(schema.spec.resourceQuota.pods) && schema.spec.resourceQuota.pods > 0 ? {"requests.cpu": schema.spec.resourceQuota.cpu, "limits.cpu": schema.spec.resourceQuota.cpu, "pods": string(schema.spec.resourceQuota.pods)} : {"requests.cpu": schema.spec.resourceQuota.cpu, "limits.cpu": schema.spec.resourceQuota.cpu})) : (has(schema.spec.resourceQuota.memory) && schema.spec.resourceQuota.memory != "" ? (has(schema.spec.resourceQuota.pods) && schema.spec.resourceQuota.pods > 0 ? {"requests.memory": schema.spec.resourceQuota.memory, "limits.memory": schema.spec.resourceQuota.memory, "pods": string(schema.spec.resourceQuota.pods)} : {"requests.memory": schema.spec.resourceQuota.memory, "limits.memory": schema.spec.resourceQuota.memory}) : (has(schema.spec.resourceQuota.pods) && schema.spec.resourceQuota.pods > 0 ? {"pods": string(schema.spec.resourceQuota.pods)} : {}))}'
+{{- end }}

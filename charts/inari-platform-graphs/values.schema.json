@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json.schemastore.org/chart",
+  "title": "inari-platform-graphs values",
+  "type": "object",
+  "properties": {
+    "tenantNamespace": {
+      "type": "object",
+      "description": "KRO ResourceGraphDefinition 'tenantnamespace' (stacks.inari.io/v1alpha1 TenantNamespace).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "keycloak": {
+      "type": "object",
+      "description": "Keycloak self-service claims (identity.inari.io TenantRealm/TenantClient) on provider-keycloak.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "providerConfigRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of the provider-keycloak ClusterProviderConfig referenced by composed managed resources."
+        },
+        "issuerBaseURL": {
+          "type": "string",
+          "description": "Public base URL of the hub Keycloak (no trailing slash); used to project status.issuerURL. Required when keycloak.enabled=true."
+        },
+        "secretDelivery": {
+          "type": "object",
+          "description": "ESO-based delivery of client credentials into tenant namespaces (server-rendered SecretStore + ExternalSecret; see examples/).",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  }
+}
