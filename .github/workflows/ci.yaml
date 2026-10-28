@@ -43,6 +43,9 @@ jobs:
           grep '^kindest/node:' scripts/ci/images.txt | xargs docker save -o /tmp/ci-images/node.tar
           # everything else is side-loaded into the kind cluster
           grep -vE '^\s*(#|$)|^kindest/node:' scripts/ci/images.txt | xargs docker save -o /tmp/ci-images/workloads.tar
+          # containerd-store docker exports dangling index entries (unpulled
+          # platforms/attestations) that break ctr import in kind load
+          python3 scripts/ci/normalize-image-tar.py /tmp/ci-images/node.tar /tmp/ci-images/workloads.tar
 
       # The operator image package is private; anonymous pulls in kind fail.
       # Pre-pull with GITHUB_TOKEN so install-test can side-load it.
@@ -56,6 +59,7 @@ jobs:
           TAG=$(scripts/preload-operator-image.sh --docker-only | tail -1)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           docker save "ghcr.io/7k-inari/inari-operator:${TAG}" -o "$RUNNER_TEMP/operator-image.tar"
+          python3 scripts/ci/normalize-image-tar.py "$RUNNER_TEMP/operator-image.tar"
 
       # Artifacts cross runners more reliably than the cache alone.
       - name: Upload operator image artifact

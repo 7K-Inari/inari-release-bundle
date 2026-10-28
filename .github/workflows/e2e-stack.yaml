@@ -245,6 +245,9 @@ jobs:
           MANIFEST=bundle/scripts/e2e/stack/testdata/images.txt
           grep -vE '^\s*(#|$)' "$MANIFEST" | xargs -P8 -n1 docker pull
           grep -vE '^\s*(#|$)' "$MANIFEST" | xargs docker save -o /tmp/e2e-images/images.tar
+          # containerd-store docker exports dangling index entries (unpulled
+          # platforms/attestations) that break ctr import in kind load
+          python3 bundle/scripts/ci/normalize-image-tar.py /tmp/e2e-images/images.tar
           echo "[timing] image pull+save (miss): $(( $(date +%s) - t0 ))s"
 
       - name: Pre-create cluster + preload images
