@@ -31,7 +31,7 @@ jobs:
           path: |
             /tmp/ci-images/node.tar
             /tmp/ci-images/workloads.tar
-          key: ci-images-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
+          key: ci-images-v2-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
 
       - name: Pull + save CI images (cache miss)
         if: steps.imgcache.outputs.cache-hit != 'true'
@@ -149,7 +149,7 @@ jobs:
           path: |
             /tmp/ci-images/node.tar
             /tmp/ci-images/workloads.tar
-          key: ci-images-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
+          key: ci-images-v2-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
           fail-on-cache-miss: true
 
       - name: Load kind node image
