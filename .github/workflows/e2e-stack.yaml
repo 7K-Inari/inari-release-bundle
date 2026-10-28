@@ -234,7 +234,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/e2e-images/images.tar
-          key: e2e-images-v2-${{ runner.os }}-${{ hashFiles('bundle/scripts/e2e/stack/testdata/images.txt') }}
+          key: e2e-images-v3-${{ runner.os }}-${{ hashFiles('bundle/scripts/e2e/stack/testdata/images.txt') }}
 
       - name: Pull + save images (cache miss)
         if: steps.imgcache.outputs.cache-hit != 'true'

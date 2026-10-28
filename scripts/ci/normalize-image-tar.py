@@ -17,7 +17,10 @@ references is fully present in the tar:
   name annotation so the image name still registers), children that
   dangle are dropped — nested indexes are content-addressed and cannot be
   edited in place;
-- attestations with missing content are dropped the same way.
+- attestations (buildx provenance, in-toto configs, unknown/unknown
+  platforms) are dropped even when structurally complete — they are not
+  runnable images and ctr unpack fails on them with 'mismatched image
+  rootfs and manifest layers'.
 
 The docker-format manifest.json/repositories files are kept untouched for
 `docker load` consumers. A tar with no dangling content is left unchanged.
@@ -66,10 +69,26 @@ def normalize(path):
             refs += [l["digest"] for l in doc.get("layers", [])]
             return all(r.split(":", 1)[1] in blobs for r in refs)
 
+        def is_attestation(desc):
+            """buildx attestation manifests are structurally complete but not
+            runnable: ctr unpack fails with 'mismatched image rootfs and
+            manifest layers' (in-toto config has empty rootfs diff_ids)."""
+            annotations = desc.get("annotations") or {}
+            if annotations.get("vnd.docker.reference.type") == "attestation-manifest":
+                return True
+            platform = desc.get("platform") or {}
+            if platform.get("architecture") == "unknown" and platform.get("os") == "unknown":
+                return True
+            doc = doc_of(desc["digest"])
+            if doc and "config" in doc:
+                if "in-toto" in str(doc["config"].get("mediaType", "")):
+                    return True
+            return False
+
         def resolve(desc, inherited_annotations):
             """Return a list of top-level-safe descriptors for desc."""
             doc = doc_of(desc["digest"])
-            if doc is None:
+            if doc is None or is_attestation(desc):
                 return []
             annotations = dict(inherited_annotations)
             annotations.update(desc.get("annotations") or {})
@@ -91,7 +110,13 @@ def normalize(path):
             if resolved:
                 kept += resolved
             else:
-                name = (desc.get("annotations") or {}).get(NAME_ANNOTATION, desc["digest"])
+                ann = desc.get("annotations") or {}
+                plat = desc.get("platform") or {}
+                name = ann.get(NAME_ANNOTATION, desc["digest"])
+                if is_attestation(desc):
+                    name += " (attestation)"
+                elif plat:
+                    name += f" ({plat.get('os')}/{plat.get('architecture')})"
                 dropped.append(name)
 
         if dropped and not kept:
