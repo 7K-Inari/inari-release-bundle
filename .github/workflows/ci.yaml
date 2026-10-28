@@ -159,7 +159,10 @@ jobs:
 
   install-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The Phase 0 hub prereqs (cert-manager, external-dns, ESO, kro,
+    # crossplane + provider/function) stretch bootstrap + backup + DR drill
+    # past the historical 45m budget — the drill was canceled mid-restore.
+    timeout-minutes: 60
     needs: [prep, lint-test]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
