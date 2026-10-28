@@ -612,8 +612,9 @@ jobs:
           kubectl get pods -A -o wide > /tmp/e2e-diag/pods-all.txt 2>&1
           for ns in cert-manager external-dns external-secrets kro crossplane-system; do
             kubectl -n "$ns" describe pods > "/tmp/e2e-diag/describe-$ns.txt" 2>&1
-            kubectl -n "$ns" logs --all-pods --all-containers --prefix --tail=300 \
-              > "/tmp/e2e-diag/logs-$ns.txt" 2>&1
+            for p in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
+              kubectl -n "$ns" logs "$p" --all-containers --prefix --tail=300 2>&1
+            done > "/tmp/e2e-diag/logs-$ns.txt" 2>&1
           done
           kubectl -n inari logs -l app.kubernetes.io/name=inari-server --prefix --tail=2000 \
             > /tmp/e2e-diag/inari-server.log 2>&1
