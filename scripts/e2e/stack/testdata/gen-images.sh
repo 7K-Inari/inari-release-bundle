@@ -31,7 +31,7 @@ ESO_CHART_VERSION="2.11.0"       # suite/provision.go installVaultESO
 CERT_MANAGER_CHART_VERSION="v1.21.3"  # suite/provision.go certManagerChartVersion
 EXTERNAL_DNS_CHART_VERSION="1.23.0"   # suite/provision.go externalDNSChartVersion
 CROSSPLANE_CHART_VERSION="2.4.3"      # suite/provision.go crossplaneChartVersion
-KRO_CHART_VERSION="0.4.1"             # suite/provision.go kroChartVersion (OCI chart)
+KRO_CHART_VERSION="0.9.4"             # suite/provision.go kroChartVersion (OCI chart)
 PROVIDER_KEYCLOAK_IMAGE="xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3"  # provision.go providerKeycloak*
 REDIS_IMAGE="bitnamilegacy/redis:8.2.1"  # suite/provision.go installServer (HA; registry pinned to docker.io so the rendered ref matches this name)
 CONSOLE_NGINX="nginx:1.27-alpine"            # charts/inari-console values
@@ -102,8 +102,8 @@ echo
 echo "# crossplane/crossplane chart $CROSSPLANE_CHART_VERSION"
 chart_images crossplane/crossplane "$CROSSPLANE_CHART_VERSION"
 echo
-echo "# kro OCI chart $KRO_CHART_VERSION (ghcr.io/kro-run/kro/kro)"
-chart_images oci://ghcr.io/kro-run/kro/kro "$KRO_CHART_VERSION"
+echo "# kro OCI chart $KRO_CHART_VERSION (oci://registry.k8s.io/kro/charts/kro)"
+chart_images oci://registry.k8s.io/kro/charts/kro "$KRO_CHART_VERSION"
 echo
 echo "# crossplane provider-keycloak package (Provider CR, not a helm chart)"
 echo "$PROVIDER_KEYCLOAK_IMAGE"

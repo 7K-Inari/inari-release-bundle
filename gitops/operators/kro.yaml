@@ -15,9 +15,9 @@ metadata:
 spec:
   project: inari
   source:
-    repoURL: ghcr.io/kro-run/kro
+    repoURL: registry.k8s.io/kro/charts
     chart: kro
-    targetRevision: 0.4.1
+    targetRevision: 0.9.4
     helm:
       releaseName: kro
   destination:

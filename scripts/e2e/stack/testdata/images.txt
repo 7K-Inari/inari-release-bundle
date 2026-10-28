@@ -47,8 +47,8 @@ registry.k8s.io/external-dns/external-dns:v0.23.0
 # crossplane/crossplane chart 2.4.3 (hub prereq)
 xpkg.crossplane.io/crossplane/crossplane:v2.4.3
 
-# kro OCI chart 0.4.1, ghcr.io/kro-run/kro/kro (hub prereq)
-ghcr.io/kro-run/kro/controller:0.4.1
+# kro OCI chart 0.9.4, oci://registry.k8s.io/kro/charts/kro (hub prereq)
+registry.k8s.io/kro/kro:v0.9.4
 
 # crossplane provider-keycloak package v3.2.3 (Provider CR, not a helm chart)
 xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3

@@ -15,7 +15,7 @@ cluster and applies these manifests.
 | -3 | `crossplane` | helm `crossplane` (stable repo) |
 | -2 | `cnpg` | helm `cloudnative-pg` 0.29.0 (CloudNativePG operator) |
 | -2 | `keycloak-operator` | kustomize `gitops/operators/keycloak-operator` (upstream 26.3.2 + cluster-wide patch) |
-| -2 | `kro` | OCI helm `ghcr.io/kro-run/kro/kro` |
+| -2 | `kro` | OCI helm `registry.k8s.io/kro/charts/kro` |
 | -2 | `crossplane-provider-keycloak` | kustomize `gitops/operators/crossplane-provider-keycloak` (Provider CR; no ProviderConfig yet) |
 | -1 | `inari-operator-crds` | OCI `ghcr.io/7k-inari/charts/inari-operator-crds` |
 | 0 | `platform-config` | `charts/inari-platform` in this repo (chart name `inari-platform`: CNPG Cluster, `inari-db` secrets, Keycloak CR, realm import + PostSync jobs) |

@@ -96,7 +96,7 @@ const (
 	externalDNSAppVersion   = "v0.23.0"
 	esoChartVersion         = "2.11.0"
 	crossplaneChartVersion  = "2.4.3"
-	kroChartVersion         = "0.4.1"
+	kroChartVersion         = "0.9.4"
 	providerKeycloakVersion = "v3.2.3"
 	providerKeycloakPackage = "xpkg.crossplane.io/crossplane-contrib/provider-keycloak"
 )
@@ -404,7 +404,7 @@ func installExternalDNS(c *ProvisionConfig) error {
 // installKRO mirrors gitops/operators/kro.yaml (wave -2) — OCI chart, no
 // repo add needed.
 func installKRO(c *ProvisionConfig) error {
-	return helm.UpgradeInstall("kro", "oci://ghcr.io/kro-run/kro/kro",
+	return helm.UpgradeInstall("kro", "oci://registry.k8s.io/kro/charts/kro",
 		"--version", kroChartVersion,
 		"--namespace", "kro", "--create-namespace",
 		"--wait", "--timeout", "5m")
