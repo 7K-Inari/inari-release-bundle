@@ -20,7 +20,7 @@ cluster and applies these manifests.
 | -1 | `inari-operator-crds` | OCI `ghcr.io/7k-inari/charts/inari-operator-crds` |
 | 0 | `platform-config` | `charts/inari-platform` in this repo (chart name `inari-platform`: CNPG Cluster, `inari-db` secrets, Keycloak CR, realm import + PostSync jobs) |
 | 1 | `nats`, `openfga` | upstream helm charts |
-| 1 | `platform-rgd` | kustomize `gitops/platform/rgd` — tenantnamespace RGD + Keycloak compositions (content: task W1-2) |
+| 1 | `platform-rgd` | helm `charts/inari-platform-graphs` in this repo — tenantnamespace RGD (Keycloak claims gated `keycloak.enabled` until Phase 3) |
 | 2 | `inari-operator` | OCI `ghcr.io/7k-inari/charts/inari-operator` |
 | 3 | `inari-server`, `inari-console` | OCI `ghcr.io/7k-inari/charts/...` (charts live in and release from this repo) |
 
@@ -41,9 +41,10 @@ resources that replace the operator's facade CRDs.
 - `crossplane-provider-keycloak` ships the Provider CR only — ProviderConfig
   (Keycloak credentials) arrives with the RGD/compositions work (W1-2) /
   Phase 3. The Provider is Healthy without it.
-- `platform-rgd` is the delivery scaffold for the tenantnamespace RGD and
-  Keycloak compositions; the kustomize dir builds zero objects until W1-2
-  lands content (an empty Application syncs Healthy).
+- `platform-rgd` sources the in-repo chart `charts/inari-platform-graphs`
+  (tenantnamespace RGD + Keycloak TenantRealm/TenantClient claims). The
+  Keycloak claims stay gated (`keycloak.enabled: false`) until Phase 3 wires
+  the ClusterProviderConfig and function-go-templating onto the hub.
 
 Inside `platform-config`, per-resource sync waves order secrets (-1) → CNPG
 Cluster (0) → Keycloak CR (1) → KeycloakRealmImport (2); the client-setup /

@@ -28,7 +28,6 @@ lint: ## helm lint + chart-testing lint + gitops manifest validation
 lint-gitops: ## Validate gitops/ manifests (kustomize builds of the in-repo overlays)
 	kubectl kustomize $(GITOPS_DIR)/operators/keycloak-operator > /dev/null
 	kubectl kustomize $(GITOPS_DIR)/operators/crossplane-provider-keycloak > /dev/null
-	kubectl kustomize $(GITOPS_DIR)/platform/rgd > /dev/null
 
 test: ## helm-unittest suite
 	helm unittest $(CHART_DIRS)
