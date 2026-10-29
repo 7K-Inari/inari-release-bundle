@@ -1,0 +1,53 @@
+{{- /* TenantClient composition body (function-go-templating, Inline source).
+     Token @@PROVIDER_CONFIG_REF@@ is substituted by helm from
+     .Values.keycloak.providerConfigRef when
+     templates/keycloak/composition-tenantclient.yaml renders this file. */ -}}
+{{- $xr := .observed.composite.resource -}}
+{{- $spec := $xr.spec -}}
+{{- $clientID := $spec.clientID | default $xr.metadata.name -}}
+{{- $secretName := $spec.secretName | default (printf "%s-keycloak-client" $xr.metadata.name) -}}
+---
+apiVersion: openidclient.keycloak.m.crossplane.io/v1alpha1
+kind: Client
+metadata:
+  # MR name = claim name (always DNS-valid); the OIDC clientID lives in
+  # forProvider.clientId only, so non-DNS clientIDs can't break the
+  # composed resource.
+  name: {{ $xr.metadata.name }}
+  namespace: {{ $xr.metadata.namespace }}
+  annotations:
+    gotemplating.fn.crossplane.io/composition-resource-name: client
+spec:
+  forProvider:
+    clientId: {{ $clientID }}
+    realmId: {{ $spec.realm }}
+    enabled: true
+    accessType: {{ if $spec.public }}PUBLIC{{ else }}CONFIDENTIAL{{ end }}
+    serviceAccountsEnabled: {{ $spec.serviceAccountsEnabled }}
+    {{- if $spec.redirectURIs }}
+    validRedirectUris:
+      {{- range $spec.redirectURIs }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
+  deletionPolicy: Delete
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: @@PROVIDER_CONFIG_REF@@
+  {{- if not $spec.public }}
+  # Confidential clients only (operator parity): the provider writes
+  # attribute.client_secret here, into the claim's (tenant) namespace.
+  # Name keyed to the claim name (DNS-valid), not clientID.
+  writeConnectionSecretToRef:
+    name: {{ $xr.metadata.name }}-keycloak-connection
+  {{- end }}
+---
+# Patch the composite status (operator contract: clientID / realm /
+# secretName). No composition-resource-name annotation => status-only
+# update of the XR (function-go-templating documented behavior).
+apiVersion: identity.inari.io/v1alpha1
+kind: XTenantClient
+status:
+  clientID: {{ $clientID }}
+  realm: {{ $spec.realm }}
+  secretName: {{ $secretName }}

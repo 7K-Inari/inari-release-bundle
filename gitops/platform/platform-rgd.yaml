@@ -1,0 +1,42 @@
+# Platform resource graphs — the KRO ResourceGraphDefinition
+# (tenantnamespace) and Crossplane Keycloak claims (XRDs + Compositions)
+# that replace the operator's platform.inari.io CRDs (sunset decisions
+# D1/D6). Wave 1: after KRO (-2) and Crossplane (-3), whose CRDs these
+# manifests instantiate.
+#
+# Sources the in-repo chart charts/inari-platform-graphs (authored by
+# sibling task W1-2) so e2e/CI always tests the working tree — same pattern
+# as platform-config -> charts/inari-platform. The chart also releases as an
+# OCI artifact for real installs.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-rgd
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: inari
+  source:
+    # TODO: flip to inari-release-bundle.git once the repo rename lands
+    # (GitHub redirects git/HTTP, but ArgoCD repo entries should use the canonical name).
+    repoURL: https://github.com/7K-Inari/inari-helm-charts.git
+    targetRevision: HEAD
+    path: charts/inari-platform-graphs
+    helm:
+      releaseName: platform-graphs
+      values: |
+        # Keycloak TenantRealm/TenantClient claims stay off until Phase 3
+        # wires the ClusterProviderConfig (Keycloak credentials) and
+        # function-go-templating onto the hub; the XRDs/Compositions would
+        # render harmlessly but can compose nothing before then.
+        keycloak:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    # The chart renders only cluster-scoped kinds (RGD, XRD, Composition);
+    # the destination namespace is required by ArgoCD but unused.
+    namespace: default
+  syncPolicy:
+    automated:
+      selfHeal: true

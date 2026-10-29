@@ -1,0 +1,58 @@
+# ExternalDNS — hub prerequisite of the operator's DNSZone/DNSRecord facade
+# CRDs (renders DNSEndpoints on the hub). Sunset-scoped: removed in Phase 4
+# of the operator sunset; tenant-cluster installs are first-class addons
+# (multi-repo GitOps feature), never hub gitops.
+#
+# Dev-safe values: watches DNSEndpoint CRs only, with the rfc2136 provider
+# pointed at a dead address and no zones configured — the sync loop lists
+# zero records and never dials out, so the controller stays Healthy without
+# a real DNS server. Real installs override the provider via values.
+#
+# Multi-source: the helm chart does NOT bundle the DNSEndpoint CRD, so the
+# second source applies the upstream CRD manifests pinned at the chart's
+# appVersion tag. Pins must match scripts/e2e/stack/suite/provision.go
+# (externalDNSChartVersion / externalDNSAppVersion; TestGitOpsPinParity).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: external-dns
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  project: inari
+  sources:
+    - repoURL: https://kubernetes-sigs.github.io/external-dns/
+      chart: external-dns
+      targetRevision: 1.23.0
+      helm:
+        releaseName: external-dns
+        values: |
+          sources:
+            - crd
+          provider:
+            name: rfc2136
+          extraArgs:
+            - --rfc2136-host=127.0.0.1
+            - --rfc2136-port=5353
+            # insecure: dev no-op provider (dead address, no TSIG) — without
+            # it external-dns >= v0.23 validates an empty TSIG algorithm and
+            # crashloops at startup ("is not supported TSIG algorithm"). Bare
+            # flag: kingpin bool flags reject an explicit "=true".
+            - --rfc2136-insecure
+          registry: noop
+          policy: upsert-only
+          interval: 15m
+          logLevel: warning
+    - repoURL: https://github.com/kubernetes-sigs/external-dns.git
+      targetRevision: v0.23.0
+      path: config/crd/standard
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: external-dns
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

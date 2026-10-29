@@ -17,6 +17,8 @@
 //	          have no cross-pod locking; HA scales out after they apply)
 //	NATS (JetStream)            — independent of Keycloak/CNPG
 //	Vault (dev) + ESO + CRDs    — independent of Keycloak/CNPG
+//	Hub prereqs (Phase 0 gitops mirror): cert-manager ∥ external-dns ∥ KRO ∥
+//	  Crossplane + provider-keycloak — independent of Keycloak/CNPG
 //	BARRIER: inari-server needs Keycloak issuer + NATS + OpenFGA + Vault/ESO
 //	inari-operator-crds → inari-operator ┐ independent of each other and
 //	inari-console                        ┘ smoke-level alongside the server
@@ -73,6 +75,37 @@ type ProvisionConfig struct {
 	ServerReplicas    int
 	OpenFGAReplicas   int
 }
+
+// Hub prerequisite pins (Phase 0 gitops gap). These MUST equal the
+// targetRevisions of the corresponding gitops Applications — the production
+// install path — guarded by TestGitOpsPinParity in provision_unit_test.go:
+//
+//	gitops/operators/cert-manager.yaml                ↔ certManagerChartVersion
+//	gitops/operators/external-dns.yaml (chart source) ↔ externalDNSChartVersion
+//	gitops/operators/external-dns.yaml (CRD source)   ↔ externalDNSAppVersion
+//	gitops/operators/eso.yaml                         ↔ esoChartVersion
+//	gitops/operators/crossplane.yaml                  ↔ crossplaneChartVersion
+//	gitops/operators/kro.yaml                         ↔ kroChartVersion
+//	gitops/operators/crossplane-provider-keycloak/    ↔ providerKeycloakVersion
+const (
+	certManagerChartVersion = "v1.21.3"
+	externalDNSChartVersion = "1.23.0"
+	// externalDNSAppVersion is the upstream external-dns release tag whose
+	// config/crd/standard manifests carry the DNSEndpoint CRD (the helm
+	// chart does not bundle it). Equals the chart's appVersion.
+	externalDNSAppVersion   = "v0.23.0"
+	esoChartVersion         = "2.11.0"
+	crossplaneChartVersion  = "2.4.3"
+	kroChartVersion         = "0.9.4"
+	providerKeycloakVersion = "v3.2.3"
+	providerKeycloakPackage = "xpkg.crossplane.io/crossplane-contrib/provider-keycloak"
+)
+
+// externalDNSCRDBase is the pinned upstream CRD directory; the helm chart
+// never installs CRDs. Both CRDs of the directory are applied, mirroring the
+// gitops Application's directory source (config/crd/standard).
+const externalDNSCRDBase = "https://raw.githubusercontent.com/kubernetes-sigs/external-dns/" +
+	externalDNSAppVersion + "/config/crd/standard"
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -193,6 +226,10 @@ func helmRepoSetup() error {
 		{"nats", "https://nats-io.github.io/k8s/helm/charts/"},
 		{"hashicorp", "https://helm.releases.hashicorp.com"},
 		{"external-secrets", "https://charts.external-secrets.io"},
+		// Phase 0 hub prereqs (KRO is an OCI chart — no repo add needed).
+		{"jetstack", "https://charts.jetstack.io"},
+		{"external-dns", "https://kubernetes-sigs.github.io/external-dns/"},
+		{"crossplane", "https://charts.crossplane.io/stable"},
 		// bitnami is vendored for the inari-server chart's optional redis
 		// subchart (helm verifies Chart.yaml dependencies even when disabled).
 		{"bitnami", "https://charts.bitnami.com/bitnami"},
@@ -296,7 +333,7 @@ func installVaultESO(c *ProvisionConfig) error {
 		"--wait", "--timeout", "5m"); err != nil {
 		return err
 	}
-	if err := helm.UpgradeInstall("external-secrets", "external-secrets/external-secrets", "--version", "2.11.0",
+	if err := helm.UpgradeInstall("external-secrets", "external-secrets/external-secrets", "--version", esoChartVersion,
 		"--namespace", "external-secrets", "--create-namespace",
 		"--set", "installCRDs=true",
 		"--wait", "--timeout", "5m"); err != nil {
@@ -322,6 +359,97 @@ func installVaultESO(c *ProvisionConfig) error {
 	return err
 }
 
+// installCertManager mirrors gitops/operators/cert-manager.yaml (wave -3) —
+// hub prerequisite of the operator's CertIssuer facade CRD. Sunset-scoped:
+// removed from the mirror when Phase 4 removes the gitops Application.
+func installCertManager(c *ProvisionConfig) error {
+	return helm.UpgradeInstall("cert-manager", "jetstack/cert-manager",
+		"--version", certManagerChartVersion,
+		"--namespace", "cert-manager", "--create-namespace",
+		"--set", "crds.enabled=true",
+		"--wait", "--timeout", "5m")
+}
+
+// installExternalDNS mirrors gitops/operators/external-dns.yaml (wave -3):
+// the chart does not bundle the DNSEndpoint CRD, so the pinned upstream CRD
+// manifest goes first (the Application's second source does the same).
+// Dev-safe no-op values: CRD source + rfc2136 provider pointed at a dead
+// address with no zones — the sync loop never dials out.
+func installExternalDNS(c *ProvisionConfig) error {
+	for _, crd := range []string{"dnsendpoints", "dnsrecords"} {
+		if _, err := kube.Kubectl("apply", "-f",
+			externalDNSCRDBase+"/"+crd+".externaldns.k8s.io.yaml"); err != nil {
+			return err
+		}
+	}
+	// The controller crashloops listing DNSEndpoints before the CRD exists.
+	if err := kube.WaitCondition("", "condition=established", "120s",
+		"crd/dnsendpoints.externaldns.k8s.io"); err != nil {
+		return err
+	}
+	return helm.UpgradeInstall("external-dns", "external-dns/external-dns",
+		"--version", externalDNSChartVersion,
+		"--namespace", "external-dns", "--create-namespace",
+		"--set", "sources[0]=crd",
+		"--set", "provider.name=rfc2136",
+		"--set", "extraArgs[0]=--rfc2136-host=127.0.0.1",
+		"--set", "extraArgs[1]=--rfc2136-port=5353",
+		// insecure: dev no-op provider (dead address, no TSIG) — without it
+		// external-dns >= v0.23 validates an empty TSIG algorithm and
+		// crashloops at startup ("is not supported TSIG algorithm"). Bare
+		// flag: kingpin bool flags reject an explicit "=true".
+		"--set", "extraArgs[2]=--rfc2136-insecure",
+		"--set", "registry=noop",
+		"--set", "policy=upsert-only",
+		"--set", "interval=15m",
+		"--set", "logLevel=warning",
+		"--wait", "--timeout", "5m")
+}
+
+// installKRO mirrors gitops/operators/kro.yaml (wave -2) — OCI chart, no
+// repo add needed.
+func installKRO(c *ProvisionConfig) error {
+	return helm.UpgradeInstall("kro", "oci://registry.k8s.io/kro/charts/kro",
+		"--version", kroChartVersion,
+		"--namespace", "kro", "--create-namespace",
+		"--wait", "--timeout", "5m")
+}
+
+// installCrossplaneKeycloakProvider mirrors gitops/operators/crossplane.yaml
+// (wave -3) + crossplane-provider-keycloak.yaml (wave -2): Crossplane first
+// (its CRDs must exist before the Provider CR applies), then the
+// provider-keycloak package. No ProviderConfig — the Provider reports
+// Healthy without one.
+func installCrossplaneKeycloakProvider(c *ProvisionConfig) error {
+	if err := helm.UpgradeInstall("crossplane", "crossplane/crossplane",
+		"--version", crossplaneChartVersion,
+		"--namespace", "crossplane-system", "--create-namespace",
+		"--wait", "--timeout", "8m"); err != nil {
+		return err
+	}
+	// helm --wait covers the deployments, not CRD establishment (same
+	// subtlety as the ESO CRDs in installVaultESO).
+	if err := kube.WaitCondition("", "condition=established", "120s",
+		"crd/providers.pkg.crossplane.io"); err != nil {
+		return err
+	}
+	provider := fmt.Sprintf(`apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-keycloak
+spec:
+  package: %s:%s
+`, providerKeycloakPackage, providerKeycloakVersion)
+	if _, err := kube.ApplyStdin(provider); err != nil {
+		return err
+	}
+	// Crossplane's package manager pulls the provider image from
+	// xpkg.crossplane.io itself (node image caches don't cover its OCI
+	// fetches) — generous bound for a cold pull.
+	return kube.WaitCondition("", "condition=Healthy", "600s",
+		"provider.pkg.crossplane.io/provider-keycloak")
+}
+
 // keycloakLifecycle rolls the StatefulSet, pins the issuer hostname (issuer
 // consistency — MUST complete before inari-server installs), rolls again.
 func keycloakLifecycle(c *ProvisionConfig) error {
@@ -335,7 +463,10 @@ func keycloakLifecycle(c *ProvisionConfig) error {
 	_ = kube.WaitCondition(c.Namespace, "condition=complete", "300s",
 		"job", "-l", "app.kubernetes.io/component=keycloak")
 	patch := fmt.Sprintf(`{"spec":{"hostname":{"hostname":"http://%s","strict":true}}}`, c.kcFQDN())
-	if _, err := kube.Kubectl("-n", c.Namespace, "patch", "keycloak", "keycloak",
+	// Fully qualify the resource: with provider-keycloak installed there are
+	// several keycloak.* groups in discovery, and the bare "keycloak" type
+	// becomes ambiguous for kubectl's shortcut expansion.
+	if _, err := kube.Kubectl("-n", c.Namespace, "patch", "keycloaks.k8s.keycloak.org", "keycloak",
 		"--type", "merge", "-p", patch); err != nil {
 		return err
 	}
@@ -633,13 +764,20 @@ func provisionCharts(t *testing.T, c *ProvisionConfig) {
 		t.Fatalf("ensuring namespace %s: %v", c.Namespace, err)
 	}
 
-	// Layer A: platform-config (DB + Keycloak realm) ∥ NATS ∥ Vault/ESO —
-	// none of them depend on each other (dependency graph above).
-	logf("installing platform-config ∥ nats ∥ vault+eso (concurrent layer A)")
+	// Layer A: platform-config (DB + Keycloak realm) ∥ NATS ∥ Vault/ESO ∥
+	// hub prereqs — none of them depend on each other (dependency graph
+	// above). The prereqs mirror the gitops wave -3/-2 Applications
+	// (cert-manager, external-dns, KRO, Crossplane + provider-keycloak);
+	// ESO stays inside installVaultESO next to its Vault backend.
+	logf("installing platform-config ∥ nats ∥ vault+eso ∥ hub prereqs (concurrent layer A)")
 	var layerA errgroup.Group
 	layerA.Go(func() error { return installPlatformConfig(c) })
 	layerA.Go(func() error { return installNATS(c) })
 	layerA.Go(func() error { return installVaultESO(c) })
+	layerA.Go(func() error { return installCertManager(c) })
+	layerA.Go(func() error { return installExternalDNS(c) })
+	layerA.Go(func() error { return installKRO(c) })
+	layerA.Go(func() error { return installCrossplaneKeycloakProvider(c) })
 	if err := layerA.Wait(); err != nil {
 		t.Fatalf("layer A install failed: %v (logs: kubectl -n %s get pods)", err, c.Namespace)
 	}

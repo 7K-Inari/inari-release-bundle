@@ -1,0 +1,31 @@
+# KRO (Kubernetes Resource Operator) — platform-wide managed stacks (sunset
+# decision D1). Hosts the tenantnamespace ResourceGraphDefinition that
+# replaces the operator's TenantNamespace CRD (decision D6); the RGD itself
+# ships via gitops/platform/platform-rgd.yaml (wave 1).
+# OCI chart — same source pattern as the ghcr.io/7k-inari/charts apps.
+# Pin must match scripts/e2e/stack/suite/provision.go kroChartVersion
+# (guarded by TestGitOpsPinParity).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kro
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  project: inari
+  source:
+    repoURL: registry.k8s.io/kro/charts
+    chart: kro
+    targetRevision: 0.9.4
+    helm:
+      releaseName: kro
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kro
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

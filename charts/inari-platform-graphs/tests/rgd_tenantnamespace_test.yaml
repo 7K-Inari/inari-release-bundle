@@ -1,0 +1,155 @@
+suite: tenantnamespace KRO ResourceGraphDefinition
+templates:
+  - rgd/tenantnamespace.yaml
+tests:
+  - it: renders nothing when tenantNamespace.enabled=false
+    set:
+      tenantNamespace:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the RGD with the stacks.inari.io schema
+    asserts:
+      - isKind:
+          of: ResourceGraphDefinition
+      - equal:
+          path: apiVersion
+          value: kro.run/v1alpha1
+      - equal:
+          path: metadata.name
+          value: tenantnamespace
+      - equal:
+          path: spec.schema.group
+          value: stacks.inari.io
+      - equal:
+          path: spec.schema.apiVersion
+          value: v1alpha1
+      - equal:
+          path: spec.schema.kind
+          value: TenantNamespace
+      # plural must NOT be set: the kro v0.9.4 RGD CRD lacks schema.plural;
+      # setting it prunes the field apiserver-side and ArgoCD never converges
+      # to Synced. kro derives "tenantnamespaces" from the kind.
+      - notExists:
+          path: spec.schema.plural
+      - equal:
+          path: spec.schema.scope
+          value: Namespaced
+
+  - it: preserves the TenantReference spec shape (tenantID + namespace)
+    asserts:
+      - matchRegex:
+          path: spec.schema.spec.tenantID
+          pattern: 'required=true'
+      - matchRegex:
+          path: spec.schema.spec.tenantID
+          pattern: 'pattern="\^\[a-z0-9\]'
+      - matchRegex:
+          path: spec.schema.spec.namespace
+          pattern: 'required=true'
+      # impersonateServiceAccount dropped (decision D3)
+      - notExists:
+          path: spec.schema.spec.impersonateServiceAccount
+      - matchRegex:
+          path: spec.schema.spec.resourceQuota.cpu
+          pattern: string
+      - matchRegex:
+          path: spec.schema.spec.resourceQuota.pods
+          pattern: integer
+
+  - it: projects status.namespace and mirrors the operator printer columns
+    asserts:
+      - equal:
+          path: spec.schema.status.namespace
+          value: ${tenantns.metadata.name}
+      - equal:
+          path: spec.schema.additionalPrinterColumns[0].jsonPath
+          value: .spec.tenantID
+      - equal:
+          path: spec.schema.additionalPrinterColumns[1].jsonPath
+          value: .status.namespace
+      - matchRegex:
+          path: spec.schema.additionalPrinterColumns[2].jsonPath
+          pattern: 'Ready'
+
+  - it: declares the four children with the operator's literal names
+    asserts:
+      - equal:
+          path: spec.resources[0].id
+          value: tenantns
+      - equal:
+          path: spec.resources[0].template.kind
+          value: Namespace
+      - equal:
+          path: spec.resources[0].template.metadata.name
+          value: ${schema.spec.namespace}
+      - equal:
+          path: spec.resources[0].template.metadata.labels["platform.inari.io/tenant"]
+          value: ${schema.spec.tenantID}
+      - equal:
+          path: spec.resources[1].id
+          value: rolebinding
+      - equal:
+          path: spec.resources[1].template.metadata.name
+          value: tenant-admin
+      - equal:
+          path: spec.resources[1].template.roleRef.name
+          value: admin
+      - equal:
+          path: spec.resources[1].template.roleRef.kind
+          value: ClusterRole
+      - equal:
+          path: spec.resources[2].id
+          value: networkpolicy
+      - equal:
+          path: spec.resources[2].template.metadata.name
+          value: tenant-default-deny
+      - equal:
+          path: spec.resources[2].template.spec.policyTypes
+          value: ["Ingress", "Egress"]
+      - equal:
+          path: spec.resources[3].id
+          value: resourcequota
+      - equal:
+          path: spec.resources[3].template.metadata.name
+          value: tenant-quota
+
+  - it: gates the ResourceQuota on spec.resourceQuota and expands cpu to requests+limits
+    asserts:
+      - equal:
+          path: spec.resources[3].includeWhen[0]
+          value: ${has(schema.spec.resourceQuota)}
+      # hard map: nested ternary; cpu expands to requests.cpu + limits.cpu
+      - matchRegex:
+          path: spec.resources[3].template.spec.hard
+          pattern: '"requests\.cpu": schema\.spec\.resourceQuota\.cpu, "limits\.cpu": schema\.spec\.resourceQuota\.cpu'
+      - matchRegex:
+          path: spec.resources[3].template.spec.hard
+          pattern: '"requests\.memory": schema\.spec\.resourceQuota\.memory, "limits\.memory": schema\.spec\.resourceQuota\.memory'
+      - matchRegex:
+          path: spec.resources[3].template.spec.hard
+          pattern: '"pods": string\(schema\.spec\.resourceQuota\.pods\)'
+      # empty quota block renders an empty hard map
+      - matchRegex:
+          path: spec.resources[3].template.spec.hard
+          pattern: ': \{\}\)\)\}$'
+
+  - it: binds the adminGroup subject conditionally (Group kind, rbac group)
+    asserts:
+      - matchRegex:
+          path: spec.resources[1].template.subjects
+          pattern: 'has\(schema\.spec\.adminGroup\)'
+      - matchRegex:
+          path: spec.resources[1].template.subjects
+          pattern: '"kind": "Group", "apiGroup": "rbac\.authorization\.k8s\.io", "name": schema\.spec\.adminGroup'
+      - matchRegex:
+          path: spec.resources[1].template.subjects
+          pattern: ': \[\]\}$'
+
+  - it: marks the namespace readyWhen Active (resource id "tenantns" — "namespace" is a CEL reserved word)
+    asserts:
+      - equal:
+          path: spec.resources[0].readyWhen[0]
+          value: ${tenantns.status.phase == 'Active'}

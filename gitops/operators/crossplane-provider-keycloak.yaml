@@ -1,0 +1,29 @@
+# Crossplane provider-keycloak — manages Keycloak realms/clients via the
+# Keycloak Admin API, replacing the operator's KeycloakRealm/KeycloakClient
+# CRDs (sunset decision D1, Phase 3). Kustomize overlay in this repo so the
+# Provider CR lands after Crossplane's CRDs (wave -3).
+# The package pin must match scripts/e2e/stack/suite/provision.go
+# providerKeycloakVersion (guarded by TestGitOpsPinParity).
+# NOTE: no ProviderConfig yet — Keycloak credentials wiring arrives with the
+# RGD/compositions task (W1-2) / Phase 3. The Provider is Healthy without it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-provider-keycloak
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  project: inari
+  source:
+    # TODO: flip to inari-release-bundle.git once the repo rename lands
+    # (GitHub redirects git/HTTP, but ArgoCD repo entries should use the canonical name).
+    repoURL: https://github.com/7K-Inari/inari-helm-charts.git
+    targetRevision: HEAD
+    path: gitops/operators/crossplane-provider-keycloak
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      selfHeal: true

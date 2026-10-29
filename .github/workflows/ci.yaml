@@ -24,6 +24,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # ubuntu-26.04 runners default docker to the containerd image store,
+      # whose docker save export breaks kind side-loads downstream (dangling
+      # OCI index entries, attestation unpack failures). Force the classic
+      # image store for save/load fidelity.
+      - name: Use classic docker image store
+        run: |
+          set -euo pipefail
+          if [ -f /etc/docker/daemon.json ]; then
+            jq '.features["containerd-snapshotter"] = false' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json > /dev/null
+          else
+            echo '{"features":{"containerd-snapshotter":false}}' | sudo tee /etc/docker/daemon.json > /dev/null
+          fi
+          sudo systemctl restart docker
+          docker info --format 'storage-driver={{.Driver}}'
+
       - name: Cache CI image tars
         id: imgcache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -31,18 +46,28 @@ jobs:
           path: |
             /tmp/ci-images/node.tar
             /tmp/ci-images/workloads.tar
-          key: ci-images-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
+          key: ci-images-v3-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
 
       - name: Pull + save CI images (cache miss)
         if: steps.imgcache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p /tmp/ci-images
-          grep -vE '^\s*(#|$)' scripts/ci/images.txt | xargs -P8 -n1 docker pull
+          # ECR Public's anonymous data quota is routinely exhausted on shared
+          # GHA egress IPs ("error from registry: Data limit exceeded"); fall
+          # back to the Docker Hub mirror and retag to the manifest name.
+          if ! docker pull public.ecr.aws/docker/library/redis:7.2.7-alpine; then
+            docker pull mirror.gcr.io/library/redis:7.2.7-alpine
+            docker tag mirror.gcr.io/library/redis:7.2.7-alpine public.ecr.aws/docker/library/redis:7.2.7-alpine
+          fi
+          grep -vE '^\s*(#|$)' scripts/ci/images.txt | grep -vx 'public.ecr.aws/docker/library/redis:7.2.7-alpine' | xargs -P8 -n1 docker pull
           # kind node image must be in the docker daemon before kind create cluster
           grep '^kindest/node:' scripts/ci/images.txt | xargs docker save -o /tmp/ci-images/node.tar
           # everything else is side-loaded into the kind cluster
           grep -vE '^\s*(#|$)|^kindest/node:' scripts/ci/images.txt | xargs docker save -o /tmp/ci-images/workloads.tar
+          # containerd-store docker exports dangling index entries (unpulled
+          # platforms/attestations) that break ctr import in kind load
+          python3 scripts/ci/normalize-image-tar.py /tmp/ci-images/node.tar /tmp/ci-images/workloads.tar
 
       # The operator image package is private; anonymous pulls in kind fail.
       # Pre-pull with GITHUB_TOKEN so install-test can side-load it.
@@ -101,9 +126,10 @@ jobs:
           helm dependency build charts/inari-server
           helm lint charts/inari-server
           helm lint charts/inari-console
+          helm lint charts/inari-platform-graphs --set keycloak.enabled=true --set keycloak.issuerBaseURL=https://keycloak.example.org
 
       - name: helm unittest
-        run: helm unittest charts/inari-platform charts/inari-server charts/inari-console
+        run: helm unittest charts/inari-platform charts/inari-server charts/inari-console charts/inari-platform-graphs
 
       - name: e2e helper unit tests
         # The .mjs/.ts decision-logic tests for the e2e harness (seed planner,
@@ -125,6 +151,7 @@ jobs:
           # kustomize overlay must build (pulls the upstream keycloak-operator
           # manifests and applies the cluster-wide patch)
           kubectl kustomize gitops/operators/keycloak-operator > /dev/null
+          kubectl kustomize gitops/operators/crossplane-provider-keycloak > /dev/null
           # every Application points at a declared sync wave
           for f in gitops/operators/*.yaml gitops/platform/*.yaml gitops/apps/*.yaml; do
             grep -q 'argocd.argoproj.io/sync-wave' "$f" || { echo "$f: missing sync-wave annotation"; exit 1; }
@@ -132,10 +159,28 @@ jobs:
 
   install-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The Phase 0 hub prereqs (cert-manager, external-dns, ESO, kro,
+    # crossplane + provider/function) stretch bootstrap + backup + DR drill
+    # past the historical 45m budget — the drill was canceled mid-restore.
+    timeout-minutes: 60
     needs: [prep, lint-test]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # ubuntu-26.04 runners default docker to the containerd image store,
+      # whose docker save export breaks kind side-loads downstream (dangling
+      # OCI index entries, attestation unpack failures). Force the classic
+      # image store for save/load fidelity.
+      - name: Use classic docker image store
+        run: |
+          set -euo pipefail
+          if [ -f /etc/docker/daemon.json ]; then
+            jq '.features["containerd-snapshotter"] = false' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json > /dev/null
+          else
+            echo '{"features":{"containerd-snapshotter":false}}' | sudo tee /etc/docker/daemon.json > /dev/null
+          fi
+          sudo systemctl restart docker
+          docker info --format 'storage-driver={{.Driver}}'
 
       - name: Restore CI image cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -143,11 +188,20 @@ jobs:
           path: |
             /tmp/ci-images/node.tar
             /tmp/ci-images/workloads.tar
-          key: ci-images-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
+          key: ci-images-v3-${{ runner.os }}-${{ hashFiles('scripts/ci/images.txt') }}
           fail-on-cache-miss: true
 
       - name: Load kind node image
         run: docker load -i /tmp/ci-images/node.tar
+
+      - name: Tune host for concurrent kind clusters
+        # Two kind clusters (main + DR) plus the full platform stack exhaust
+        # the default inotify limits on the runner; the second cluster's
+        # kubelet then never comes up (kubeadm wait-control-plane timeout).
+        run: |
+          set -euo pipefail
+          sudo sysctl fs.inotify.max_user_watches=524288
+          sudo sysctl fs.inotify.max_user_instances=512
 
       - name: Create kind cluster
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
@@ -187,6 +241,9 @@ jobs:
               kubectl -n argocd get application "$a" -o jsonpath='{range .status.resources[?(@.status!="Synced")]}{.kind}/{.name}: {.status} {.health.status}{"\n"}{end}' || true
             done
             kubectl get pods -A | grep -v -E "Running|Completed" || true
+            # platform-rgd drift debugging: live RGD vs chart-rendered
+            kubectl get resourcegraphdefinition tenantnamespace -o yaml || true
+            helm template platform-graphs charts/inari-platform-graphs || true
             kubectl -n cnpg-system get pods -o wide || true
             kubectl -n cnpg-system logs -l app.kubernetes.io/instance=cnpg --all-containers --tail=50 || true
             kubectl -n cnpg-system describe pods | tail -60 || true

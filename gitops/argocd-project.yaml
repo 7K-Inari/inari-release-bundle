@@ -16,6 +16,14 @@ spec:
     # Official dexidp chart — operator-rendered per-tenant-cluster Dex.
     - "https://charts.dexidp.io"
     - "https://raw.githubusercontent.com/keycloak/keycloak-k8s-resources/*"
+    # Phase 0 hub prerequisites (operator sunset): cert-manager, ExternalDNS
+    # (+ its upstream CRD manifests), ESO, Crossplane, KRO (OCI chart).
+    - "https://charts.jetstack.io"
+    - "https://kubernetes-sigs.github.io/external-dns/"
+    - "https://github.com/kubernetes-sigs/external-dns.git"
+    - "https://charts.external-secrets.io"
+    - "https://charts.crossplane.io/stable"
+    - "registry.k8s.io/kro/**"
     - "https://github.com/7K-Inari/inari-release-bundle.git"
     # Pre-rename name; ArgoCD apps point here until the rename lands.
     # Remove after cut-over.

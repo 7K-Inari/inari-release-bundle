@@ -1,0 +1,33 @@
+{{- if .Values.keycloak.enabled }}
+{{- if not .Values.keycloak.issuerBaseURL }}
+{{- fail "keycloak.issuerBaseURL is required when keycloak.enabled=true — public base URL of the hub Keycloak, used for status.issuerURL" }}
+{{- end }}
+# TenantClient composition: one provider-keycloak Client managed resource.
+# The pipeline body lives in files/tenantclient.gotmpl (included verbatim so
+# its Go-template braces are not evaluated by helm); @@TOKENS@@ are replaced
+# with chart values here.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: tenantclient.identity.inari.io
+  labels:
+    {{- include "inari-platform-graphs.labels" . | nindent 4 }}
+spec:
+  compositeTypeRef:
+    apiVersion: identity.inari.io/v1alpha1
+    kind: XTenantClient
+  mode: Pipeline
+  pipeline:
+    - step: client
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1alpha1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- .Files.Get "files/tenantclient.gotmpl"
+                | replace "@@PROVIDER_CONFIG_REF@@" .Values.keycloak.providerConfigRef
+                | nindent 12 }}
+{{- end }}

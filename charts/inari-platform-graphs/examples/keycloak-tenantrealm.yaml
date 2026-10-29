@@ -1,0 +1,22 @@
+# Example TenantRealm claim (identity.inari.io/v1alpha1) — hub-side
+# self-service Keycloak realm via provider-keycloak, replacing the operator's
+# KeycloakRealm catalog item (sunset plan D1).
+#
+# Rendered by the server into tenants/<org>/keycloak/realm.yaml in the
+# hub-facing platform repo. Claims are namespaced: create them in the
+# tenant's hub namespace (the TenantNamespace instance's spec.namespace).
+apiVersion: identity.inari.io/v1alpha1
+kind: TenantRealm
+metadata:
+  name: acme
+  namespace: tenant-acme
+  labels:
+    platform.inari.io/org: acme
+spec:
+  tenantID: acme
+  namespace: tenant-acme
+  # realm: acme            # optional; defaults to tenantID
+  displayName: Acme Corp    # optional
+  enabled: true
+# status.realm / status.issuerURL are projected by the composition:
+#   issuerURL = <keycloak.issuerBaseURL>/realms/<realm>

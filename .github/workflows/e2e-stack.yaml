@@ -101,6 +101,21 @@ jobs:
     env:
       IMAGE_REF: ghcr.io/7k-inari/inari-server:${{ inputs.image-tag }}
     steps:
+      # ubuntu-26.04 runners default docker to the containerd image store,
+      # whose docker save export breaks kind side-loads downstream (dangling
+      # OCI index entries, attestation unpack failures). Force the classic
+      # image store for save/load fidelity.
+      - name: Use classic docker image store
+        run: |
+          set -euo pipefail
+          if [ -f /etc/docker/daemon.json ]; then
+            jq '.features["containerd-snapshotter"] = false' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json > /dev/null
+          else
+            echo '{"features":{"containerd-snapshotter":false}}' | sudo tee /etc/docker/daemon.json > /dev/null
+          fi
+          sudo systemctl restart docker
+          docker info --format 'storage-driver={{.Driver}}'
+
       - name: Checkout inari-server (Go suites + migrations dir)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -234,7 +249,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/e2e-images/images.tar
-          key: e2e-images-${{ runner.os }}-${{ hashFiles('bundle/scripts/e2e/stack/testdata/images.txt') }}
+          key: e2e-images-v3-${{ runner.os }}-${{ hashFiles('bundle/scripts/e2e/stack/testdata/images.txt') }}
 
       - name: Pull + save images (cache miss)
         if: steps.imgcache.outputs.cache-hit != 'true'
@@ -245,6 +260,9 @@ jobs:
           MANIFEST=bundle/scripts/e2e/stack/testdata/images.txt
           grep -vE '^\s*(#|$)' "$MANIFEST" | xargs -P8 -n1 docker pull
           grep -vE '^\s*(#|$)' "$MANIFEST" | xargs docker save -o /tmp/e2e-images/images.tar
+          # containerd-store docker exports dangling index entries (unpulled
+          # platforms/attestations) that break ctr import in kind load
+          python3 bundle/scripts/ci/normalize-image-tar.py /tmp/e2e-images/images.tar
           echo "[timing] image pull+save (miss): $(( $(date +%s) - t0 ))s"
 
       - name: Pre-create cluster + preload images
@@ -473,8 +491,12 @@ jobs:
 
           # Point the SPA's Keycloak URL at the browser-reachable KC (which
           # is also the issuer URL, so no hostname mismatch anywhere).
+          # --force-conflicts: the NodePort re-patch above owns spec.type via
+          # kubectl-patch, and runner helm (v4) applies server-side by
+          # default — without this the upgrade fails on a .spec.type SSA
+          # conflict. The re-patch after the rollout re-asserts NodePort.
           helm upgrade inari-console charts/inari-console --namespace inari \
-            --reuse-values --set keycloakUrl="$KC"
+            --reuse-values --set keycloakUrl="$KC" --force-conflicts
           kubectl -n inari rollout status deployment/inari-console --timeout=180s
 
           # The console rollout may reset the Service back to ClusterIP (the
@@ -588,6 +610,16 @@ jobs:
           kubectl -n inari get pods -o wide > /tmp/e2e-diag/pods.txt 2>&1
           kubectl -n inari get events --sort-by=.lastTimestamp > /tmp/e2e-diag/events.txt 2>&1
           kubectl -n inari describe pods > /tmp/e2e-diag/describe-pods.txt 2>&1
+          # Hub prereqs (Phase 0 gitops gap): a failure there (e.g.
+          # external-dns Deployment never ready) is invisible from the inari
+          # namespaces alone.
+          kubectl get pods -A -o wide > /tmp/e2e-diag/pods-all.txt 2>&1
+          for ns in cert-manager external-dns external-secrets kro crossplane-system; do
+            kubectl -n "$ns" describe pods > "/tmp/e2e-diag/describe-$ns.txt" 2>&1
+            for p in $(kubectl -n "$ns" get pods -o name 2>/dev/null); do
+              kubectl -n "$ns" logs "$p" --all-containers --prefix --tail=300 2>&1
+            done > "/tmp/e2e-diag/logs-$ns.txt" 2>&1
+          done
           kubectl -n inari logs -l app.kubernetes.io/name=inari-server --prefix --tail=2000 \
             > /tmp/e2e-diag/inari-server.log 2>&1
           kubectl -n inari logs statefulset/nats --all-containers --tail=500 > /tmp/e2e-diag/nats.log 2>&1

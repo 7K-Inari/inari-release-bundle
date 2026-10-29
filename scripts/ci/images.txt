@@ -34,5 +34,26 @@ natsio/nats-server-config-reloader:0.24.0
 # openfga/openfga chart 0.2.27
 openfga/openfga:v1.8.9
 
+# Phase 0 hub prereqs (gitops/operators/*.yaml — pins must match)
+# cert-manager chart v1.21.3
+quay.io/jetstack/cert-manager-cainjector:v1.21.3
+quay.io/jetstack/cert-manager-controller:v1.21.3
+quay.io/jetstack/cert-manager-startupapicheck:v1.21.3
+quay.io/jetstack/cert-manager-webhook:v1.21.3
+# external-dns chart 1.23.0
+registry.k8s.io/external-dns/external-dns:v0.23.0
+# external-secrets chart 2.11.0
+ghcr.io/external-secrets/external-secrets:v2.11.0
+# kro OCI chart 0.9.4
+registry.k8s.io/kro/kro:v0.9.4
+# crossplane chart 2.4.3
+xpkg.crossplane.io/crossplane/crossplane:v2.4.3
+# provider-keycloak package v3.2.3 (pulled by Crossplane's package manager
+# over the network; this entry covers the controller Deployment image)
+xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3
+# function-go-templating package v0.13.2 (same: covers the function runtime
+# Deployment image; not in the e2e manifest — the provisioner skips it)
+xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.13.2
+
 # verify / utility jobs
 curlimages/curl:8.10.1

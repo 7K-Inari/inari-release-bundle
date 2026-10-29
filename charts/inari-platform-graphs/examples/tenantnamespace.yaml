@@ -1,0 +1,21 @@
+# Example TenantNamespace instance (KRO-generated CRD from the
+# "tenantnamespace" ResourceGraphDefinition in this chart).
+#
+# The server renders one instance per tenant into the hub-facing platform
+# repo under tenants/<org>/tenant-namespace.yaml; hub ArgoCD applies it and
+# KRO materializes Namespace + tenant-admin RoleBinding + tenant-default-deny
+# NetworkPolicy (+ tenant-quota ResourceQuota when resourceQuota is set).
+apiVersion: stacks.inari.io/v1alpha1
+kind: TenantNamespace
+metadata:
+  name: tenant-acme
+  labels:
+    platform.inari.io/org: acme
+spec:
+  tenantID: acme
+  namespace: tenant-acme
+  # adminGroup: tenant-acme/admins   # optional Group subject of tenant-admin
+  # resourceQuota:                   # optional; per-field optional
+  #   cpu: "4"
+  #   memory: 8Gi
+  #   pods: 20

@@ -35,6 +35,24 @@ hashicorp/vault:2.0.4
 # external-secrets/external-secrets chart 2.11.0
 ghcr.io/external-secrets/external-secrets:v2.11.0
 
+# jetstack/cert-manager chart v1.21.3 (hub prereq, provision.go installCertManager)
+quay.io/jetstack/cert-manager-cainjector:v1.21.3
+quay.io/jetstack/cert-manager-controller:v1.21.3
+quay.io/jetstack/cert-manager-startupapicheck:v1.21.3
+quay.io/jetstack/cert-manager-webhook:v1.21.3
+
+# external-dns/external-dns chart 1.23.0 (hub prereq, provision.go installExternalDNS)
+registry.k8s.io/external-dns/external-dns:v0.23.0
+
+# crossplane/crossplane chart 2.4.3 (hub prereq)
+xpkg.crossplane.io/crossplane/crossplane:v2.4.3
+
+# kro OCI chart 0.9.4, oci://registry.k8s.io/kro/charts/kro (hub prereq)
+registry.k8s.io/kro/kro:v0.9.4
+
+# crossplane provider-keycloak package v3.2.3 (Provider CR, not a helm chart)
+xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3
+
 # bitnami/redis subchart 28.2.4 (HA leg; e2e pins bitnamilegacy — the chart
 # default bitnami/redis:latest is mutable and must never be cached)
 bitnamilegacy/redis:8.2.1

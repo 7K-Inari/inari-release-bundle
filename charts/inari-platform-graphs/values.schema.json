@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json.schemastore.org/chart",
+  "title": "inari-platform-graphs values",
+  "type": "object",
+  "properties": {
+    "tenantNamespace": {
+      "type": "object",
+      "description": "KRO ResourceGraphDefinition 'tenantnamespace' (stacks.inari.io/v1alpha1 TenantNamespace).",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "keycloak": {
+      "type": "object",
+      "description": "Keycloak self-service claims (identity.inari.io TenantRealm/TenantClient) on provider-keycloak.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "providerConfigRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of the provider-keycloak ClusterProviderConfig referenced by composed managed resources."
+        },
+        "issuerBaseURL": {
+          "type": "string",
+          "description": "Public base URL of the hub Keycloak (no trailing slash); used to project status.issuerURL. Required when keycloak.enabled=true."
+        },
+        "providerConfig": {
+          "type": "object",
+          "description": "ClusterProviderConfig referenced by the compositions (keycloak.providerConfigRef).",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "credentialsSecretRef": {
+              "type": "object",
+              "description": "Secret holding provider-keycloak's credentials JSON ({client_id, client_secret, url}).",
+              "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "namespace": {"type": "string", "minLength": 1},
+                "key": {"type": "string", "minLength": 1}
+              },
+              "required": ["name", "namespace", "key"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

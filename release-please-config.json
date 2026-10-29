@@ -19,6 +19,11 @@
       "release-type": "helm",
       "component": "inari-console",
       "changelog-path": "CHANGELOG.md"
+    },
+    "charts/inari-platform-graphs": {
+      "release-type": "helm",
+      "component": "inari-platform-graphs",
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }

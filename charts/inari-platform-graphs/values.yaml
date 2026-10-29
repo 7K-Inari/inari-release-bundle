@@ -1,0 +1,34 @@
+# inari-platform-graphs — platform resource graphs (KRO RGDs + Crossplane claims).
+
+tenantNamespace:
+  # Render the KRO ResourceGraphDefinition "tenantnamespace"
+  # (stacks.inari.io/v1alpha1 TenantNamespace). Requires kro on the hub.
+  enabled: true
+
+keycloak:
+  # Render the identity.inari.io XRDs + Compositions (TenantRealm/TenantClient)
+  # backed by provider-keycloak. Requires Crossplane + provider-keycloak +
+  # function-go-templating on the hub. Default off: it needs
+  # keycloak.issuerBaseURL, so the gitops Application opts in explicitly
+  # (repo convention: features with required config render nothing by
+  # default, keeping default-values lint/install green).
+  enabled: false
+  # Name of the provider-keycloak ClusterProviderConfig the composed managed
+  # resources reference. Installed by the hub gitops stack (gitops/operators).
+  providerConfigRef: keycloak
+  # Public base URL of the hub Keycloak instance (no trailing slash). Baked
+  # into the TenantRealm composition to project status.issuerURL
+  # ("<issuerBaseURL>/realms/<realm>"). Required when keycloak.enabled=true.
+  issuerBaseURL: ""
+  providerConfig:
+    # Render the ClusterProviderConfig the compositions reference
+    # (keycloak.providerConfigRef).
+    enabled: true
+    credentialsSecretRef:
+      # Secret holding provider-keycloak's credentials JSON:
+      # {"client_id","client_secret","url"}. Defaults point at the
+      # inari-platform chart's Keycloak admin secret — its `credentials` JSON
+      # key is Phase 3 wiring; until then claims cannot reconcile.
+      name: inari-keycloak-admin
+      namespace: inari
+      key: credentials

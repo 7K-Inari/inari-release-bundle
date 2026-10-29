@@ -1,0 +1,24 @@
+apiVersion: v2
+name: inari-platform-graphs
+description: >-
+  Platform resource graphs for the Inari GitOps stack: the KRO
+  ResourceGraphDefinition "tenantnamespace" (Namespace + tenant-admin RBAC +
+  default-deny NetworkPolicy + optional ResourceQuota) and the Keycloak
+  TenantRealm/TenantClient Crossplane claims (XRDs + Compositions) backed by
+  provider-keycloak. Installed via ArgoCD from gitops/; consumed as an OCI
+  chart from oci://ghcr.io/7k-inari/charts.
+type: application
+version: 0.1.0  # x-release-please-version
+appVersion: 0.1.0  # x-release-please-version
+keywords:
+  - inari
+  - idp
+  - platform
+  - kro
+  - crossplane
+home: https://github.com/7K-Inari/inari-release-bundle
+sources:
+  - https://github.com/7K-Inari/inari-release-bundle
+maintainers:
+  - name: 7K-Inari
+    url: https://github.com/7K-Inari

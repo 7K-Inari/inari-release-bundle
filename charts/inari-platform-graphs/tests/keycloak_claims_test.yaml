@@ -1,0 +1,234 @@
+suite: keycloak TenantRealm/TenantClient XRDs and Compositions
+templates:
+  - keycloak/xrd-tenantrealm.yaml
+  - keycloak/composition-tenantrealm.yaml
+  - keycloak/xrd-tenantclient.yaml
+  - keycloak/composition-tenantclient.yaml
+  - keycloak/clusterproviderconfig.yaml
+tests:
+  - it: renders nothing by default (keycloak.enabled defaults to false)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when keycloak.enabled=false
+    set:
+      keycloak:
+        enabled: false
+        issuerBaseURL: https://keycloak.example.org
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: fails without keycloak.issuerBaseURL
+    template: keycloak/xrd-tenantrealm.yaml
+    set:
+      keycloak:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: keycloak.issuerBaseURL is required when keycloak.enabled=true — public base URL of the hub Keycloak, used for status.issuerURL
+
+  - it: renders the TenantRealm XRD with a namespaced claim
+    template: keycloak/xrd-tenantrealm.yaml
+    set:
+      keycloak:
+        enabled: true
+        issuerBaseURL: https://keycloak.example.org
+    asserts:
+      - isKind:
+          of: CompositeResourceDefinition
+      - equal:
+          path: metadata.name
+          value: xtenantrealms.identity.inari.io
+      - equal:
+          path: spec.scope
+          value: Namespaced
+      - equal:
+          path: spec.group
+          value: identity.inari.io
+      - equal:
+          path: spec.names.kind
+          value: XTenantRealm
+      - equal:
+          path: spec.claimNames.kind
+          value: TenantRealm
+      - equal:
+          path: spec.claimNames.plural
+          value: tenantrealms
+      - equal:
+          path: spec.versions[0].name
+          value: v1alpha1
+      # TenantReference spec shape preserved
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.required
+          value: ["tenantID", "namespace"]
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.tenantID.pattern
+          value: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.enabled.default
+          value: true
+      # status contract: realm + issuerURL
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.status.properties.realm
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.status.properties.issuerURL
+
+  - it: renders the TenantClient XRD with the operator's spec surface
+    template: keycloak/xrd-tenantclient.yaml
+    set:
+      keycloak:
+        enabled: true
+        issuerBaseURL: https://keycloak.example.org
+    asserts:
+      - equal:
+          path: metadata.name
+          value: xtenantclients.identity.inari.io
+      - equal:
+          path: spec.scope
+          value: Namespaced
+      - equal:
+          path: spec.names.kind
+          value: XTenantClient
+      - equal:
+          path: spec.claimNames.kind
+          value: TenantClient
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.required
+          value: ["tenantID", "namespace", "realm"]
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.public.default
+          value: false
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.serviceAccountsEnabled.default
+          value: true
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.redirectURIs
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.status.properties.clientID
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.status.properties.secretName
+
+  - it: composes a namespaced provider-keycloak Realm for TenantRealm
+    template: keycloak/composition-tenantrealm.yaml
+    set:
+      keycloak:
+        enabled: true
+        providerConfigRef: hub-keycloak
+        issuerBaseURL: https://keycloak.example.org
+    asserts:
+      - isKind:
+          of: Composition
+      - equal:
+          path: spec.compositeTypeRef.apiVersion
+          value: identity.inari.io/v1alpha1
+      - equal:
+          path: spec.compositeTypeRef.kind
+          value: XTenantRealm
+      - equal:
+          path: spec.mode
+          value: Pipeline
+      - equal:
+          path: spec.pipeline[0].functionRef.name
+          value: function-go-templating
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'apiVersion: realm\.keycloak\.m\.crossplane\.io/v1alpha1'
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'crossplane\.io/external-name: \{\{ \$realm \}\}'
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'deletionPolicy: Delete'
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'kind: ClusterProviderConfig\s+name: hub-keycloak'
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'issuerURL: "https://keycloak\.example\.org/realms/\{\{ \$realm \}\}"'
+      # realm defaults to tenantID
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: '\$spec\.realm \| default \$spec\.tenantID'
+
+  - it: composes a namespaced provider-keycloak Client for TenantClient
+    template: keycloak/composition-tenantclient.yaml
+    set:
+      keycloak:
+        enabled: true
+        providerConfigRef: hub-keycloak
+        issuerBaseURL: https://keycloak.example.org
+    asserts:
+      - equal:
+          path: spec.compositeTypeRef.kind
+          value: XTenantClient
+      - equal:
+          path: spec.pipeline[0].functionRef.name
+          value: function-go-templating
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'apiVersion: openidclient\.keycloak\.m\.crossplane\.io/v1alpha1'
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'realmId: \{\{ \$spec\.realm \}\}'
+      # public maps to accessType PUBLIC, default CONFIDENTIAL
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'accessType: \{\{ if \$spec\.public \}\}PUBLIC\{\{ else \}\}CONFIDENTIAL\{\{ end \}\}'
+      # connection secret lands in the claim (tenant) namespace, confidential only;
+      # keyed to the claim name (DNS-valid), not clientID
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'writeConnectionSecretToRef:\s+name: \{\{ \$xr\.metadata\.name \}\}-keycloak-connection'
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'deletionPolicy: Delete'
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'name: hub-keycloak'
+      # clientID defaults to the claim name
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: '\$spec\.clientID \| default \$xr\.metadata\.name'
+
+  - it: renders the ClusterProviderConfig referenced by the compositions
+    template: keycloak/clusterproviderconfig.yaml
+    set:
+      keycloak:
+        enabled: true
+        issuerBaseURL: https://keycloak.example.org
+        providerConfigRef: hub-keycloak
+        providerConfig:
+          enabled: true
+          credentialsSecretRef:
+            name: inari-keycloak-admin
+            namespace: inari
+            key: credentials
+    asserts:
+      - isKind:
+          of: ClusterProviderConfig
+      - equal:
+          path: apiVersion
+          value: keycloak.m.crossplane.io/v1beta1
+      - equal:
+          path: metadata.name
+          value: hub-keycloak
+      - equal:
+          path: spec.credentials.source
+          value: Secret
+      - equal:
+          path: spec.credentials.secretRef
+          value: {name: inari-keycloak-admin, namespace: inari, key: credentials}
+
+  - it: skips the ClusterProviderConfig when providerConfig.enabled=false
+    template: keycloak/clusterproviderconfig.yaml
+    set:
+      keycloak:
+        enabled: true
+        issuerBaseURL: https://keycloak.example.org
+        providerConfig:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
