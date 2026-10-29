@@ -8,22 +8,14 @@ name: release-e2e
 #   2. server-integration — run the full `go test -tags=integration` suite
 #                           against that exact tag (the artifact being
 #                           released, not a floating branch).
-  #   3. golden-path        — kind-based golden path (HA matrix preserved),
-  #                           running the unsigned "edge" image of the latest
-  #                           inari-server main merge by default (the suite
-  #                           asserts behavior newer than the last published
-  #                           release; dispatch inputs can pin a published,
-  #                           cosign-signed image or a build-from-ref repair
-  #                           instead). Delegated to the reusable
-  #                           e2e-stack.yaml (migration phase 4), which runs
-  #                           the Go stack suite (-tags=e2e: provisions the
-  #                           whole stack in-process AND asserts it), then
-  #                           the api-schema driver and the @p0 Playwright
-  #                           suite minus @quarantine. The inari-server
-  #                           checkout at the pinned tag is still used for
-  #                           the Go test suites and the api-schema e2e
-  #                           driver. The stack additionally smoke-tests the
-  #                           inari-operator and inari-console charts.
+  #   3. golden-path        — REMOVED from the gate (2026-10-29, owner
+  #                           decision): the kind-based bundle e2e stack is
+  #                           being reworked onto a live persistent test
+  #                           environment with a structured testing framework;
+  #                           the ephemeral path was too fragile/slow to gate
+  #                           milestone work (ubuntu-26.04 runner regressions).
+  #                           The reusable e2e-stack.yaml stays for the
+  #                           non-blocking nightly and the rework.
 #
 # Trigger: pull_request on release-please Release PRs only (branch prefix
 # `release-please--` or Chart.yaml/appVersion changes), plus
@@ -213,31 +205,3 @@ jobs:
 
       - name: Integration suite @ ${{ needs.resolve.outputs.server-tag }}
         run: go test -tags=integration -count=1 ./...
-
-  golden-path:
-    needs: resolve
-    # Two legs: the default single-replica fast gate, and the HA gate
-    # (E2E_HA=1). The whole leg (bring-up → api-schema → @p0 UI minus
-    # @quarantine → artifacts → teardown) is owned by the reusable
-    # e2e-stack.yaml (migration phase 4) — one shared bring-up definition
-    # with the nightly, no YAML duplication. The gate NEVER runs a
-    # quarantined test (UI @quarantine or Go -include-quarantined).
-    strategy:
-      fail-fast: false
-      matrix:
-        ha: [false, true]
-    name: golden-path (E2E_HA=${{ matrix.ha && '1' || '0' }})
-    uses: ./.github/workflows/e2e-stack.yaml
-    with:
-      mode: gate
-      ha: ${{ matrix.ha }}
-      bundle-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
-      server-src-ref: ${{ needs.resolve.outputs.server-src-ref }}
-      image-tag: ${{ needs.resolve.outputs.image-tag }}
-      build-from-ref: ${{ needs.resolve.outputs.build-from-ref }}
-      # Job outputs are always strings; the reusable input is type boolean
-      # and rejects a bare string ("workflow_call input type mismatch" —
-      # the golden-path job never even appears on the run). Coerce here.
-      cosign-verify: ${{ needs.resolve.outputs.cosign-verify == 'true' }}
-      branch-hint: ${{ github.head_ref || github.ref_name }}
-      retention-days: 7
