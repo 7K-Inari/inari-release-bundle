@@ -1,5 +1,12 @@
 # scripts/e2e — end-to-end suite map
 
+> **Migration contracts:** the target environment contract and label taxonomy
+> for the live-env migration are normative in
+> [`docs/e2e/environment-contract.md`](../../docs/e2e/environment-contract.md)
+> and [`docs/e2e/test-taxonomy.md`](../../docs/e2e/test-taxonomy.md). This
+> README documents the current kind-era implementation; the docs above record
+> it as the migration baseline.
+
 Canonical home of the Inari e2e suites (relocated from the inari-server
 repo's `e2e/` directory). `.github/workflows/release-e2e.yaml` is the CI gate
 that runs them; its golden-path legs and the nightly both delegate the full
