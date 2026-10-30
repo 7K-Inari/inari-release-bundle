@@ -40,11 +40,11 @@ scripts/e2e/
 
 | Suite | Path | Runner | CI trigger | Gating |
 |---|---|---|---|---|
-| Golden path (fast leg) | `stack/` (Go suite, `E2E_HA=0`) | `go test -tags=e2e -count=1 -timeout 40m -json ./...` from `scripts/e2e/stack/` (nested module — won't resolve from the repo root): provisions the whole kind stack in-process, then asserts. Quarantined Go tests skip (no `-include-quarantined`). | `release-e2e.yaml` job `golden-path` (matrix `ha: false`) → reusable `e2e-stack.yaml` (`mode: gate`) on Release PRs | Yes — Release-PR gate |
-| Golden path (HA leg) | `stack/` (Go suite, `E2E_HA=1` flips helm replica values + unlocks disruption subtests) | same, with `E2E_HA=1` + `SERVER_MIGRATIONS_DIR` | `release-e2e.yaml` job `golden-path` (matrix `ha: true`) → `e2e-stack.yaml` (`mode: gate`) on Release PRs | Yes — Release-PR gate |
+| Golden path (fast leg) | `stack/` (Go/Ginkgo suite, `E2E_HA=0`) | `go test -tags=e2e -count=1 -timeout 40m -json ./... -args "--ginkgo.label-filter=(p0\|\|smoke)&&!quarantine" --ginkgo.junit-report=junit.xml` from `scripts/e2e/stack/` (nested module — won't resolve from the repo root): provisions the whole kind stack in-process, then asserts. Quarantined Go specs (`Label("quarantine")`) are excluded by the label filter. | `release-e2e.yaml` job `golden-path` (matrix `ha: false`) → reusable `e2e-stack.yaml` (`mode: gate`) on Release PRs | Yes — Release-PR gate |
+| Golden path (HA leg) | `stack/` (Go/Ginkgo suite, `E2E_HA=1` flips helm replica values + unlocks disruption specs) | same, with `E2E_HA=1` + `E2E_MIGRATIONS_DIR` | `release-e2e.yaml` job `golden-path` (matrix `ha: true`) → `e2e-stack.yaml` (`mode: gate`) on Release PRs | Yes — Release-PR gate |
 | API schema conformance | `api/api_schema_e2e_test.go` | `go test -tags=e2e` inside the inari-server checkout at the pinned tag | `e2e-stack.yaml` step "Run api-schema e2e against the live stack" (after the stack suite, `mode: gate` only) | Yes — Release-PR gate |
 | Console UI e2e | `ui/` (Playwright Test) + `lib/ui-proxy.mjs` + `ui/seed/seed-personas.mjs` | `npx playwright test --config playwright.config.ci.ts --grep @p0 --grep-invert @quarantine` in `ui/` | `e2e-stack.yaml` step "Run console UI e2e (Playwright)" on BOTH gate HA matrix legs (after api-schema) | Yes — Release-PR gate |
-| Golden path (nightly, incl. quarantined Go tests) | `stack/` (Go suite) | same as the fast leg, plus `-args -include-quarantined` so `suite.Quarantined` tests run | `e2e-nightly.yaml` job `nightly-stack` → `e2e-stack.yaml` (`mode: nightly`, cron 03:17 UTC + `workflow_dispatch`) | No — nightly only, non-blocking |
+| Golden path (nightly, incl. quarantined Go specs) | `stack/` (Go/Ginkgo suite) | same as the fast leg, but the label filter is `p0\|\|p1\|\|p2` so `Label("quarantine")` specs run | `e2e-nightly.yaml` job `nightly-stack` → `e2e-stack.yaml` (`mode: nightly`, cron 03:17 UTC + `workflow_dispatch`) | No — nightly only, non-blocking |
 | Console UI e2e (full, incl. quarantine) | `ui/` (Playwright Test) | `npx playwright test --config playwright.config.ci.ts --grep "@p0\|@p1\|@p2"` (includes `@quarantine`, `continue-on-error`) | `e2e-nightly.yaml` job `nightly-stack` → `e2e-stack.yaml` (`mode: nightly`) — same single bring-up as the Go suite | No — nightly only, non-blocking |
 | kubectl access | `kubectl/kubectl-access.sh` | bash script (docker etcd + kube-apiserver; no kind) | not wired into CI yet | No — manual scenario |
 | kubectl tunnel (gateway) | `kubectl/kubectl-tunnel.sh` | bash script (docker etcd + kube-apiserver + Keycloak + postgres + OpenFGA + kubeproxy + tunnel-agent; no kind). Builds `inari/kubeproxy:e2e` and `inari/agent:e2e` from sibling checkouts (`INARI_SERVER_DIR`/`INARI_AGENT_DIR`); asserts impersonation, 503 upgrade path, 410 kill-switch, per-cluster client revoke, max-lifetime reaper | `e2e-nightly.yaml` job `kubectl-tunnel` (builds inari-server at the resolved tag + inari-agent main) | No — nightly only, non-blocking |
@@ -87,13 +87,13 @@ The gate NEVER runs a quarantined test — the direct analog of inari-server's
   excluded from the gate (`--grep-invert @quarantine`) and run only in the
   nightly. De-quarantine (remove the tag, close the issue) once the test
   has been stable in the nightly for ~2 weeks.
-- **Quarantined Go tests** (stack suite): call `suite.Quarantined(t,
-  "flake: <reason>, issue #NNN")` as the first statement of the flaky
-  test/subtest body (`stack/suite/quarantine.go`). It skips unless the suite
-  runs with `-args -include-quarantined` — the runtime-flag analog of
-  inari-server's `flaky` build tag. The gate NEVER sets the flag; the
-  nightly (`mode: nightly`) always does. De-quarantine by removing the
-  `Quarantined` call once stable in the nightly for ~2 weeks.
+- **Quarantined Go specs** (stack suite): label the spec
+  `Label("quarantine")` (see `stack/suite/labels.go`), with the issue
+  number/reason in a comment. The release gate's label filter
+  (`(p0||smoke)&&!quarantine`) never selects it; the nightly filter
+  (`p0||p1||p2`) always does — the label analog of inari-server's `flaky`
+  build tag. De-quarantine by removing the label once stable in the nightly
+  for ~2 weeks.
 - **Quarantine automation** (`ui/quarantine-issues.mjs`, nightly only):
   aggregates the last 7 days of `ui-e2e-flakes-*` artifacts; a test flaky in
   2+ nightly runs within the window gets an issue titled
@@ -109,18 +109,18 @@ Prereqs: `docker`, `kind`, `kubectl`, `helm`, `jq`, `git`, Go, plus checkouts
 of the `inari-agent` and `inari-operator` repos next to this one (or set
 `AGENT_CHART_DIR` / `OPERATOR_CHART_DIR` explicitly). Build the e2e images
 first (`inari/server:e2e` from inari-server, `inari/agent:e2e` from
-inari-agent). For the HA assertions also set `SERVER_MIGRATIONS_DIR` to the
+inari-agent). For the HA assertions also set `E2E_MIGRATIONS_DIR` to the
 inari-server checkout's `internal/db/migrations`.
 
 One command (shell→Go migration phase 3 — `golden-path.sh` is deleted):
-the Go stack suite provisions the whole stack in-process (kind cluster +
-git hostPath → operators → helm charts in dependency layers → KC seeding →
-tenant/cluster/agent) and then asserts:
+the Go/Ginkgo stack suite provisions the whole stack in-process (kind
+cluster + git hostPath → operators → helm charts in dependency layers → KC
+seeding → tenant/cluster/agent) and then asserts:
 
 ```sh
 cd scripts/e2e/stack
 KEEP_CLUSTER=true E2E_HANDOFF_PATH=/tmp/inari-e2e-handoff.json \
-  go test -tags=e2e -count=1 -timeout 40m ./...    # add E2E_HA=1 + SERVER_MIGRATIONS_DIR for the HA leg
+  go test -tags=e2e -count=1 -timeout 40m ./...    # add E2E_HA=1 + E2E_MIGRATIONS_DIR for the HA leg
 ```
 
 `KEEP_CLUSTER=true` keeps the kind cluster and the git host dir alive after
@@ -129,6 +129,15 @@ tears both down at test end. Pointing `E2E_HANDOFF_PATH` at an EXISTING
 handoff file skips provisioning entirely and asserts against that
 already-running stack (fast local reruns). `-timeout` must exceed go
 test's 10m default — bring-up + assertions take longer.
+
+The suite is Ginkgo v2: specs carry the canonical labels
+(`stack/suite/labels.go` — one priority label `p0|p1|p2` each, plus `smoke`/
+surface labels and `quarantine`). Select subsets with
+`-args --ginkgo.label-filter=...` (e.g. `"(p0||smoke)&&!quarantine"` for the
+release gate, `p0||p1||p2` for the nightly incl. quarantine) and emit JUnit
+with `--ginkgo.junit-report=junit.xml`. On the live e2e environment the
+suite attaches via `E2E_HANDOFF_CONFIGMAP=<namespace>/e2e-handoff` (the
+ConfigMap the seed step writes) instead of provisioning kind.
 
 Env knobs (defaults in `stack/suite/provision.go`): `CLUSTER_NAME`,
 `NAMESPACE`, `TENANT`, `SERVER_IMAGE` / `AGENT_IMAGE`, `HELM_CHARTS_DIR`
@@ -142,8 +151,8 @@ fixed git root — CI's image-preload path; locals leave both unset),
 cache hit; the restored `~/.config/helm` + `~/.cache/helm` already carry
 the repo config and indexes),
 `E2E_PROVISION_ONLY=1` (bring-up without assertions — local use only; CI
-no longer uses it: the nightly asserts too, incl. quarantined tests via
-`-args -include-quarantined`).
+no longer uses it: the nightly asserts too, incl. quarantined specs via
+`--ginkgo.label-filter=p0||p1||p2`).
 
 ## CI caching
 

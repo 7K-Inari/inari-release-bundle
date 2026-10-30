@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"testing"
 
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/kind"
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/kube"
@@ -48,7 +47,7 @@ nodes:
 // at test end. When E2E_HANDOFF_PATH is set the handoff JSON is written
 // there (and the git host dir survives either way — later CI steps and
 // local reruns consume materialized state repos from it).
-func Provision(t *testing.T) *Env {
+func Provision(t TB) *Env {
 	t.Helper()
 	c := LoadProvisionConfig(t)
 
