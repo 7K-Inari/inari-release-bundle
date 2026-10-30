@@ -32,7 +32,8 @@ scripts/e2e/
 └── stack/                      # golden-path suite — provisions AND asserts (self-contained Go
     │                           #   module, tag e2e; shell→Go migration complete, golden-path.sh
     │                           #   deleted in phase 3)
-    ├── main_test.go              # TestGoldenPath: in-process bring-up + ordered assertion phases
+    ├── main_test.go              # TestGoldenPath: in-process bring-up + ordered assertion phases;
+    │                           #   TestRenderPath: M5W2 render-path validation (handoff-attached)
     ├── provision_test.go         # TestProvisionStack/TestProvisionAgent (tag e2eprovision —
     │                           #   targeted chart-install reruns, excluded from the plain e2e run)
     ├── suite/                    # provide.go (kind/hostPath/operators) + provision.go (helm layers)
@@ -47,10 +48,11 @@ scripts/e2e/
 
 | Suite | Path | Runner | CI trigger | Gating |
 |---|---|---|---|---|
-| Golden path (fast leg) | `stack/` (Go suite, `E2E_HA=0`) | `go test -tags=e2e -count=1 -timeout 40m -json ./...` from `scripts/e2e/stack/` (nested module — won't resolve from the repo root): provisions the whole kind stack in-process, then asserts. Quarantined Go tests skip (no `-include-quarantined`). | `release-e2e.yaml` job `golden-path` (matrix `ha: false`) → reusable `e2e-stack.yaml` (`mode: gate`) on Release PRs | Yes — Release-PR gate |
-| Golden path (HA leg) | `stack/` (Go suite, `E2E_HA=1` flips helm replica values + unlocks disruption subtests) | same, with `E2E_HA=1` + `SERVER_MIGRATIONS_DIR` | `release-e2e.yaml` job `golden-path` (matrix `ha: true`) → `e2e-stack.yaml` (`mode: gate`) on Release PRs | Yes — Release-PR gate |
-| API schema conformance | `api/api_schema_e2e_test.go` | `go test -tags=e2e` inside the inari-server checkout at the pinned tag | `e2e-stack.yaml` step "Run api-schema e2e against the live stack" (after the stack suite, `mode: gate` only) | Yes — Release-PR gate |
-| Console UI e2e | `ui/` (Playwright Test) + `lib/ui-proxy.mjs` + `ui/seed/seed-personas.mjs` | `npx playwright test --config playwright.config.ci.ts --grep @p0 --grep-invert @quarantine` in `ui/` | `e2e-stack.yaml` step "Run console UI e2e (Playwright)" on BOTH gate HA matrix legs (after api-schema) | Yes — Release-PR gate |
+| Golden path (fast leg) | `stack/` (Go suite, `E2E_HA=0`) | `go test -tags=e2e -count=1 -timeout 40m -json ./...` from `scripts/e2e/stack/` (nested module — won't resolve from the repo root): provisions the whole kind stack in-process, then asserts. Quarantined Go tests skip (no `-include-quarantined`). | `e2e-nightly.yaml` job `nightly-stack` → reusable `e2e-stack.yaml` (`mode: nightly`); `mode: gate` no longer has a caller — removed from `release-e2e.yaml` 2026-10-29 (owner decision: ephemeral kind stack too fragile/slow to gate on; live-environment rework pending) | No — nightly/manual only |
+| Golden path (HA leg) | `stack/` (Go suite, `E2E_HA=1` flips helm replica values + unlocks disruption subtests) | same, with `E2E_HA=1` + `SERVER_MIGRATIONS_DIR` | none since the 2026-10-29 gate removal (nightly runs non-HA); manual or `e2e-stack.yaml` dispatch | No — manual only |
+| Render-path validation (M5W2 operator sunset) | `stack/suite/renderpath.go` (`TestRenderPath`) | handoff-attached to a provisioned stack: provision with `KEEP_CLUSTER=true E2E_PROVISION_ONLY=1 E2E_HANDOFF_PATH=… go test -tags=e2e -run TestGoldenPath ./scripts/e2e/stack/`, then `E2E_HANDOFF_PATH=… go test -tags=e2e -run TestRenderPath ./scripts/e2e/stack/` | none — manual validation suite | No — manual only |
+| API schema conformance | `api/api_schema_e2e_test.go` | `go test -tags=e2e` inside the inari-server checkout at the pinned tag | `e2e-stack.yaml` step "Run api-schema e2e against the live stack" (after the stack suite, `mode: gate` only — no current caller; see golden-path note) | No — runs only on `mode: gate` dispatch |
+| Console UI e2e | `ui/` (Playwright Test) + `lib/ui-proxy.mjs` + `ui/seed/seed-personas.mjs` | `npx playwright test --config playwright.config.ci.ts --grep @p0 --grep-invert @quarantine` in `ui/` | `e2e-stack.yaml` step "Run console UI e2e (Playwright)" (`mode: gate` — no current caller; the nightly row below is the live CI path) | No — runs only on `mode: gate` dispatch |
 | Golden path (nightly, incl. quarantined Go tests) | `stack/` (Go suite) | same as the fast leg, plus `-args -include-quarantined` so `suite.Quarantined` tests run | `e2e-nightly.yaml` job `nightly-stack` → `e2e-stack.yaml` (`mode: nightly`, cron 03:17 UTC + `workflow_dispatch`) | No — nightly only, non-blocking |
 | Console UI e2e (full, incl. quarantine) | `ui/` (Playwright Test) | `npx playwright test --config playwright.config.ci.ts --grep "@p0\|@p1\|@p2"` (includes `@quarantine`, `continue-on-error`) | `e2e-nightly.yaml` job `nightly-stack` → `e2e-stack.yaml` (`mode: nightly`) — same single bring-up as the Go suite | No — nightly only, non-blocking |
 | kubectl access | `kubectl/kubectl-access.sh` | bash script (docker etcd + kube-apiserver; no kind) | not wired into CI yet | No — manual scenario |
@@ -60,7 +62,9 @@ scripts/e2e/
 
 ```
 release-e2e.yaml  (Release-PR gate: gate → resolve → server-integration)
-└── golden-path (matrix ha:[false,true])  ──uses──▶ e2e-stack.yaml (mode=gate, 7d artifacts)
+                  (the golden-path e2e-stack leg was REMOVED 2026-10-29, owner
+                   decision — e2e-stack.yaml mode=gate currently has no caller;
+                   the stack is being reworked onto a live persistent env)
 
 e2e-nightly.yaml  (cron + dispatch, non-blocking)
 ├── resolve (appVersion → server tag)
@@ -79,7 +83,8 @@ failure-only 7 days; nightly artifacts (`ui-e2e-nightly`,
 The gate NEVER runs a quarantined test — the direct analog of inari-server's
 `flaky` build-tag convention.
 
-- **Gate command in effect** (release-e2e.yaml, both HA legs):
+- **Gate command** (`e2e-stack.yaml` `mode: gate` — currently dispatch-only,
+  since the 2026-10-29 release-gate removal):
   `npx playwright test --config playwright.config.ci.ts --grep @p0 --grep-invert @quarantine`.
   CI runs with `retries: 2`, so a test that passes only after a retry is
   green in the gate but recorded as a flake candidate.
