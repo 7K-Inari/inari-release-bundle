@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -45,8 +44,18 @@ import (
 //     project/dns/namespace/realm); a self-signed ClusterIssuer fixture
 //     proves the native-resource path, and the absence of issuer rendering
 //     is a report finding.
-func RenderPath(t *testing.T) {
-	e := Load(t)
+//
+// The phases are ordered and stateful (each builds on the previous one's
+// mutations), so the Ginkgo spec composes them in an Ordered container via
+// NewRenderPath + the phase methods below. The suite is MANUAL-ONLY: the
+// specs carry no priority label (gate/nightly filters never select them);
+// run them explicitly with --ginkgo.label-filter=renderpath.
+//
+// NewRenderPath keeps the toolbox alive and returns the phase state bound
+// to the suite's shared Env (Load already ran in BeforeSuite — the render
+// path never provisions or attaches on its own).
+func NewRenderPath(t TB, e *Env) *RenderPath {
+	t.Helper()
 	// The toolbox is a bare `sleep 3600` pod that expires on long-running
 	// validation sessions — every API call execs through it, so keep it
 	// alive (idempotent: recreates only when not Running).
@@ -64,7 +73,7 @@ func RenderPath(t *testing.T) {
 			t.Fatalf("toolbox not ready: %v", err)
 		}
 	}
-	r := &renderPath{
+	return &RenderPath{
 		Env:       e,
 		tenantNS:  "tenant-" + e.Tenant,
 		chartsDir: envOr("HELM_CHARTS_DIR", filepath.Clean(filepath.Join(stackDir(), "../../.."))),
@@ -73,22 +82,11 @@ func RenderPath(t *testing.T) {
 		fileURL:   "file:///var/lib/inari/git/platform.git",
 		gitURL:    "git://git-daemon.argocd.svc:9418/platform.git",
 	}
-	t.Run("argocd_install", r.argocdInstall)
-	t.Run("git_daemon", r.gitDaemon)
-	t.Run("platform_graphs", r.platformGraphs)
-	t.Run("render_cutover", r.renderCutover)
-	t.Run("render_commit", r.renderCommit)
-	t.Run("argocd_sync", r.argocdSync)
-	t.Run("appproject_enforced", r.appProjectEnforced)
-	t.Run("dnsendpoint_accepted", r.dnsEndpointAccepted)
-	t.Run("kro_children", r.kroChildren)
-	t.Run("clusterissuer_ready", r.clusterIssuerFixture)
-	t.Run("status_streaming", r.statusStreaming)
-	t.Run("addon_schema_422", r.addonSchema422)
-	t.Run("rgd_teardown", r.rgdTeardown)
 }
 
-type renderPath struct {
+// RenderPath carries the render-path validation state across the ordered
+// phases (resolved git-daemon pod, derived names, repo URLs).
+type RenderPath struct {
 	*Env
 	tenantNS  string
 	chartsDir string
@@ -101,9 +99,9 @@ type renderPath struct {
 
 // --- setup phases ---------------------------------------------------------
 
-// argocdInstall side-loads the (docker-cached) ArgoCD images and runs the
+// ArgoCDInstall side-loads the (docker-cached) ArgoCD images and runs the
 // idempotent day-0 installer.
-func (r *renderPath) argocdInstall(t *testing.T) {
+func (r *RenderPath) ArgoCDInstall(t TB) {
 	if err := kind.LoadImages(r.cluster,
 		"quay.io/argoproj/argocd:v3.1.5",
 		"public.ecr.aws/docker/library/redis:7.2.7-alpine",
@@ -117,9 +115,9 @@ func (r *renderPath) argocdInstall(t *testing.T) {
 	}
 }
 
-// gitDaemon serves the kind node's /git hostPath (the local git provider's
+// GitDaemon serves the kind node's /git hostPath (the local git provider's
 // root) over git:// so the in-cluster ArgoCD can clone the platform repo.
-func (r *renderPath) gitDaemon(t *testing.T) {
+func (r *RenderPath) GitDaemon(t TB) {
 	manifest := `
 apiVersion: apps/v1
 kind: Deployment
@@ -170,7 +168,7 @@ spec:
 // gitInPod runs git inside the git-daemon pod (which mounts the same /git
 // hostPath the server writes to) — the harness's only channel to the repos,
 // since the suite host is not the docker host here.
-func (r *renderPath) gitInPod(t *testing.T, args ...string) (string, error) {
+func (r *RenderPath) gitInPod(t TB, args ...string) (string, error) {
 	t.Helper()
 	if r.gitPod == "" {
 		pod, err := kube.Kubectl("-n", "argocd", "get", "pod", "-l", "app=git-daemon",
@@ -183,10 +181,10 @@ func (r *renderPath) gitInPod(t *testing.T, args ...string) (string, error) {
 	return kube.ExecInPod("argocd", r.gitPod, args...)
 }
 
-// platformGraphs installs the W1-2 chart (tenantnamespace RGD + Keycloak
+// PlatformGraphs installs the W1-2 chart (tenantnamespace RGD + Keycloak
 // claim XRDs/Compositions) the way gitops/platform/platform-rgd.yaml does,
 // directly from the working tree.
-func (r *renderPath) platformGraphs(t *testing.T) {
+func (r *RenderPath) PlatformGraphs(t TB) {
 	// keycloak.enabled stays false: the chart's claim XRDs use
 	// claimNames, which apiextensions.crossplane.io/v2 (the mirrored
 	// Crossplane 2.4.3) rejects ("Claims aren't supported") — W3-2 must
@@ -208,10 +206,10 @@ func (r *renderPath) platformGraphs(t *testing.T) {
 		"crd/tenantnamespaces.stacks.inari.io"))
 }
 
-// renderCutover points the server at the platform repo and flips the
+// RenderCutover points the server at the platform repo and flips the
 // render-cutover flag, then triggers a reconcile so the tenant's manifests
 // are re-rendered as source descriptors and committed.
-func (r *renderPath) renderCutover(t *testing.T) {
+func (r *RenderPath) RenderCutover(t TB) {
 	if _, err := kube.Kubectl("-n", r.Namespace, "set", "env",
 		"deployment/inari-server", "INARI_PLATFORM_GITOPS_REPO="+r.repoName); err != nil {
 		t.Fatalf("set INARI_PLATFORM_GITOPS_REPO: %v", err)
@@ -227,10 +225,10 @@ func (r *renderPath) renderCutover(t *testing.T) {
 	require.Equal(t, 202, code, "reconcile: %s", body)
 }
 
-// renderCommit polls the platform repo for the descriptor layout the
+// RenderCommit polls the platform repo for the descriptor layout the
 // renderer emits (render.go renderTenantDescriptors) — read-only ops run
 // against the bare repo inside the git-daemon pod.
-func (r *renderPath) renderCommit(t *testing.T) {
+func (r *RenderPath) RenderCommit(t TB) {
 	var tree string
 	poll.Eventually(t, 120*time.Second, 3*time.Second, func() (bool, error) {
 		out, err := r.gitInPod(t, "git", "--git-dir=/git/platform.git",
@@ -269,11 +267,11 @@ func (r *renderPath) renderCommit(t *testing.T) {
 	assert.Contains(t, inst, "name: "+r.tenantNS)
 }
 
-// argocdSync rewrites the file:// repo URLs to the git daemon (documented
+// ArgoCDSync rewrites the file:// repo URLs to the git daemon (documented
 // harness adaptation) inside the daemon pod, pushes over the local
 // filesystem path, then syncs the tenant tree through a root app-of-apps
 // and waits for the child Applications to converge.
-func (r *renderPath) argocdSync(t *testing.T) {
+func (r *RenderPath) ArgoCDSync(t TB) {
 	// Clone → rewrite repo URLs → add the ClusterIssuer fixture → push, all
 	// in-pod (file paths, no network git). Idempotent: a rerun after a
 	// partially successful earlier attempt finds URLs already rewritten and
@@ -394,9 +392,9 @@ spec:
 
 // --- behavior assertions ---------------------------------------------------
 
-// appProjectEnforced checks the rendered AppProject's guardrails and that
+// AppProjectEnforced checks the rendered AppProject's guardrails and that
 // ArgoCD actually enforces them against an out-of-policy Application.
-func (r *renderPath) appProjectEnforced(t *testing.T) {
+func (r *RenderPath) AppProjectEnforced(t TB) {
 	out, err := kube.Kubectl("-n", "argocd", "get", "appproject", r.tenantNS, "-o", "json")
 	require.NoError(t, err, "tenant AppProject missing")
 	var proj struct {
@@ -454,10 +452,10 @@ spec:
 	}
 }
 
-// dnsEndpointAccepted proves ExternalDNS picked the rendered DNSEndpoint up
+// DNSEndpointAccepted proves ExternalDNS picked the rendered DNSEndpoint up
 // (the e2e provider is a dead rfc2136 address by design, so evidence is the
 // record entering the sync loop's plan, not a real DNS mutation).
-func (r *renderPath) dnsEndpointAccepted(t *testing.T) {
+func (r *RenderPath) DNSEndpointAccepted(t TB) {
 	if _, err := kube.Kubectl("-n", r.tenantNS, "get", "dnsendpoint", r.Tenant); err != nil {
 		t.Fatalf("DNSEndpoint %s not synced into %s: %v", r.Tenant, r.tenantNS, err)
 	}
@@ -471,9 +469,9 @@ func (r *renderPath) dnsEndpointAccepted(t *testing.T) {
 	}, "external-dns sync loop accepted "+r.tenantNS+".7kgroup.org")
 }
 
-// kroChildren asserts the RGD instance materialized exactly the operator's
+// KROChildren asserts the RGD instance materialized exactly the operator's
 // old TenantNamespace child set (minus impersonation, per D3).
-func (r *renderPath) kroChildren(t *testing.T) {
+func (r *RenderPath) KROChildren(t TB) {
 	require.NoError(t, kube.WaitCondition("default", "condition=Ready", "180s",
 		"tenantnamespace.stacks.inari.io/"+r.tenantNS))
 	for _, res := range []string{"namespace/" + r.tenantNS} {
@@ -496,19 +494,19 @@ func (r *renderPath) kroChildren(t *testing.T) {
 	assert.Equal(t, "admin", rb)
 }
 
-// clusterIssuerFixture waits for the harness ClusterIssuer to go Ready —
+// ClusterIssuerFixture waits for the harness ClusterIssuer to go Ready —
 // proving the native cert-manager resource path on this cluster (the
 // server-side render of issuers is a documented finding, not covered here).
-func (r *renderPath) clusterIssuerFixture(t *testing.T) {
+func (r *RenderPath) ClusterIssuerFixture(t TB) {
 	require.NoError(t, kube.WaitCondition("", "condition=Ready", "120s",
 		"clusterissuer/e2e-selfsigned"))
 }
 
-// statusStreaming configures the agent's watch list for the new GVRs
+// StatusStreaming configures the agent's watch list for the new GVRs
 // (W1-3's INARI_STATUS_WATCHES), grants the reads the chart RBAC lacks
 // (finding), and asserts the rendered resources' status reaches the
 // Resources Inventory rows.
-func (r *renderPath) statusStreaming(t *testing.T) {
+func (r *RenderPath) StatusStreaming(t TB) {
 	// Chart-RBAC gap workaround (report finding: clusterrole.yaml grants
 	// cert-manager.io/externaldns.k8s.io/argoproj.io but not the RGD/claim
 	// groups).
@@ -584,10 +582,10 @@ subjects:
 	assert.True(t, dnsSeen, "dns-zone row present in Resources Inventory")
 }
 
-// addonSchema422 is the addon track's exit criterion: schema-invalid values
+// AddonSchema422 is the addon track's exit criterion: schema-invalid values
 // are rejected with 422 field-level errors before anything is committed;
 // a valid adopt succeeds as the control (and is orphaned afterwards).
-func (r *renderPath) addonSchema422(t *testing.T) {
+func (r *RenderPath) AddonSchema422(t TB) {
 	code, body, err := r.API.AdoptAddon(r.ClusterID, "platform:cert-manager",
 		map[string]any{"version": "v1.16.2", "values": map[string]any{"replicaCount": 0}})
 	require.NoError(t, err)
@@ -622,11 +620,11 @@ func (r *renderPath) addonSchema422(t *testing.T) {
 	assert.Contains(t, []int{200, 204}, code, "cleanup orphan: %s", body)
 }
 
-// rgdTeardown deletes the KRO instance with ArgoCD self-heal suspended and
+// RGDTeardown deletes the KRO instance with ArgoCD self-heal suspended and
 // asserts the children cascade via KRO owner refs (no finalizer machinery);
 // the agent's delete event must flip the inventory row off ready; then
 // ArgoCD re-creates the instance and the row recovers (full round-trip).
-func (r *renderPath) rgdTeardown(t *testing.T) {
+func (r *RenderPath) RGDTeardown(t TB) {
 	nsApp := "tenant-" + r.Tenant + "-namespace"
 	// Suspend self-heal (merge-patch null removes the key — an empty-object
 	// merge would leave it intact; idempotent across reruns).
