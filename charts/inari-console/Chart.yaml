@@ -4,7 +4,7 @@ description: >-
   Inari web console (inari-ui) — static bundle pulled from the OCI artifact,
   served by nginx with runtime config.js
 type: application
-version: 0.3.1  # x-release-please-version
+version: 0.4.0 # x-release-please-version
 appVersion: 2.0.0
 maintainers:
   - name: 7K-Inari
