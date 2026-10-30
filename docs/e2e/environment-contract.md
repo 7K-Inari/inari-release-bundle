@@ -78,8 +78,7 @@ aliasing glued them together. On the live env both are the same real-ingress
 URL, so the contract has exactly one `E2E_KC_URL`. Do not reintroduce a
 browser/API split.
 
-### 1.3 Personas (summary — the authoritative table lives in
-`scripts/e2e/ui/README.md`)
+### 1.3 Personas (summary — the authoritative table lives in `scripts/e2e/ui/README.md`)
 
 Fixed personas seeded idempotently by the seed step: `dev-admin` (admin,
 suite default identity), `e2e-operator`, `e2e-editor`, `e2e-viewer`
