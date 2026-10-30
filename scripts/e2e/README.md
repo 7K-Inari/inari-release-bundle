@@ -1,5 +1,12 @@
 # scripts/e2e — end-to-end suite map
 
+> **Migration contracts:** the target environment contract and label taxonomy
+> for the live-env migration are normative in
+> [`docs/e2e/environment-contract.md`](../../docs/e2e/environment-contract.md)
+> and [`docs/e2e/test-taxonomy.md`](../../docs/e2e/test-taxonomy.md). This
+> README documents the current kind-era implementation; the docs above record
+> it as the migration baseline.
+
 Canonical home of the Inari e2e suites (relocated from the inari-server
 repo's `e2e/` directory). `.github/workflows/release-e2e.yaml` is the CI gate
 that runs them; its golden-path legs and the nightly both delegate the full
@@ -130,20 +137,10 @@ handoff file skips provisioning entirely and asserts against that
 already-running stack (fast local reruns). `-timeout` must exceed go
 test's 10m default — bring-up + assertions take longer.
 
-Env knobs (defaults in `stack/suite/provision.go`): `CLUSTER_NAME`,
-`NAMESPACE`, `TENANT`, `SERVER_IMAGE` / `AGENT_IMAGE`, `HELM_CHARTS_DIR`
-plus the per-chart `*_CHART_DIR` overrides, `VAULT_DEV_TOKEN`,
-`INARI_E2E_CACHE_BACKEND` (memory|redis; redis default on the HA leg),
-`KIND_NODE_IMAGE` (default: pinned `kindest/node` digest from
-`stack/testdata/images.txt`; empty = kind's built-in default),
-`E2E_ADOPT_CLUSTER=1` + `GIT_HOST_DIR` (reuse a pre-created cluster and a
-fixed git root — CI's image-preload path; locals leave both unset),
-`HELM_REPOS_SEEDED=1` (skip helm repo add/update — CI sets it on a helm
-cache hit; the restored `~/.config/helm` + `~/.cache/helm` already carry
-the repo config and indexes),
-`E2E_PROVISION_ONLY=1` (bring-up without assertions — local use only; CI
-no longer uses it: the nightly asserts too, incl. quarantined tests via
-`-args -include-quarantined`).
+Env knobs: the full kind-era variable reference (defaults, semantics, and
+the old→new mapping) is maintained as the migration baseline in
+[`docs/e2e/environment-contract.md` §2.1](../../docs/e2e/environment-contract.md)
+— this README intentionally does not duplicate it.
 
 ## CI caching
 
