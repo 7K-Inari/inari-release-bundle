@@ -6,6 +6,8 @@ package inariapi
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/kube"
 )
@@ -42,6 +44,85 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(out), nil
+}
+
+// DoRaw issues one authenticated request WITHOUT curl -f, returning the
+// HTTP status code and raw body — for assertions on error responses (e.g.
+// the addons 422 schema-rejection contract), where do() would lose the
+// body to curl's exit 22.
+func (c *Client) DoRaw(method, path string, body any) (int, string, error) {
+	tok, err := c.Token()
+	if err != nil {
+		return 0, "", fmt.Errorf("minting token: %w", err)
+	}
+	args := []string{"curl", "-s", "-m", "20", "-w", "\n%{http_code}",
+		"-X", method, "-H", "Authorization: Bearer " + tok}
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return 0, "", err
+		}
+		args = append(args, "-H", "Content-Type: application/json", "-d", string(raw))
+	}
+	args = append(args, c.base()+path)
+	out, err := kube.ExecInPod(c.NS, c.Toolbox, args...)
+	if err != nil {
+		return 0, "", err
+	}
+	idx := strings.LastIndex(out, "\n")
+	if idx < 0 {
+		return 0, "", fmt.Errorf("curl output lacks status line: %q", out)
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(out[idx+1:]))
+	if err != nil {
+		return 0, "", fmt.Errorf("parsing curl status from %q: %w", out, err)
+	}
+	return code, out[:idx], nil
+}
+
+// SetPlatformFeatureFlag sets a platform-scoped runtime feature flag
+// (PUT /api/v1/platform/feature-flags/{key}; requires org_creator).
+func (c *Client) SetPlatformFeatureFlag(key string, value bool) (int, string, error) {
+	return c.DoRaw("PUT", "/platform/feature-flags/"+key, map[string]any{"value": value})
+}
+
+// ReconcilePlatformResources triggers the platform-resources reconcile for
+// the suite tenant (re-render + commit of tenant manifests, resync notify).
+func (c *Client) ReconcilePlatformResources() (int, string, error) {
+	return c.DoRaw("POST", "/tenants/"+c.Tenant+"/platform-resources/reconcile", nil)
+}
+
+// PlatformResource is the Resources Inventory row shape the suite asserts
+// against (subset of the server's resourceView).
+type PlatformResource struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// ListPlatformResources returns the suite tenant's Resources Inventory rows.
+func (c *Client) ListPlatformResources() ([]PlatformResource, error) {
+	var out struct {
+		Resources []PlatformResource `json:"resources"`
+	}
+	if err := c.GetJSON("/tenants/"+c.Tenant+"/platform-resources", &out); err != nil {
+		return nil, err
+	}
+	return out.Resources, nil
+}
+
+// AdoptAddon posts an adopt request, returning the raw status/body so both
+// the 422 rejection and the success contract are assertable.
+func (c *Client) AdoptAddon(clusterID, catalogItem string, payload map[string]any) (int, string, error) {
+	return c.DoRaw("POST", "/tenants/"+c.Tenant+"/clusters/"+clusterID+"/addons/"+catalogItem+"/adopt", payload)
+}
+
+// DeleteAddon orphans an adopted addon (DELETE /api/v1/tenants/{org}/addons/{id})
+// — cleanup for the adopt control case.
+func (c *Client) DeleteAddon(addonID string) (int, string, error) {
+	return c.DoRaw("DELETE", "/tenants/"+c.Tenant+"/addons/"+addonID, nil)
 }
 
 // GetJSON issues GET and unmarshals into out.

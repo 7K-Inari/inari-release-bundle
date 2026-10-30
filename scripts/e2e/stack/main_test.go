@@ -28,3 +28,14 @@ import (
 func TestGoldenPath(t *testing.T) {
 	suite.Run(t)
 }
+
+// TestRenderPath is the M5W2 operator-sunset Phase 1 validation: the
+// server-rendered native resources + KRO instance sync Healthy via ArgoCD,
+// RGD teardown cascades, agent status streaming works on the new GVRs, and
+// addon schema validation rejects bad values with 422. Run against the
+// golden-path stack (provision first or attach via E2E_HANDOFF_PATH):
+//
+//	KEEP_CLUSTER=true go test -tags=e2e -count=1 -timeout 45m -run TestRenderPath ./...
+func TestRenderPath(t *testing.T) {
+	suite.RenderPath(t)
+}
