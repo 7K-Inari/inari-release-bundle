@@ -4,11 +4,12 @@ name: e2e-stack
 # plan §3 phase 4 + §6.4/§6.5): the ONE shared definition of stack bring-up,
 # follow-on suites, artifacts and teardown. Callers:
 #   - release-e2e.yaml job golden-path (mode=gate, HA matrix) — Release-PR
-#     gate; quarantined tests (Playwright @quarantine AND Go
-#     -include-quarantined) NEVER run here.
+#     gate; quarantined tests (Playwright @quarantine AND Ginkgo
+#     Label("quarantine")) NEVER run here.
 #   - e2e-nightly.yaml job nightly-stack (mode=nightly, non-HA) — full
 #     Playwright suite incl. @quarantine (continue-on-error) and the Go
-#     stack suite with -args -include-quarantined; artifacts 14 days.
+#     stack suite with the p0||p1||p2 label filter (includes quarantine);
+#     artifacts 14 days.
 #
 # A workflow_call job is job-level: callers cannot add steps before/after,
 # and the api-schema/UI suites must share the runner with the kind cluster —
@@ -26,7 +27,7 @@ on:
         description: >-
           gate: api-schema + Playwright @p0 minus @quarantine, gating.
           nightly: full Playwright @p0|@p1|@p2 incl. @quarantine
-          (continue-on-error) + Go suite with -args -include-quarantined.
+          (continue-on-error) + Go suite with --ginkgo.label-filter=p0||p1||p2.
         required: true
         type: string
       ha:
@@ -341,13 +342,14 @@ jobs:
         # The stack suite provisions the whole stack in-process (kind
         # cluster incl. the git hostPath mount, operators, every helm chart
         # in dependency layers, KC seeding, tenant/cluster/agent), then runs
-        # the golden-path assertions (per-phase failure identity in CI
-        # output). E2E_HA=1 flips the helm replica values AND unlocks the
-        # disruption subtests. Quarantined Go tests (suite.Quarantined)
-        # skip unless -args -include-quarantined is passed — nightly mode
-        # ONLY; the gate never sets it (same rule as inari-server's flaky
-        # build tag). The stack suite is a nested Go module: go test must
-        # run from INSIDE it. -timeout exceeds the 10m go test default.
+        # the golden-path assertions as a Ginkgo suite (per-spec failure
+        # identity + native JUnit in CI output). E2E_HA=1 flips the helm
+        # replica values AND unlocks the disruption specs. Quarantined specs
+        # (Ginkgo Label "quarantine") are excluded by the gate's label
+        # filter — nightly mode selects the full priority surface INCLUDING
+        # quarantine (same rule as inari-server's flaky build tag). The
+        # stack suite is a nested Go module: go test must run from INSIDE
+        # it. -timeout exceeds the 10m go test default.
         working-directory: bundle/scripts/e2e/stack
         env:
           E2E_HA: ${{ inputs.ha && '1' || '0' }}
@@ -361,14 +363,18 @@ jobs:
           # re-fetch every index and defeat the cache).
           HELM_REPOS_SEEDED: ${{ steps.helmcache.outputs.cache-hit == 'true' && '1' || '0' }}
           E2E_HANDOFF_PATH: /tmp/inari-e2e-handoff.json
-          SERVER_MIGRATIONS_DIR: ${{ github.workspace }}/inari-server/internal/db/migrations
-          QUAR_ARGS: ${{ inputs.mode == 'nightly' && '-args -include-quarantined' || '' }}
+          E2E_MIGRATIONS_DIR: ${{ github.workspace }}/inari-server/internal/db/migrations
+          # Space-free label filters: the release gate runs
+          # (p0||smoke)&&!quarantine, the nightly the full p0|p1|p2 surface
+          # including quarantine-labeled specs.
+          GINKGO_LABEL_FILTER: ${{ inputs.mode == 'nightly' && 'p0||p1||p2' || '(p0||smoke)&&!quarantine' }}
         run: |
           set -euo pipefail
           AGENT_CHART_DIR=${{ github.workspace }}/inari-agent/charts/inari-agent
           OPERATOR_CHART_DIR=${{ github.workspace }}/inari-operator/charts/inari-operator
           go test -tags=e2e -count=1 -timeout ${{ inputs.ha && '50m' || '40m' }} -json ./... \
-            $QUAR_ARGS \
+            -args "--ginkgo.label-filter=${GINKGO_LABEL_FILTER}" \
+                  --ginkgo.junit-report=/tmp/golden-path-junit.xml \
             2>&1 | tee /tmp/golden-path-go.json
 
       - name: Run api-schema e2e against the live stack
@@ -655,6 +661,7 @@ jobs:
           name: golden-path-go-${{ env.LEG }}
           path: |
             /tmp/golden-path-go.json
+            /tmp/golden-path-junit.xml
             /tmp/e2e-diag/
           if-no-files-found: ignore
           retention-days: ${{ inputs.retention-days }}
