@@ -317,15 +317,18 @@ spec:
 		t.Fatalf("fixture write: %v", err)
 	}
 
-	// Commit + push only when the tree actually changed. The trailing chown
-	// restores the server pod's ownership (in-pod ops run as root; without
-	// it the server's next reconcile fails updating refs — EACCES).
+	// Commit + push only when the tree actually changed (skip-if-clean must
+	// not mask a genuine commit/push failure, so no blanket `|| true`). The
+	// trailing chown restores the server pod's ownership (in-pod ops run as
+	// root; without it the server's next reconcile fails updating refs —
+	// EACCES).
 	if _, err := r.gitInPod(t, "sh", "-c",
 		"cd /tmp/work && git add -A && "+
-			"! git diff --cached --quiet && "+
+			"if ! git diff --cached --quiet; then "+
 			"git -c user.email=e2e@inari.local -c user.name=e2e commit -q "+
 			"-m 'test: rewrite repo URLs for in-cluster ArgoCD; add ClusterIssuer fixture' && "+
-			"git push -q origin main || true; "+
+			"git push -q origin main || exit 1; "+
+			"fi; "+
 			"chown -R 65532:65532 /git/platform.git"); err != nil {
 		t.Fatalf("in-pod commit/push: %v", err)
 	}
