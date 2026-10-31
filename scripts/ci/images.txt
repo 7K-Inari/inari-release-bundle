@@ -42,8 +42,8 @@ quay.io/jetstack/cert-manager-startupapicheck:v1.21.3
 quay.io/jetstack/cert-manager-webhook:v1.21.3
 # external-dns chart 1.23.0
 registry.k8s.io/external-dns/external-dns:v0.23.0
-# external-secrets chart 2.11.0
-ghcr.io/external-secrets/external-secrets:v2.11.0
+# external-secrets chart 2.14.0
+ghcr.io/external-secrets/external-secrets:v2.14.0
 # kro OCI chart 0.9.4
 registry.k8s.io/kro/kro:v0.9.4
 # crossplane chart 2.4.3

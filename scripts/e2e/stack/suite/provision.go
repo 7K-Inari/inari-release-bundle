@@ -92,8 +92,8 @@ const (
 	// externalDNSAppVersion is the upstream external-dns release tag whose
 	// config/crd/standard manifests carry the DNSEndpoint CRD (the helm
 	// chart does not bundle it). Equals the chart's appVersion.
-	externalDNSAppVersion   = "v0.23.0"
-	esoChartVersion         = "2.11.0"
+	externalDNSAppVersion   = "v0.24.0"
+	esoChartVersion         = "2.14.0"
 	crossplaneChartVersion  = "2.4.3"
 	kroChartVersion         = "0.9.4"
 	providerKeycloakVersion = "v3.2.3"

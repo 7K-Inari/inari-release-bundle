@@ -25,7 +25,7 @@ KEYCLOAK_CONFIG_CLI="adorsys/keycloak-config-cli:6.5.1-26" # charts/inari-platfo
 NATS_CHART_VERSION="2.15.1"      # suite/provision.go installNATS
 OPENFGA_CHART_VERSION="0.2.27"   # suite/provision.go installOpenFGA
 VAULT_CHART_VERSION="0.34.1"     # suite/provision.go installVaultESO
-ESO_CHART_VERSION="2.11.0"       # suite/provision.go installVaultESO
+ESO_CHART_VERSION="2.14.0"       # suite/provision.go installVaultESO
 # Phase 0 hub prereqs (gitops/operators/*.yaml ↔ suite/provision.go constants,
 # pin parity guarded by TestGitOpsPinParity)
 CERT_MANAGER_CHART_VERSION="v1.21.3"  # suite/provision.go certManagerChartVersion
