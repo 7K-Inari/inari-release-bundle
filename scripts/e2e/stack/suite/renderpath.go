@@ -934,15 +934,42 @@ func (r *RenderPath) RGDTeardown(t TB) {
 		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":null}}}`); err != nil {
 		t.Fatalf("suspend self-heal on %s: %v", nsApp, err)
 	}
+
+	// Phase 3 ordering requirement (live finding): a namespaced
+	// provider-keycloak MR's finalizer wedges on namespace termination — the
+	// provider cannot create its ProviderConfigUsage in a terminating
+	// namespace, so the MR never finalizes and the namespace hangs. Tenant
+	// teardown must therefore drain the keycloak XRs (and their MRs +
+	// Keycloak-side resources) BEFORE the namespace goes away. Suspend the
+	// realm app first or self-heal recreates the XR mid-drain.
+	realmApp := "tenant-" + r.Tenant + "-realm"
+	if _, err := kube.Kubectl("-n", "argocd", "patch", "application", realmApp,
+		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":null}}}`); err != nil {
+		t.Fatalf("suspend self-heal on %s: %v", realmApp, err)
+	}
+	for _, gk := range []string{"tenantrealms.identity.inari.io", "tenantclients.identity.inari.io"} {
+		if _, err := kube.Kubectl("-n", r.tenantNS, "delete", gk, "--all", "--wait=false", "--ignore-not-found"); err != nil {
+			t.Fatalf("delete %s: %v", gk, err)
+		}
+	}
+	poll.Eventually(t, 300*time.Second, 5*time.Second, func() (bool, error) {
+		realms, _ := kube.Kubectl("-n", r.tenantNS, "get", "realms.realm.keycloak.m.crossplane.io", "-o", "name")
+		clients, _ := kube.Kubectl("-n", r.tenantNS, "get", "clients.openidclient.keycloak.m.crossplane.io", "-o", "name")
+		return strings.TrimSpace(realms) == "" && strings.TrimSpace(clients) == "", nil
+	}, "provider-keycloak MRs drained from the tenant namespace")
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		token, err := r.KC.MasterToken()
+		if err != nil {
+			return false, nil
+		}
+		return !r.KC.RealmExists(token, r.Tenant), nil
+	}, "tenant realm deleted from Keycloak on XR delete")
+
 	if _, err := kube.Kubectl("-n", "default", "delete",
 		"tenantnamespace.stacks.inari.io", r.tenantNS, "--wait=false", "--ignore-not-found"); err != nil {
 		t.Fatalf("delete KRO instance: %v", err)
 	}
 
-	// The cascade now runs deeper than the KRO children: the tenant's
-	// TenantRealm XR lives in the namespace, so namespace termination waits
-	// on the XR finalizer → Realm MR finalizer → provider-keycloak deleting
-	// the realm in Keycloak. Generous bound.
 	poll.Eventually(t, 420*time.Second, 3*time.Second, func() (bool, error) {
 		_, err := kube.Kubectl("get", "namespace", r.tenantNS)
 		return err != nil, nil // gone
@@ -972,6 +999,12 @@ func (r *RenderPath) RGDTeardown(t TB) {
 	if _, err := kube.Kubectl("-n", "argocd", "patch", "application", nsApp,
 		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":{"prune":false,"selfHeal":true}}}}`); err != nil {
 		t.Fatalf("restore automated sync on %s: %v", nsApp, err)
+	}
+	// The realm app resumes too: the XR re-lands only after the namespace
+	// exists again (drain-before-namespace ordering above).
+	if _, err := kube.Kubectl("-n", "argocd", "patch", "application", realmApp,
+		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":{"prune":false,"selfHeal":true}}}}`); err != nil {
+		t.Fatalf("restore automated sync on %s: %v", realmApp, err)
 	}
 	poll.Eventually(t, 300*time.Second, 5*time.Second, func() (bool, error) {
 		out, err := kube.Kubectl("-n", "argocd", "get", "application", nsApp,
