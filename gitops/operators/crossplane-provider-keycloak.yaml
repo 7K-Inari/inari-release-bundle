@@ -4,8 +4,9 @@
 # Provider CR lands after Crossplane's CRDs (wave -3).
 # The package pin must match scripts/e2e/stack/suite/provision.go
 # providerKeycloakVersion (guarded by TestGitOpsPinParity).
-# NOTE: no ProviderConfig yet — Keycloak credentials wiring arrives with the
-# RGD/compositions task (W1-2) / Phase 3. The Provider is Healthy without it.
+# The ClusterProviderConfig is rendered by charts/inari-platform-graphs
+# (gitops/platform/platform-rgd.yaml, wave 1) with credentials from the
+# inari-platform chart's inari-keycloak-provisioner secret (Phase 3).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
