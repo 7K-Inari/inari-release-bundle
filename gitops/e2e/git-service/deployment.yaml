@@ -22,12 +22,17 @@ spec:
       containers:
         - name: git-daemon
           image: alpine/git:2.45.2
+          # alpine/git ships the git package WITHOUT the git-daemon
+          # subpackage (Alpine split it out; `git daemon` crashes with
+          # "'daemon' is not a git command" — verified live). Install the
+          # matching subpackage at start, then exec the daemon. The apk
+          # fetch needs one-time egress to the Alpine CDN per pod start.
+          command: ["/bin/sh", "-c"]
           args:
-            - daemon
-            - --export-all
-            - --reuseaddr
-            - --base-path=/srv/git
-            - /srv/git
+            - >-
+              apk add --no-cache git-daemon >/dev/null
+              && exec git daemon --export-all --reuseaddr
+              --base-path=/srv/git /srv/git
           ports:
             - name: git
               containerPort: 9418
