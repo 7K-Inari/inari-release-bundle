@@ -246,9 +246,12 @@ tests:
       - matchRegex:
           path: stringData.credentials
           pattern: '"client_id":\s*"inari-keycloak-provisioner"'
+      # FQDN service DNS (the provider runs in crossplane-system — the bare
+      # name would not resolve). Namespace-agnostic pattern: helm-unittest
+      # does not drive .Release.Namespace.
       - matchRegex:
           path: stringData.credentials
-          pattern: '"url":\s*"http://keycloak-service:8080"'
+          pattern: '"url":\s*"http://keycloak-service\.[^".]+\.svc:8080"'
       - matchRegex:
           path: stringData.credentials
           pattern: '"realm":\s*"master"'
