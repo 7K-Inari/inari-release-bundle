@@ -16,11 +16,10 @@ metadata:
     {{- include "platform-config.componentLabels" (dict "root" . "component" "argocd") | nindent 4 }}
 data:
   admin.enabled: {{ .Values.argocd.adminEnabled | quote }}
-  {{- if .Values.argocd.breakGlass.staticTokenEnabled }}
-  # Legacy/break-glass fallback account. Password is set out-of-band via the
-  # argocd CLI (argocd account update-password) — never stored by this chart.
+  # Legacy/break-glass fallback account, always rendered (ClusterDex
+  # parity). Password is set out-of-band via the argocd CLI (argocd account
+  # update-password) — never stored by this chart.
   accounts.inari-breakglass: apiKey, login
-  {{- end }}
   oidc.config: |
     name: Inari SSO (Dex)
     issuer: {{ .Values.argocd.oidc.issuerUrl }}
