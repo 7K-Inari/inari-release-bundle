@@ -2,22 +2,22 @@
 {{- if not .Values.keycloak.issuerBaseURL }}
 {{- fail "keycloak.issuerBaseURL is required when keycloak.enabled=true — public base URL of the hub Keycloak, used for status.issuerURL" }}
 {{- end }}
-# Claim XRD replacing the operator's KeycloakRealm catalog item (sunset plan
-# D1): hub-side self-service tenant realms via provider-keycloak.
+# Namespaced XR replacing the operator's KeycloakRealm catalog item (sunset
+# plan D1): hub-side self-service tenant realms via provider-keycloak.
+# Crossplane v2: claims are gone — with scope: Namespaced the composite
+# resource IS the user-facing resource, so the XR carries the public
+# TenantRealm kind directly (no claimNames; apiextensions.crossplane.io/v2
+# rejects them).
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: xtenantrealms.identity.inari.io
+  name: tenantrealms.identity.inari.io
   labels:
     {{- include "inari-platform-graphs.labels" . | nindent 4 }}
 spec:
   scope: Namespaced
   group: identity.inari.io
   names:
-    kind: XTenantRealm
-    plural: xtenantrealms
-    singular: xtenantrealm
-  claimNames:
     kind: TenantRealm
     plural: tenantrealms
     singular: tenantrealm

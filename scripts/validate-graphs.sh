@@ -94,6 +94,19 @@ echo ">> kubeconform against pinned CRD schemas"
   -schema-location "${SCHEMA_DIR}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
   "$WORK/rendered.yaml"
 
+# kubeconform cannot evaluate CEL (x-kubernetes-validations): the Crossplane
+# v2 XRD schema REJECTS claimNames/connectionSecretKeys that way ("Claims
+# aren't supported in apiextensions.crossplane.io/v2"), which is exactly how
+# the v1-claim XRDs slipped through this script once (W2-4 finding F3).
+# Guard the v1-only fields statically — in this chart they can only appear
+# on XRD specs.
+echo ">> checking rendered XRDs carry no v1-claim fields (CEL gap guard)"
+if grep -nE '^(  )?(claimNames|connectionSecretKeys):' "$WORK/rendered.yaml"; then
+  echo "v1-claim field guard FAILED: apiextensions.crossplane.io/v2 rejects these (CEL)"
+  exit 1
+fi
+echo "   ok: no claimNames/connectionSecretKeys in the rendered chart"
+
 echo ">> checking composed managed-resource apiVersions against provider-keycloak CRDs"
 missing=0
 while IFS= read -r gv; do
@@ -102,7 +115,7 @@ while IFS= read -r gv; do
   # write-back document targets our own XRD (validated above).
   case "$group" in
     *.crossplane.io) ;;
-    *) echo "   skip (own claim API): ${gv}"; continue ;;
+    *) echo "   skip (own XR API): ${gv}"; continue ;;
   esac
   if [ -d "$SCHEMA_DIR/$group" ]; then
     echo "   ok: ${gv}"

@@ -10,7 +10,7 @@
 apiVersion: openidclient.keycloak.m.crossplane.io/v1alpha1
 kind: Client
 metadata:
-  # MR name = claim name (always DNS-valid); the OIDC clientID lives in
+  # MR name = XR name (always DNS-valid); the OIDC clientID lives in
   # forProvider.clientId only, so non-DNS clientIDs can't break the
   # composed resource.
   name: {{ $xr.metadata.name }}
@@ -36,8 +36,8 @@ spec:
     name: @@PROVIDER_CONFIG_REF@@
   {{- if not $spec.public }}
   # Confidential clients only (operator parity): the provider writes
-  # attribute.client_secret here, into the claim's (tenant) namespace.
-  # Name keyed to the claim name (DNS-valid), not clientID.
+  # attribute.client_secret here, into the XR's (tenant) namespace.
+  # Name keyed to the XR name (DNS-valid), not clientID.
   writeConnectionSecretToRef:
     name: {{ $xr.metadata.name }}-keycloak-connection
   {{- end }}
@@ -46,7 +46,7 @@ spec:
 # secretName). No composition-resource-name annotation => status-only
 # update of the XR (function-go-templating documented behavior).
 apiVersion: identity.inari.io/v1alpha1
-kind: XTenantClient
+kind: TenantClient
 status:
   clientID: {{ $clientID }}
   realm: {{ $spec.realm }}

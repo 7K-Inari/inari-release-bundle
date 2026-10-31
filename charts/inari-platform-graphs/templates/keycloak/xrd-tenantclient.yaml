@@ -2,25 +2,23 @@
 {{- if not .Values.keycloak.issuerBaseURL }}
 {{- fail "keycloak.issuerBaseURL is required when keycloak.enabled=true — public base URL of the hub Keycloak, used for status.issuerURL" }}
 {{- end }}
-# Claim XRD replacing the operator's KeycloakClient catalog item (sunset plan
-# D1): hub-side self-service OIDC clients via provider-keycloak. Confidential
+# Namespaced XR replacing the operator's KeycloakClient catalog item (sunset
+# plan D1): hub-side self-service OIDC clients via provider-keycloak.
+# Crossplane v2: claims are gone — with scope: Namespaced the composite
+# resource IS the user-facing resource (no claimNames). Confidential
 # client credentials reach the tenant namespace through the ESO SecretStore +
 # ExternalSecret pair the server renders per tenant (see
 # examples/keycloak-client-secret-delivery.yaml).
 apiVersion: apiextensions.crossplane.io/v2
 kind: CompositeResourceDefinition
 metadata:
-  name: xtenantclients.identity.inari.io
+  name: tenantclients.identity.inari.io
   labels:
     {{- include "inari-platform-graphs.labels" . | nindent 4 }}
 spec:
   scope: Namespaced
   group: identity.inari.io
   names:
-    kind: XTenantClient
-    plural: xtenantclients
-    singular: xtenantclient
-  claimNames:
     kind: TenantClient
     plural: tenantclients
     singular: tenantclient
@@ -57,7 +55,7 @@ spec:
                     (matches a sibling TenantRealm's status.realm).
                 clientID:
                   type: string
-                  description: OIDC client identifier. Defaults to the claim name.
+                  description: OIDC client identifier. Defaults to the XR name.
                 public:
                   type: boolean
                   default: false
@@ -75,7 +73,7 @@ spec:
                   type: string
                   description: >-
                     Name of the tenant-namespace Secret holding client
-                    credentials. Defaults to "<claim-name>-keycloak-client".
+                    credentials. Defaults to "<xr-name>-keycloak-client".
                     Materialized by the server-rendered ExternalSecret.
             status:
               type: object

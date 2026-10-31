@@ -9,7 +9,7 @@
 apiVersion: realm.keycloak.m.crossplane.io/v1alpha1
 kind: Realm
 metadata:
-  # MR name = claim name (always DNS-valid); the realm name lives in
+  # MR name = XR name (always DNS-valid); the realm name lives in
   # forProvider.realm + external-name, so non-DNS realm names can't break
   # the composed resource.
   name: {{ $xr.metadata.name }}
@@ -34,7 +34,7 @@ spec:
 # composition-resource-name annotation => status-only update of the XR
 # (function-go-templating documented behavior).
 apiVersion: identity.inari.io/v1alpha1
-kind: XTenantRealm
+kind: TenantRealm
 status:
   realm: {{ $realm }}
   issuerURL: "@@ISSUER_BASE_URL@@/realms/{{ $realm }}"

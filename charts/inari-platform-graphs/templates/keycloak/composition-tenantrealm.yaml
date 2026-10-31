@@ -16,7 +16,7 @@ metadata:
 spec:
   compositeTypeRef:
     apiVersion: identity.inari.io/v1alpha1
-    kind: XTenantRealm
+    kind: TenantRealm
   mode: Pipeline
   pipeline:
     - step: realm

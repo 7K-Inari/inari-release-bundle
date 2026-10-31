@@ -29,7 +29,7 @@ tests:
       - failedTemplate:
           errorMessage: keycloak.issuerBaseURL is required when keycloak.enabled=true — public base URL of the hub Keycloak, used for status.issuerURL
 
-  - it: renders the TenantRealm XRD with a namespaced claim
+  - it: renders the TenantRealm XRD as a namespaced XR (Crossplane v2 — no claims)
     template: keycloak/xrd-tenantrealm.yaml
     set:
       keycloak:
@@ -39,23 +39,29 @@ tests:
       - isKind:
           of: CompositeResourceDefinition
       - equal:
+          path: apiVersion
+          value: apiextensions.crossplane.io/v2
+      - equal:
           path: metadata.name
-          value: xtenantrealms.identity.inari.io
+          value: tenantrealms.identity.inari.io
       - equal:
           path: spec.scope
           value: Namespaced
       - equal:
           path: spec.group
           value: identity.inari.io
+      # v2: the namespaced XR IS the user-facing kind — no claimNames
+      # (apiextensions.crossplane.io/v2 rejects them via CEL).
       - equal:
           path: spec.names.kind
-          value: XTenantRealm
-      - equal:
-          path: spec.claimNames.kind
           value: TenantRealm
       - equal:
-          path: spec.claimNames.plural
+          path: spec.names.plural
           value: tenantrealms
+      - notExists:
+          path: spec.claimNames
+      - notExists:
+          path: spec.connectionSecretKeys
       - equal:
           path: spec.versions[0].name
           value: v1alpha1
@@ -83,17 +89,19 @@ tests:
         issuerBaseURL: https://keycloak.example.org
     asserts:
       - equal:
+          path: apiVersion
+          value: apiextensions.crossplane.io/v2
+      - equal:
           path: metadata.name
-          value: xtenantclients.identity.inari.io
+          value: tenantclients.identity.inari.io
       - equal:
           path: spec.scope
           value: Namespaced
       - equal:
           path: spec.names.kind
-          value: XTenantClient
-      - equal:
-          path: spec.claimNames.kind
           value: TenantClient
+      - notExists:
+          path: spec.claimNames
       - equal:
           path: spec.versions[0].schema.openAPIV3Schema.properties.spec.required
           value: ["tenantID", "namespace", "realm"]
@@ -125,7 +133,7 @@ tests:
           value: identity.inari.io/v1alpha1
       - equal:
           path: spec.compositeTypeRef.kind
-          value: XTenantRealm
+          value: TenantRealm
       - equal:
           path: spec.mode
           value: Pipeline
@@ -151,6 +159,11 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: '\$spec\.realm \| default \$spec\.tenantID'
+      # XR status write-back targets the namespaced XR kind itself (v2:
+      # no separate claim/composite kinds)
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'apiVersion: identity\.inari\.io/v1alpha1\s+kind: TenantRealm\s+status:'
 
   - it: composes a namespaced provider-keycloak Client for TenantClient
     template: keycloak/composition-tenantclient.yaml
@@ -162,7 +175,7 @@ tests:
     asserts:
       - equal:
           path: spec.compositeTypeRef.kind
-          value: XTenantClient
+          value: TenantClient
       - equal:
           path: spec.pipeline[0].functionRef.name
           value: function-go-templating
@@ -176,8 +189,8 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'accessType: \{\{ if \$spec\.public \}\}PUBLIC\{\{ else \}\}CONFIDENTIAL\{\{ end \}\}'
-      # connection secret lands in the claim (tenant) namespace, confidential only;
-      # keyed to the claim name (DNS-valid), not clientID
+      # connection secret lands in the XR (tenant) namespace, confidential only;
+      # keyed to the XR name (DNS-valid), not clientID
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'writeConnectionSecretToRef:\s+name: \{\{ \$xr\.metadata\.name \}\}-keycloak-connection'
@@ -187,10 +200,14 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'name: hub-keycloak'
-      # clientID defaults to the claim name
+      # clientID defaults to the XR name
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: '\$spec\.clientID \| default \$xr\.metadata\.name'
+      # XR status write-back targets the namespaced XR kind itself (v2)
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'apiVersion: identity\.inari\.io/v1alpha1\s+kind: TenantClient\s+status:'
 
   - it: renders the ClusterProviderConfig referenced by the compositions
     template: keycloak/clusterproviderconfig.yaml

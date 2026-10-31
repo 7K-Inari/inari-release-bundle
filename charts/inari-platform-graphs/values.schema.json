@@ -14,7 +14,7 @@
     },
     "keycloak": {
       "type": "object",
-      "description": "Keycloak self-service claims (identity.inari.io TenantRealm/TenantClient) on provider-keycloak.",
+      "description": "Keycloak self-service namespaced XRs (identity.inari.io TenantRealm/TenantClient) on provider-keycloak (Crossplane v2).",
       "properties": {
         "enabled": {
           "type": "boolean"

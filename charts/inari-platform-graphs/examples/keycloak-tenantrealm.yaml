@@ -1,4 +1,4 @@
-# Example TenantRealm claim (identity.inari.io/v1alpha1) — hub-side
+# Example TenantRealm namespaced XR (identity.inari.io/v1alpha1) — hub-side
 # self-service Keycloak realm via provider-keycloak, replacing the operator's
 # KeycloakRealm catalog item (sunset plan D1).
 #

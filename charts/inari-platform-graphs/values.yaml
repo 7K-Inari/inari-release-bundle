@@ -1,4 +1,4 @@
-# inari-platform-graphs — platform resource graphs (KRO RGDs + Crossplane claims).
+# inari-platform-graphs — platform resource graphs (KRO RGDs + Crossplane XRs).
 
 tenantNamespace:
   # Render the KRO ResourceGraphDefinition "tenantnamespace"
