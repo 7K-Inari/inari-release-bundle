@@ -19,6 +19,11 @@ metadata:
     # values like "acme: v2" must not break the composed YAML.
     crossplane.io/external-name: {{ $realm | quote }}
     gotemplating.fn.crossplane.io/composition-resource-name: realm
+    # XR Ready tracks the composed Realm's Ready condition — the function
+    # reports composed resources unready by default; the ready annotation is
+    # the only readiness source. Empty on the first pass (nothing observed
+    # yet) => False.
+    gotemplating.fn.crossplane.io/ready: '{{ $o := index $.observed.resources "realm" }}{{ if $o }}{{ (getResourceCondition "Ready" $o.resource).Status | default "False" }}{{ else }}False{{ end }}'
 spec:
   forProvider:
     realm: {{ $realm | quote }}

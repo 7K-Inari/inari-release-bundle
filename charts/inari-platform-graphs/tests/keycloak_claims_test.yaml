@@ -146,6 +146,11 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'crossplane\.io/external-name: \{\{ \$realm \| quote \}\}'
+      # XR readiness must track the composed Realm's Ready condition —
+      # function-go-templating reports resources unready by default
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'gotemplating\.fn\.crossplane\.io/ready'
       # spec.realm is a free string (not DNS-constrained): it must be quoted
       # everywhere it lands in composed YAML (forProvider + status)
       - matchRegex:
@@ -207,6 +212,10 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'writeConnectionSecretToRef:\s+name: \{\{ \$xr\.metadata\.name \}\}-keycloak-connection'
+      # XR readiness tracks the composed Client's Ready condition
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'gotemplating\.fn\.crossplane\.io/ready'
       # Crossplane v2 namespaced MRs dropped spec.deletionPolicy (lifecycle
       # is governed by managementPolicies; the default full management
       # includes delete — the D7 declarative-recreate semantic)
