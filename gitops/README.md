@@ -20,7 +20,7 @@ cluster and applies these manifests.
 | -1 | `inari-operator-crds` | OCI `ghcr.io/7k-inari/charts/inari-operator-crds` |
 | 0 | `platform-config` | `charts/inari-platform` in this repo (chart name `inari-platform`: CNPG Cluster, `inari-db` secrets, Keycloak CR, realm import + PostSync jobs) |
 | 1 | `nats`, `openfga` | upstream helm charts |
-| 1 | `platform-rgd` | helm `charts/inari-platform-graphs` in this repo — tenantnamespace RGD (Keycloak claims gated `keycloak.enabled` until Phase 3) |
+| 1 | `platform-rgd` | helm `charts/inari-platform-graphs` in this repo — tenantnamespace RGD + Keycloak XRs (`keycloak.enabled` since Phase 3) |
 | 2 | `inari-operator` | OCI `ghcr.io/7k-inari/charts/inari-operator` |
 | 3 | `inari-server`, `inari-console` | OCI `ghcr.io/7k-inari/charts/...` (charts live in and release from this repo) |
 
@@ -38,13 +38,15 @@ resources that replace the operator's facade CRDs.
   feature), never hub gitops. The hub ExternalDNS ships dev-safe values
   (CRD source only, no-op rfc2136 provider); real installs override the
   provider via values.
-- `crossplane-provider-keycloak` ships the Provider CR only — ProviderConfig
-  (Keycloak credentials) arrives with the RGD/compositions work (W1-2) /
-  Phase 3. The Provider is Healthy without it.
+- `crossplane-provider-keycloak` ships the Provider CR plus
+  function-go-templating (the composition engine for the Keycloak XRs); the
+  `ClusterProviderConfig` (Keycloak credentials) is rendered by
+  `charts/inari-platform-graphs` with credentials from the inari-platform
+  chart's `inari-keycloak-provisioner` secret (Phase 3).
 - `platform-rgd` sources the in-repo chart `charts/inari-platform-graphs`
-  (tenantnamespace RGD + Keycloak TenantRealm/TenantClient claims). The
-  Keycloak claims stay gated (`keycloak.enabled: false`) until Phase 3 wires
-  the ClusterProviderConfig and function-go-templating onto the hub.
+  (tenantnamespace RGD + Keycloak TenantRealm/TenantClient namespaced XRs).
+  The Keycloak XRs are enabled (`keycloak.enabled: true`) since Phase 3 —
+  the provisioner credentials and function-go-templating are in place.
 
 Inside `platform-config`, per-resource sync waves order secrets (-1) → CNPG
 Cluster (0) → Keycloak CR (1) → KeycloakRealmImport (2); the client-setup /
