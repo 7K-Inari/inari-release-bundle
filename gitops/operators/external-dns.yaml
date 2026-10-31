@@ -1,7 +1,8 @@
-# ExternalDNS — hub prerequisite of the operator's DNSZone/DNSRecord facade
-# CRDs (renders DNSEndpoints on the hub). Sunset-scoped: removed in Phase 4
-# of the operator sunset; tenant-cluster installs are first-class addons
-# (multi-repo GitOps feature), never hub gitops.
+# ExternalDNS — permanent hub addon: syncs the native DNSEndpoint resources
+# the server renders into the hub-facing platform repo (the operator's
+# DNSZone/DNSRecord facade CRDs are retired — operator sunset Phase 4).
+# Tenant-cluster installs are first-class addons (multi-repo GitOps feature),
+# never hub gitops.
 #
 # Dev-safe values: watches DNSEndpoint CRs only, with the rfc2136 provider
 # pointed at a dead address and no zones configured — the sync loop lists

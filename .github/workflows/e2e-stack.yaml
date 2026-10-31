@@ -64,8 +64,8 @@ on:
         default: true
       branch-hint:
         description: >-
-          Branch name matched against inari-agent/inari-operator for the
-          component checkouts (fallback main). The reusable workflow cannot
+          Branch name matched against inari-agent for the component
+          checkout (fallback main). The reusable workflow cannot
           see the caller's github.head_ref, so callers pass it explicitly.
         required: false
         type: string
@@ -149,25 +149,6 @@ jobs:
           repository: 7K-Inari/inari-agent
           ref: ${{ steps.agent.outputs.ref }}
           path: inari-agent
-
-      - name: Resolve matching inari-operator ref
-        id: operator
-        env:
-          BRANCH: ${{ inputs.branch-hint }}
-        run: |
-          if git ls-remote --exit-code https://github.com/7K-Inari/inari-operator.git \
-            "refs/heads/$BRANCH" >/dev/null 2>&1; then
-            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout inari-operator (operator + console smoke charts)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: 7K-Inari/inari-operator
-          ref: ${{ steps.operator.outputs.ref }}
-          path: inari-operator
 
       - name: Set up Go
         # The stack suite is what runs here — pin the toolchain to ITS
@@ -372,7 +353,6 @@ jobs:
         run: |
           set -euo pipefail
           AGENT_CHART_DIR=${{ github.workspace }}/inari-agent/charts/inari-agent
-          OPERATOR_CHART_DIR=${{ github.workspace }}/inari-operator/charts/inari-operator
           go test -tags=e2e -count=1 -timeout ${{ inputs.ha && '50m' || '40m' }} -json ./... \
             -args "--ginkgo.label-filter=${GINKGO_LABEL_FILTER}" \
                   --ginkgo.junit-report=/tmp/golden-path-junit.xml \
@@ -636,7 +616,6 @@ jobs:
             > /tmp/e2e-diag/nats-outbox-info.txt 2>&1
           kubectl -n inari-system logs deployment/inari-agent --tail=500 > /tmp/e2e-diag/inari-agent.log 2>&1
           kubectl -n inari logs deployment/inari-console --tail=100 > /tmp/e2e-diag/inari-console.log 2>&1
-          kubectl -n inari logs deployment/inari-operator --tail=100 > /tmp/e2e-diag/inari-operator.log 2>&1
           cp /tmp/inari-e2e-handoff.json /tmp/e2e-diag/ 2>/dev/null
           if [ "${{ inputs.ha }}" = "true" ]; then
             kubectl -n inari get pdb,deployment inari-server -o wide > /tmp/e2e-diag/ha.txt 2>&1

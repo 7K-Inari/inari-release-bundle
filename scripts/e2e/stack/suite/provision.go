@@ -20,8 +20,7 @@
 //	Hub prereqs (Phase 0 gitops mirror): cert-manager ∥ external-dns ∥ KRO ∥
 //	  Crossplane + provider-keycloak — independent of Keycloak/CNPG
 //	BARRIER: inari-server needs Keycloak issuer + NATS + OpenFGA + Vault/ESO
-//	inari-operator-crds → inari-operator ┐ independent of each other and
-//	inari-console                        ┘ smoke-level alongside the server
+//	inari-console                        — smoke-level alongside the server
 //	inari-agent — needs tenant + cluster registration (TestProvisionAgent)
 //
 // Independent installs run concurrently (errgroup); every async wait is a
@@ -69,8 +68,6 @@ type ProvisionConfig struct {
 	ServerChartDir    string
 	ConsoleChartDir   string
 	AgentChartDir     string
-	OperatorChartDir  string
-	OperatorCRDsChart string
 	ServerReplicas    int
 	OpenFGAReplicas   int
 }
@@ -155,11 +152,9 @@ func LoadProvisionConfig(t TB) *ProvisionConfig {
 		ServerChartDir:   envOr("SERVER_CHART_DIR", filepath.Join(repoRoot, "charts/inari-server")),
 		ConsoleChartDir:  envOr("CONSOLE_CHART_DIR", filepath.Join(repoRoot, "charts/inari-console")),
 		AgentChartDir:    envOr("AGENT_CHART_DIR", filepath.Join(repoRoot, "../inari-agent/charts/inari-agent")),
-		OperatorChartDir: envOr("OPERATOR_CHART_DIR", filepath.Join(repoRoot, "../inari-operator/charts/inari-operator")),
 		ServerReplicas:   1,
 		OpenFGAReplicas:  1,
 	}
-	cfg.OperatorCRDsChart = envOr("OPERATOR_CRDS_CHART_DIR", filepath.Join(cfg.OperatorChartDir, "../inari-operator-crds"))
 	if cfg.HA {
 		cfg.ServerReplicas = 2
 		cfg.OpenFGAReplicas = 2
@@ -178,8 +173,7 @@ func LoadProvisionConfig(t TB) *ProvisionConfig {
 		t.Fatalf("INARI_E2E_CACHE_BACKEND must be memory or redis (got: %s)", cfg.CacheBackend)
 	}
 	for name, dir := range map[string]string{
-		"CONSOLE_CHART_DIR": cfg.ConsoleChartDir, "OPERATOR_CHART_DIR": cfg.OperatorChartDir,
-		"OPERATOR_CRDS_CHART_DIR": cfg.OperatorCRDsChart, "PLATFORM_CHART_DIR": cfg.PlatformChartDir,
+		"CONSOLE_CHART_DIR": cfg.ConsoleChartDir, "PLATFORM_CHART_DIR": cfg.PlatformChartDir,
 		"SERVER_CHART_DIR": cfg.ServerChartDir,
 	} {
 		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
@@ -366,8 +360,8 @@ func installVaultESO(c *ProvisionConfig) error {
 }
 
 // installCertManager mirrors gitops/operators/cert-manager.yaml (wave -3) —
-// hub prerequisite of the operator's CertIssuer facade CRD. Sunset-scoped:
-// removed from the mirror when Phase 4 removes the gitops Application.
+// permanent hub addon serving the native ClusterIssuer-class resources
+// rendered hub-side.
 func installCertManager(c *ProvisionConfig) error {
 	return helm.UpgradeInstall("cert-manager", "jetstack/cert-manager",
 		"--version", certManagerChartVersion,
@@ -593,23 +587,6 @@ func installServer(c *ProvisionConfig) error {
 	return kube.RolloutStatus(c.Namespace, "deployment/inari-server", "180s")
 }
 
-// installOperator: CRDs sibling chart first, then the operator (smoke level
-// — full guardrails live in the operator repo).
-func installOperator(c *ProvisionConfig) error {
-	if err := helm.UpgradeInstall("inari-operator-crds", c.OperatorCRDsChart,
-		"--namespace", c.Namespace, "--wait", "--timeout", "3m"); err != nil {
-		return err
-	}
-	if err := helm.UpgradeInstall("inari-operator", c.OperatorChartDir,
-		"--namespace", c.Namespace, "--wait", "--timeout", "5m"); err != nil {
-		return err
-	}
-	if err := kube.RolloutStatus(c.Namespace, "deployment/inari-operator", "180s"); err != nil {
-		return fmt.Errorf("inari-operator deployment never became ready: %w", err)
-	}
-	return kube.WaitCondition(c.Namespace, "condition=available", "60s", "deployment/inari-operator")
-}
-
 // installConsole: stateless nginx SPA configured for the inari realm (smoke
 // level). Ported subtlety: the script verified the route via a host
 // port-forward; the provisioner curls the service DNS name from the toolbox
@@ -833,17 +810,14 @@ func provisionCharts(t TB, c *ProvisionConfig) {
 		t.Fatalf("inari-server install: %v", err)
 	}
 
-	// Layer C: operator (crds first) ∥ console — smoke level, independent
-	// of each other.
-	logf("installing inari-operator ∥ inari-console (concurrent layer C, smoke)")
-	var layerC errgroup.Group
-	layerC.Go(func() error { return installOperator(c) })
-	layerC.Go(func() error { return installConsole(c) })
-	if err := layerC.Wait(); err != nil {
+	// Layer C: console — smoke level (the operator was removed in Phase 4
+	// of the operator sunset; platform resources are server-rendered).
+	logf("installing inari-console (concurrent layer C, smoke)")
+	if err := installConsole(c); err != nil {
 		t.Fatalf("layer C install failed: %v", err)
 	}
 
-	for _, release := range []string{"inari-operator", "inari-console"} {
+	for _, release := range []string{"inari-console"} {
 		ok, err := helm.Installed(c.Namespace, release)
 		if err != nil || !ok {
 			t.Fatalf("helm release %s missing in namespace %s", release, c.Namespace)

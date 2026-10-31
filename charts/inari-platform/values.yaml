@@ -112,7 +112,7 @@ keycloak:
   realmSync:
     enabled: false
     image: adorsys/keycloak-config-cli:6.5.1-26
-  # Confidential client used by inari-server / inari-operator to call the
+  # Confidential client used by inari-server to call the
   # Keycloak Admin REST API (client_credentials grant; no admin user/password
   # anywhere). Rendered into the realm import; a PostSync hook job grants
   # its service account the realm-management realm-admin role. For external

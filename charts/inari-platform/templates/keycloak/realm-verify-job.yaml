@@ -1,7 +1,7 @@
 {{- if or .Values.keycloak.enabled .Values.keycloak.external.baseUrl }}
 # Proves the admin auth path works before the release is marked successful:
 # obtains a token with the client_credentials grant using the same admin
-# client secret inari-server / inari-operator consume, then calls the
+# client secret inari-server consumes, then calls the
 # Keycloak Admin REST API. Hook weight 8 runs after client-setup (6) and
 # realm-sync (7), so the service account already has realm-admin.
 apiVersion: batch/v1

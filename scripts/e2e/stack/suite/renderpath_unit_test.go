@@ -13,16 +13,19 @@ import (
 func TestRenderStatusWatches(t *testing.T) {
 	watches := renderStatusWatches()
 	for _, want := range []string{
-		"stacks.inari.io/v1alpha1/tenantnamespaces",   // KRO instance (no default)
-		"identity.inari.io/v1alpha1/tenantrealms",     // claim (no default)
-		"identity.inari.io/v1alpha1/tenantclients",    // claim (no default)
-		"cert-manager.io/v1/clusterissuers",           // native replacement
-		"externaldns.k8s.io/v1alpha1/dnsendpoints",    // native replacement
-		"platform.inari.io/v1alpha1/tenantnamespaces", // legacy dual-run entry
+		"stacks.inari.io/v1alpha1/tenantnamespaces", // KRO instance (no default)
+		"identity.inari.io/v1alpha1/tenantrealms",  // claim (no default)
+		"identity.inari.io/v1alpha1/tenantclients", // claim (no default)
+		"cert-manager.io/v1/clusterissuers",        // native replacement
+		"externaldns.k8s.io/v1alpha1/dnsendpoints", // native replacement
 	} {
 		if !strings.Contains(watches, want) {
 			t.Errorf("watch list missing %q: %s", want, watches)
 		}
+	}
+	// D7: no legacy platform.inari.io GVRs remain in the watch list.
+	if strings.Contains(watches, "platform.inari.io") {
+		t.Errorf("legacy platform.inari.io GVR leaked into the watch list: %s", watches)
 	}
 	// INARI_STATUS_WATCHES overrides the defaults wholesale, so the list
 	// must be parse-complete: semicolon-separated group/version/resource.

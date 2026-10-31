@@ -1,7 +1,8 @@
-# cert-manager — hub prerequisite of the operator's CertIssuer facade CRD
-# (renders cert-manager ClusterIssuers on the hub). Sunset-scoped: removed in
-# Phase 4 of the operator sunset; tenant-cluster installs are first-class
-# addons (multi-repo GitOps feature), never hub gitops.
+# cert-manager — permanent hub addon: serves the native ClusterIssuer-class
+# resources rendered into the hub-facing platform repo (the operator's
+# CertIssuer facade CRD is retired — operator sunset Phase 4). Tenant-cluster
+# installs are first-class addons (multi-repo GitOps feature), never hub
+# gitops.
 # Pin must match scripts/e2e/stack/suite/provision.go certManagerChartVersion
 # (guarded by TestGitOpsPinParity).
 apiVersion: argoproj.io/v1alpha1

@@ -23,7 +23,7 @@ metadata:
     # reports composed resources unready by default; the ready annotation is
     # the only readiness source. Empty on the first pass (nothing observed
     # yet) => False.
-    gotemplating.fn.crossplane.io/ready: '{{ $o := index $.observed.resources "realm" }}{{ if $o }}{{ (getResourceCondition "Ready" $o.resource).Status | default "False" }}{{ else }}False{{ end }}'
+    gotemplating.fn.crossplane.io/ready: '{{ if $.observed.resources }}{{ $o := index $.observed.resources "realm" }}{{ if $o }}{{ (getResourceCondition "Ready" $o.resource).Status | default "False" }}{{ else }}False{{ end }}{{ else }}False{{ end }}'
 spec:
   forProvider:
     realm: {{ $realm | quote }}

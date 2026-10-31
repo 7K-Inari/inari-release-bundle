@@ -240,9 +240,9 @@ func (r *RenderPath) ensureProvisionerSecret(t TB) {
 		"--wait", "--timeout", "10m"))
 }
 
-// RenderCutover points the server at the platform repo and flips the
-// render-cutover flag, then triggers a reconcile so the tenant's manifests
-// are re-rendered as source descriptors and committed.
+// RenderCutover points the server at the platform repo, then triggers a
+// reconcile so the tenant's resources are rendered as source descriptors
+// and committed.
 func (r *RenderPath) RenderCutover(t TB) {
 	if _, err := kube.Kubectl("-n", r.Namespace, "set", "env",
 		"deployment/inari-server", "INARI_PLATFORM_GITOPS_REPO="+r.repoName); err != nil {
@@ -250,11 +250,7 @@ func (r *RenderPath) RenderCutover(t TB) {
 	}
 	require.NoError(t, kube.RolloutStatus(r.Namespace, "deployment/inari-server", "300s"))
 
-	code, body, err := r.API.SetPlatformFeatureFlag("platform_resources.gitops_render", true)
-	require.NoError(t, err)
-	require.Contains(t, []int{200, 204}, code, "flag set: %s", body)
-
-	code, body, err = r.API.ReconcilePlatformResources()
+	code, body, err := r.API.ReconcilePlatformResources()
 	require.NoError(t, err)
 	require.Equal(t, 202, code, "reconcile: %s", body)
 }
@@ -284,7 +280,7 @@ func (r *RenderPath) RenderCommit(t TB) {
 		assert.Contains(t, tree, p, "descriptor layout missing %s", p)
 	}
 	// D7 sanity: the legacy platform.inari.io CR manifest paths must NOT be
-	// present — the flag was flipped before the first render to this repo.
+	// present — the legacy render path was removed (operator sunset Phase 4).
 	for _, legacy := range []string{
 		"tenants/" + r.Tenant + "/keycloak-realm.yaml",
 		"tenants/" + r.Tenant + "/dns-record.yaml",
@@ -628,6 +624,9 @@ metadata:
 spec:
   provider:
     kubernetes:
+      # ESO's kubernetes provider schema defaults remoteNamespace to
+      # "default" — pin the tenant namespace or reads fail RBAC.
+      remoteNamespace: ` + r.tenantNS + `
       server:
         url: https://kubernetes.default.svc
         caProvider:
@@ -934,15 +933,42 @@ func (r *RenderPath) RGDTeardown(t TB) {
 		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":null}}}`); err != nil {
 		t.Fatalf("suspend self-heal on %s: %v", nsApp, err)
 	}
+
+	// Phase 3 ordering requirement (live finding): a namespaced
+	// provider-keycloak MR's finalizer wedges on namespace termination — the
+	// provider cannot create its ProviderConfigUsage in a terminating
+	// namespace, so the MR never finalizes and the namespace hangs. Tenant
+	// teardown must therefore drain the keycloak XRs (and their MRs +
+	// Keycloak-side resources) BEFORE the namespace goes away. Suspend the
+	// realm app first or self-heal recreates the XR mid-drain.
+	realmApp := "tenant-" + r.Tenant + "-realm"
+	if _, err := kube.Kubectl("-n", "argocd", "patch", "application", realmApp,
+		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":null}}}`); err != nil {
+		t.Fatalf("suspend self-heal on %s: %v", realmApp, err)
+	}
+	for _, gk := range []string{"tenantrealms.identity.inari.io", "tenantclients.identity.inari.io"} {
+		if _, err := kube.Kubectl("-n", r.tenantNS, "delete", gk, "--all", "--wait=false", "--ignore-not-found"); err != nil {
+			t.Fatalf("delete %s: %v", gk, err)
+		}
+	}
+	poll.Eventually(t, 300*time.Second, 5*time.Second, func() (bool, error) {
+		realms, _ := kube.Kubectl("-n", r.tenantNS, "get", "realms.realm.keycloak.m.crossplane.io", "-o", "name")
+		clients, _ := kube.Kubectl("-n", r.tenantNS, "get", "clients.openidclient.keycloak.m.crossplane.io", "-o", "name")
+		return strings.TrimSpace(realms) == "" && strings.TrimSpace(clients) == "", nil
+	}, "provider-keycloak MRs drained from the tenant namespace")
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		token, err := r.KC.MasterToken()
+		if err != nil {
+			return false, nil
+		}
+		return !r.KC.RealmExists(token, r.Tenant), nil
+	}, "tenant realm deleted from Keycloak on XR delete")
+
 	if _, err := kube.Kubectl("-n", "default", "delete",
 		"tenantnamespace.stacks.inari.io", r.tenantNS, "--wait=false", "--ignore-not-found"); err != nil {
 		t.Fatalf("delete KRO instance: %v", err)
 	}
 
-	// The cascade now runs deeper than the KRO children: the tenant's
-	// TenantRealm XR lives in the namespace, so namespace termination waits
-	// on the XR finalizer → Realm MR finalizer → provider-keycloak deleting
-	// the realm in Keycloak. Generous bound.
 	poll.Eventually(t, 420*time.Second, 3*time.Second, func() (bool, error) {
 		_, err := kube.Kubectl("get", "namespace", r.tenantNS)
 		return err != nil, nil // gone
@@ -972,6 +998,12 @@ func (r *RenderPath) RGDTeardown(t TB) {
 	if _, err := kube.Kubectl("-n", "argocd", "patch", "application", nsApp,
 		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":{"prune":false,"selfHeal":true}}}}`); err != nil {
 		t.Fatalf("restore automated sync on %s: %v", nsApp, err)
+	}
+	// The realm app resumes too: the XR re-lands only after the namespace
+	// exists again (drain-before-namespace ordering above).
+	if _, err := kube.Kubectl("-n", "argocd", "patch", "application", realmApp,
+		"--type=merge", `-p={"spec":{"syncPolicy":{"automated":{"prune":false,"selfHeal":true}}}}`); err != nil {
+		t.Fatalf("restore automated sync on %s: %v", realmApp, err)
 	}
 	poll.Eventually(t, 300*time.Second, 5*time.Second, func() (bool, error) {
 		out, err := kube.Kubectl("-n", "argocd", "get", "application", nsApp,
@@ -1008,17 +1040,12 @@ func (r *RenderPath) RGDTeardown(t TB) {
 
 // --- pure helpers ----------------------------------------------------------
 
-// renderStatusWatches is the INARI_STATUS_WATCHES value for the cutover
-// state: the legacy platform.inari.io CRDs (absent here, harmless) plus the
+// renderStatusWatches is the INARI_STATUS_WATCHES value for the stack: the
 // native replacements and the RGD/claim GVRs (which have no defaults — see
-// DefaultWatchResources' comment).
+// DefaultWatchResources' comment). The legacy platform.inari.io CRDs are
+// gone (operator sunset Phase 4, D7).
 func renderStatusWatches() string {
 	return strings.Join([]string{
-		"platform.inari.io/v1alpha1/keycloakrealms",
-		"platform.inari.io/v1alpha1/keycloakclients",
-		"platform.inari.io/v1alpha1/dnszones",
-		"platform.inari.io/v1alpha1/dnsrecords",
-		"platform.inari.io/v1alpha1/tenantnamespaces",
 		"cert-manager.io/v1/clusterissuers",
 		"externaldns.k8s.io/v1alpha1/dnsendpoints",
 		"argoproj.io/v1alpha1/appprojects",
