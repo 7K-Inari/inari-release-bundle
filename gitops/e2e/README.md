@@ -55,9 +55,9 @@ choice.
    `inari-password`, `keycloak-password`, `openfga-password` (random).
    Connection URIs are templated in the ExternalSecret; Vault holds
    passwords only.
-2. **Vault KV `inari-e2e/personas`** — properties: `dev-admin-password`,
-   `operator-password`, `editor-password`, `viewer-password`,
-   `member-password` (consumed by the W3 seed step and suites).
+2. **Vault KV `inari-e2e/personas`** — properties: `dev-admin`, `operator`,
+   `editor`, `viewer`, `member` (consumed by the W3 seed step and suites;
+   the ExternalSecret maps them onto `-password`-suffixed target keys).
 3. **Vault Kubernetes-auth role `inari-e2e-server`** — bound to SA
    `inari-server` in namespace `inari-e2e`; policy: `update` on
    `secret/data/inari/clusters/*` (cluster-registration exchange).
