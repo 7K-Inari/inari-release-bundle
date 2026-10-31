@@ -17,27 +17,26 @@ cluster and applies these manifests.
 | -2 | `keycloak-operator` | kustomize `gitops/operators/keycloak-operator` (upstream 26.3.2 + cluster-wide patch) |
 | -2 | `kro` | OCI helm `registry.k8s.io/kro/charts/kro` |
 | -2 | `crossplane-provider-keycloak` | kustomize `gitops/operators/crossplane-provider-keycloak` (Provider CR; no ProviderConfig yet) |
-| -1 | `inari-operator-crds` | OCI `ghcr.io/7k-inari/charts/inari-operator-crds` |
 | 0 | `platform-config` | `charts/inari-platform` in this repo (chart name `inari-platform`: CNPG Cluster, `inari-db` secrets, Keycloak CR, realm import + PostSync jobs) |
 | 1 | `nats`, `openfga` | upstream helm charts |
 | 1 | `platform-rgd` | helm `charts/inari-platform-graphs` in this repo — tenantnamespace RGD + Keycloak XRs (`keycloak.enabled` since Phase 3) |
-| 2 | `inari-operator` | OCI `ghcr.io/7k-inari/charts/inari-operator` |
 | 3 | `inari-server`, `inari-console` | OCI `ghcr.io/7k-inari/charts/...` (charts live in and release from this repo) |
 
 ## Hub prerequisites (waves -3/-2)
 
-cert-manager, ExternalDNS, and ESO are prerequisites the operator's CRDs
-presuppose; KRO and Crossplane (+ provider-keycloak) are the sunset target
+KRO and Crossplane (+ provider-keycloak) host the platform resource
 architecture (assessment decisions D1/D6) — KRO hosts the `tenantnamespace`
 ResourceGraphDefinition, Crossplane hosts the Keycloak realm/client managed
-resources that replace the operator's facade CRDs.
+resources. cert-manager, ExternalDNS, and ESO are permanent hub addons: the
+server renders native `DNSEndpoint`/`ClusterIssuer`-class resources into the
+hub-facing platform repo (operator sunset Phase 4 removed the facade CRDs,
+not the underlying controllers).
 
-- Hub cert-manager/ExternalDNS are **sunset-scoped**: they exist only for the
-  operator's `CertIssuer`/`DNSZone`/`DNSRecord` facades and are removed in
-  Phase 4. Tenant-cluster installs are first-class addons (multi-repo GitOps
-  feature), never hub gitops. The hub ExternalDNS ships dev-safe values
-  (CRD source only, no-op rfc2136 provider); real installs override the
-  provider via values.
+- Hub cert-manager/ExternalDNS serve the native resources the server renders
+  hub-side (e.g. per-tenant `DNSEndpoint`). Tenant-cluster installs are
+  first-class addons (multi-repo GitOps feature), never hub gitops. The hub
+  ExternalDNS ships dev-safe values (CRD source only, no-op rfc2136
+  provider); real installs override the provider via values.
 - `crossplane-provider-keycloak` ships the Provider CR plus
   function-go-templating (the composition engine for the Keycloak XRs); the
   `ClusterProviderConfig` (Keycloak credentials) is rendered by
@@ -58,21 +57,22 @@ whose failure fails the Application sync.
 - Dex deploys ONE cluster-local instance per tenant cluster from the
   **official dexidp chart** (`https://charts.dexidp.io`, chart `dex`): OIDC
   pass-through to Keycloak realm `inari` as confidential client
-  `cluster-<id>-dex`. The inari-operator renders a single-source ArgoCD
-  `Application` per tenant cluster (pinned `targetRevision`) — no Dex
+  `cluster-<id>-dex`. inari-server (`internal/clusterdex`, decision D5)
+  renders a list-generator ApplicationSet pair (dex + argocd-config) per
+  baseline repo and delivers per-cluster views via the agent bridge — no Dex
   Application lives in gitops/ and no dex chart is published from this repo.
   Production Dex config (connectors, static clients) comes only from an
   ESO/Vault-synced Secret (`configSecret.create: false` +
-  `configSecret.name`); the operator also renders the tenant ArgoCD OIDC/RBAC
-  baseline (`argocd-cm`, `argocd-rbac-cm`) alongside it.
+  `configSecret.name`); the argocd-config ApplicationSet renders the tenant
+  ArgoCD OIDC/RBAC baseline (`argocd-cm`, `argocd-rbac-cm`) alongside it.
 - The `inari-platform` chart renders those `cluster-<id>-dex` clients into
   the realm import from `keycloak.dexClusters[]` (realm-creation placeholder
   secrets; runtime provisioning/rotation is owned by inari-server, W2).
 - ArgoCD per-user SSO maps Keycloak groups (via the Dex `groups` claim) to
-  ArgoCD roles through the operator-rendered `argocd-rbac-cm` (fail-closed
+  ArgoCD roles through the rendered `argocd-rbac-cm` (fail-closed
   `policy.default`). Static `accounts.inari-breakglass` stays as the
   documented break-glass fallback (password set out-of-band via the argocd
-  CLI, never stored by the operator).
+  CLI, never stored in git).
 - Dev/kind: `gitops/dev/dex.yaml` is a standalone Application for the
   upstream chart with an inline mock-connector config (no secrets needed).
   Apply it manually (`kubectl apply -f gitops/dev/`) when a local tenant
