@@ -14,6 +14,7 @@ HTTPRoute attached to Gateway {{ required "gateway.name is required when a route
   keycloak:      {{ .Values.keycloak.route.hostnames | default (list "*") | join ", " }}
 {{- end }}
 
+{{- if or .Values.postgresql.enabled .Values.keycloak.enabled }}
 Components:
   PostgreSQL (CNPG):  {{ include "platform-config.postgresHost" . }} (cluster: {{ .Values.postgresql.clusterName }})
   {{- if .Values.keycloak.enabled }}
@@ -21,6 +22,10 @@ Components:
   {{- else }}
   Keycloak:           EXTERNAL — {{ .Values.keycloak.external.baseUrl }}
   {{- end }}
+{{- else if .Values.argocd.enabled }}
+Components: argocd-cm / argocd-rbac-cm baseline only (tenant-cluster profile;
+the cluster-local Dex deploys via the sibling dex ApplicationSet).
+{{- end }}
 
 NATS, OpenFGA, inari-operator, inari-server and inari-console are separate
 ArgoCD Applications composed on top of this chart (see gitops/).

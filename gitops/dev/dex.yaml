@@ -1,8 +1,11 @@
 # DEV ONLY (kind): cluster-local Dex from the official dexidp chart with an
 # inline mock-connector config — the replacement for the deleted charts/dex
-# `config.devMode`. Production never uses inline `config`: the operator
-# renders per-tenant-cluster Applications with `configSecret.create: false`
-# against an ESO/Vault-synced Secret.
+# `config.devMode`. Production renders per-tenant-cluster Dex via the
+# server-side clusterdex fan-out (inari-server internal/clusterdex): a
+# list-generator ApplicationSet per baseline repo with
+# configSecret.create=false against an ESO/Vault-synced Secret, plus the
+# argocd-config ApplicationSet rendering this chart's argocd section
+# (promoted to baseline).
 #
 # Not applied by bootstrap.sh — apply manually when a local tenant cluster
 # needs a Dex: kubectl apply -f gitops/dev/
