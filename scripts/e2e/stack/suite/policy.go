@@ -4,7 +4,6 @@ package suite
 
 import (
 	"strings"
-	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,26 +26,28 @@ deny contains {"rule": "deny-latest-image", "reason": "image has no tag or diges
 }
 `
 
-// PolicyEvaluate asserts the policy evaluate matrix: :latest/untagged denied
+// Policy evaluate phase helpers: the policy matrix — :latest/untagged denied
 // with the deny-latest-image rule, pinned tag/digest allowed, and a disabled
 // policy must not gate the request (negative control).
-func PolicyEvaluate(t *testing.T, e *Env) {
+
+// CreateDenyLatestPolicy installs the deny-latest-image policy and returns
+// its id.
+func CreateDenyLatestPolicy(t TB, e *Env) string {
+	t.Helper()
 	policyID, err := e.API.CreatePolicy("deny-latest-image", "request", "rego", denyLatestRego)
 	require.NoError(t, err, "policy creation failed")
 	require.NotEmpty(t, policyID)
+	return policyID
+}
 
+// AssertPolicyDenyMatrix: :latest/untagged images are denied, and the
+// :latest denial carries the deny-latest-image violation rule.
+func AssertPolicyDenyMatrix(t TB, e *Env) {
+	t.Helper()
 	deny := func(image string) {
-		t.Helper()
 		ev, err := e.API.Evaluate(e.ClusterID, image)
 		require.NoError(t, err, "evaluate %s", image)
 		assert.False(t, ev.Decision.Allow, "%s must be denied", image)
-	}
-	allow := func(image string) {
-		t.Helper()
-		ev, err := e.API.Evaluate(e.ClusterID, image)
-		require.NoError(t, err, "evaluate %s", image)
-		assert.True(t, ev.Decision.Allow, "%s must be allowed (violations: %+v)", image, ev.Decision.Violations)
-		assert.Empty(t, ev.Decision.Violations)
 	}
 
 	ev, err := e.API.Evaluate(e.ClusterID, "ghcr.io/acme/app:latest")
@@ -61,12 +62,30 @@ func PolicyEvaluate(t *testing.T, e *Env) {
 
 	deny("ghcr.io/acme/app")
 	deny("registry:5000/acme/app") // untagged with a registry port
+}
+
+// AssertPolicyAllowMatrix: pinned tags and digests are allowed with no
+// violations.
+func AssertPolicyAllowMatrix(t TB, e *Env) {
+	t.Helper()
+	allow := func(image string) {
+		ev, err := e.API.Evaluate(e.ClusterID, image)
+		require.NoError(t, err, "evaluate %s", image)
+		assert.True(t, ev.Decision.Allow, "%s must be allowed (violations: %+v)", image, ev.Decision.Violations)
+		assert.Empty(t, ev.Decision.Violations)
+	}
+
 	allow("ghcr.io/acme/app:1.4.2")
 	allow("ghcr.io/acme/app@sha256:" + strings.Repeat("a", 64))
+}
 
-	// Negative control: a disabled policy must not deny.
+// AssertDisabledPolicyDoesNotGate is the negative control: a disabled policy
+// must not deny. Re-enables the policy on the way out so later phases see
+// the pre-spec state.
+func AssertDisabledPolicyDoesNotGate(t TB, e *Env, policyID string) {
+	t.Helper()
 	require.NoError(t, e.API.SetPolicyEnabled(policyID, denyLatestRego, false))
-	ev, err = e.API.Evaluate(e.ClusterID, "ghcr.io/acme/app:latest")
+	ev, err := e.API.Evaluate(e.ClusterID, "ghcr.io/acme/app:latest")
 	require.NoError(t, err)
 	assert.True(t, ev.Decision.Allow, "disabled policy must not deny")
 	require.NoError(t, e.API.SetPolicyEnabled(policyID, denyLatestRego, true))

@@ -10,9 +10,9 @@ name: e2e-nightly
 #   1. resolve        — read charts/inari-server appVersion on main, resolve
 #                       the matching inari-server git tag vX.Y.Z.
 #   2. nightly-stack  — the reusable e2e-stack.yaml leg (mode=nightly,
-#                       non-HA): full bring-up, Go stack suite WITH
-#                       -args -include-quarantined (quarantined Go tests run
-#                       only here), then the FULL Playwright suite
+#                       non-HA): full bring-up, Go stack suite WITH the
+#                       p0||p1||p2 Ginkgo label filter (quarantined Go specs
+#                       run only here), then the FULL Playwright suite
 #                       @p0|@p1|@p2 INCLUDING @quarantine.
 #   3. quarantine-sweep — files/dedupes `e2e-flake` issues for tests flaky
 #                       in 2+ nightly runs within 7 days. Kept in this
@@ -67,7 +67,7 @@ jobs:
   nightly-stack:
     needs: resolve
     # The reusable leg owns bring-up + both suites + artifacts + teardown.
-    # Non-HA only; quarantined tests (Go -include-quarantined and Playwright
+    # Non-HA only; quarantined tests (Go Label("quarantine") and Playwright
     # @quarantine) run ONLY here — never in the release gate.
     uses: ./.github/workflows/e2e-stack.yaml
     with:
