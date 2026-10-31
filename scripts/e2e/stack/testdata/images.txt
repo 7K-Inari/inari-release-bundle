@@ -6,7 +6,6 @@
 # Deliberately EXCLUDED (do not add — would break cache correctness):
 #   - ghcr.io/7k-inari/inari-server:<tag>  — per-release tag input, changes every run
 #   - inari/agent:e2e                      — built in-job (buildx GHA cache covers it)
-#   - ghcr.io/7k-inari/inari-operator:*    — private + dynamic appVersion tag
 
 # kind node image (suite default KIND_NODE_IMAGE; kind v0.26.0 default via
 # helm/kind-action@v1.12.0)

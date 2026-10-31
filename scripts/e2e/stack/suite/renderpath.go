@@ -240,9 +240,9 @@ func (r *RenderPath) ensureProvisionerSecret(t TB) {
 		"--wait", "--timeout", "10m"))
 }
 
-// RenderCutover points the server at the platform repo and flips the
-// render-cutover flag, then triggers a reconcile so the tenant's manifests
-// are re-rendered as source descriptors and committed.
+// RenderCutover points the server at the platform repo, then triggers a
+// reconcile so the tenant's resources are rendered as source descriptors
+// and committed.
 func (r *RenderPath) RenderCutover(t TB) {
 	if _, err := kube.Kubectl("-n", r.Namespace, "set", "env",
 		"deployment/inari-server", "INARI_PLATFORM_GITOPS_REPO="+r.repoName); err != nil {
@@ -250,11 +250,7 @@ func (r *RenderPath) RenderCutover(t TB) {
 	}
 	require.NoError(t, kube.RolloutStatus(r.Namespace, "deployment/inari-server", "300s"))
 
-	code, body, err := r.API.SetPlatformFeatureFlag("platform_resources.gitops_render", true)
-	require.NoError(t, err)
-	require.Contains(t, []int{200, 204}, code, "flag set: %s", body)
-
-	code, body, err = r.API.ReconcilePlatformResources()
+	code, body, err := r.API.ReconcilePlatformResources()
 	require.NoError(t, err)
 	require.Equal(t, 202, code, "reconcile: %s", body)
 }
@@ -284,7 +280,7 @@ func (r *RenderPath) RenderCommit(t TB) {
 		assert.Contains(t, tree, p, "descriptor layout missing %s", p)
 	}
 	// D7 sanity: the legacy platform.inari.io CR manifest paths must NOT be
-	// present — the flag was flipped before the first render to this repo.
+	// present — the legacy render path was removed (operator sunset Phase 4).
 	for _, legacy := range []string{
 		"tenants/" + r.Tenant + "/keycloak-realm.yaml",
 		"tenants/" + r.Tenant + "/dns-record.yaml",
@@ -1044,17 +1040,12 @@ func (r *RenderPath) RGDTeardown(t TB) {
 
 // --- pure helpers ----------------------------------------------------------
 
-// renderStatusWatches is the INARI_STATUS_WATCHES value for the cutover
-// state: the legacy platform.inari.io CRDs (absent here, harmless) plus the
+// renderStatusWatches is the INARI_STATUS_WATCHES value for the stack: the
 // native replacements and the RGD/claim GVRs (which have no defaults — see
-// DefaultWatchResources' comment).
+// DefaultWatchResources' comment). The legacy platform.inari.io CRDs are
+// gone (operator sunset Phase 4, D7).
 func renderStatusWatches() string {
 	return strings.Join([]string{
-		"platform.inari.io/v1alpha1/keycloakrealms",
-		"platform.inari.io/v1alpha1/keycloakclients",
-		"platform.inari.io/v1alpha1/dnszones",
-		"platform.inari.io/v1alpha1/dnsrecords",
-		"platform.inari.io/v1alpha1/tenantnamespaces",
 		"cert-manager.io/v1/clusterissuers",
 		"externaldns.k8s.io/v1alpha1/dnsendpoints",
 		"argoproj.io/v1alpha1/appprojects",

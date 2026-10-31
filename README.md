@@ -9,8 +9,8 @@ backup/restore/DR tooling (plan §6 #10, §9 M0).
 Stack: ArgoCD (App-of-Apps-style sync waves) + Helm charts released as OCI.
 
 All charts publish to the org-level OCI namespace
-`oci://ghcr.io/7k-inari/charts` (shared with the inari-agent and
-inari-operator charts, which stay in their own repos). Charts version
+`oci://ghcr.io/7k-inari/charts` (shared with the inari-agent chart, which
+stays in its own repo). Charts version
 independently via release-please; `charts/inari-server` and
 `charts/inari-console` get their `appVersion` bumped automatically by the
 component release pipelines (see `.github/workflows/chart-sync.yml`) so the
@@ -37,8 +37,8 @@ Canonical architecture & development plan: [inari-docs/docs/architecture/inari-p
 - `charts/inari-server`, `charts/inari-console` — control-plane API server
   and web console charts (moved from the component repos).
 - `scripts/` — day-0 bootstrap, backup/restore, DR drill.
-- The `inari-agent` and `inari-operator` charts stay in their component
-  repos and publish to the same org-level OCI namespace.
+- The `inari-agent` chart stays in its component
+  repo and publishes to the same org-level OCI namespace.
 
 ## Quickstart (day-0 bootstrap)
 
@@ -50,9 +50,8 @@ make dev-down   # tear down
 ```
 
 The composed stack provides Keycloak (realm `inari`), PostgreSQL
-(CloudNativePG), NATS (JetStream) and OpenFGA, plus `inari-operator`,
-`inari-server` and `inari-console` Applications once their charts are
-published.
+(CloudNativePG), NATS (JetStream) and OpenFGA, plus `inari-server` and
+`inari-console` Applications once their charts are published.
 
 ## Backup / restore / DR drill
 

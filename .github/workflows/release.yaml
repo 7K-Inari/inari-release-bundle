@@ -102,7 +102,7 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Push chart as OCI artifact
-        # Org-level namespace shared with the agent/operator charts; never
+        # Org-level namespace shared with the agent chart; never
         # derive this from the repo name (the repo was renamed once already).
         run: helm push "dist/${{ steps.chart.outputs.name }}-${{ steps.chart.outputs.version }}.tgz" oci://ghcr.io/7k-inari/charts
 

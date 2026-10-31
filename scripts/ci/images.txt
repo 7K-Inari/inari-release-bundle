@@ -3,8 +3,6 @@
 # pulls at its pinned versions. Bump ANY entry -> new cache key.
 #
 # Excluded (do not add — would break cache correctness):
-#   - ghcr.io/7k-inari/inari-operator:* — private image, handled by
-#     scripts/preload-operator-image.sh + operator-image artifact.
 #   - ghcr.io/7k-inari/inari-server:* / inari-console:* — optional apps whose
 #     published tags change every release.
 

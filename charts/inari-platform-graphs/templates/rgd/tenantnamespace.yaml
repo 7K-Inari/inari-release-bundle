@@ -1,8 +1,9 @@
 {{- if .Values.tenantNamespace.enabled }}
-# KRO ResourceGraphDefinition replacing the operator's
-# TenantNamespace.platform.inari.io catalog item (sunset plan D6).
+# KRO ResourceGraphDefinition replacing the retired operator's
+# TenantNamespace.platform.inari.io catalog item (sunset plan D6; the
+# platform.inari.io CRDs were removed in Phase 4).
 #
-# Children replicate the operator's reconciler output
+# Children replicate the retired operator's reconciler output
 # (inari-operator internal/controller/tenantnamespace_controller.go):
 #   Namespace (name = spec.namespace) + RoleBinding "tenant-admin"
 #   (ClusterRole admin; Group subject spec.adminGroup when set)

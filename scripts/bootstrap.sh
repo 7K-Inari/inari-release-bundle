@@ -49,10 +49,10 @@ fi
 
 # Wait for the core stack. inari-server / inari-console are optional until
 # their charts are published by the component repos.
-# Phase 0 hub prerequisites (waves -3/-2) are core: the operator's CRDs
-# presuppose cert-manager/ExternalDNS/ESO, and KRO/Crossplane carry the
-# sunset target architecture (parent plan D1/D6).
-CORE_APPS=(cert-manager external-dns external-secrets crossplane cnpg keycloak-operator kro crossplane-provider-keycloak inari-operator-crds platform-config nats openfga platform-rgd inari-operator)
+# Waves -3/-2 are core: KRO/Crossplane carry the platform resource
+# architecture (parent plan D1/D6); cert-manager/ExternalDNS/ESO serve the
+# native resources rendered hub-side.
+CORE_APPS=(cert-manager external-dns external-secrets crossplane cnpg keycloak-operator kro crossplane-provider-keycloak platform-config nats openfga platform-rgd)
 OPTIONAL_APPS=(inari-server inari-console)
 
 wait_app() { # name

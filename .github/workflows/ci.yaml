@@ -15,12 +15,10 @@ concurrency:
 
 jobs:
   # Pulls all public stack images (ArgoCD + operators + platform + NATS +
-  # OpenFGA) into a tar cache and resolves the private inari-operator image.
+  # OpenFGA) into a tar cache.
   # Runs concurrently with lint-test so install-test never waits on pulls.
   prep:
     runs-on: ubuntu-latest
-    outputs:
-      operator-tag: ${{ steps.operator.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -68,27 +66,6 @@ jobs:
           # containerd-store docker exports dangling index entries (unpulled
           # platforms/attestations) that break ctr import in kind load
           python3 scripts/ci/normalize-image-tar.py /tmp/ci-images/node.tar /tmp/ci-images/workloads.tar
-
-      # The operator image package is private; anonymous pulls in kind fail.
-      # Pre-pull with GITHUB_TOKEN so install-test can side-load it.
-      - name: Preload private operator image
-        id: operator
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG=$(scripts/preload-operator-image.sh --docker-only | tail -1)
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          docker save "ghcr.io/7k-inari/inari-operator:${TAG}" -o "$RUNNER_TEMP/operator-image.tar"
-
-      # Artifacts cross runners more reliably than the cache alone.
-      - name: Upload operator image artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: operator-image
-          path: ${{ runner.temp }}/operator-image.tar
-          retention-days: 1
 
   lint-test:
     runs-on: ubuntu-latest
@@ -211,18 +188,6 @@ jobs:
       - name: Side-load workload images into kind
         run: kind load image-archive /tmp/ci-images/workloads.tar --name chart-testing
 
-      - name: Download operator image artifact
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: operator-image
-          path: ${{ runner.temp }}
-
-      - name: Load preloaded operator image into kind
-        run: |
-          set -euo pipefail
-          docker load -i "$RUNNER_TEMP/operator-image.tar"
-          kind load docker-image "ghcr.io/7k-inari/inari-operator:${{ needs.prep.outputs.operator-tag }}" --name chart-testing
-
       - name: Install GNU jq
         run: sudo apt-get update -y && sudo apt-get install -y jq
 
@@ -317,7 +282,6 @@ jobs:
         run: |
           set -euo pipefail
           kind load image-archive /tmp/ci-images/workloads.tar --name inari-dr
-          kind load docker-image "ghcr.io/7k-inari/inari-operator:${{ needs.prep.outputs.operator-tag }}" --name inari-dr
 
       - name: DR drill (restore + verify on a fresh kind cluster)
         env:

@@ -193,7 +193,7 @@
         },
         "adminClient": {
           "type": "object",
-          "description": "Confidential client (service account) used by inari-server / inari-operator for Keycloak Admin REST calls via client_credentials.",
+          "description": "Confidential client (service account) used by inari-server for Keycloak Admin REST calls via client_credentials.",
           "properties": {
             "clientId": {
               "type": "string"

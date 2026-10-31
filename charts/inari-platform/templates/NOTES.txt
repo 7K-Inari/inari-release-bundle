@@ -27,7 +27,7 @@ Components: argocd-cm / argocd-rbac-cm baseline only (tenant-cluster profile;
 the cluster-local Dex deploys via the sibling dex ApplicationSet).
 {{- end }}
 
-NATS, OpenFGA, inari-operator, inari-server and inari-console are separate
+NATS, OpenFGA, inari-server and inari-console are separate
 ArgoCD Applications composed on top of this chart (see gitops/).
 
 inari-agent compatibility (ConfigMap inari-agent-compat):

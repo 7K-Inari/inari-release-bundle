@@ -44,7 +44,7 @@ var _ = Describe("RenderPath", Label(suite.LabelRenderPath), Ordered, func() {
 	It("installs the platform-graphs chart (RGD Active, instance CRD established)", func() {
 		r.PlatformGraphs(GinkgoT())
 	})
-	It("flips the gitops_render cutover flag and reconciles", func() {
+	It("points the server at the platform repo and reconciles", func() {
 		r.RenderCutover(GinkgoT())
 	})
 	It("commits the rendered descriptor layout to the platform repo", func() {

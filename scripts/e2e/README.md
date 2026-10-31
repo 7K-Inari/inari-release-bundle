@@ -121,9 +121,9 @@ The gate NEVER runs a quarantined test — the direct analog of inari-server's
 
 ### Golden path (kind full stack)
 
-Prereqs: `docker`, `kind`, `kubectl`, `helm`, `jq`, `git`, Go, plus checkouts
-of the `inari-agent` and `inari-operator` repos next to this one (or set
-`AGENT_CHART_DIR` / `OPERATOR_CHART_DIR` explicitly). Build the e2e images
+Prereqs: `docker`, `kind`, `kubectl`, `helm`, `jq`, `git`, Go, plus a checkout
+of the `inari-agent` repo next to this one (or set
+`AGENT_CHART_DIR` explicitly). Build the e2e images
 first (`inari/server:e2e` from inari-server, `inari/agent:e2e` from
 inari-agent). For the HA assertions also set `E2E_MIGRATIONS_DIR` to the
 inari-server checkout's `internal/db/migrations`.
@@ -203,9 +203,8 @@ re-fetch every index each run and the helm cache saves nothing.
 
 **Excluded from the tar** (would break cache correctness): the per-release
 `ghcr.io/7k-inari/inari-server:<tag>` (changes every run — pulled +
-cosign-verified per job), `inari/agent:e2e` (built in-job — the buildx GHA
-cache covers it), and `ghcr.io/7k-inari/inari-operator:*` (private,
-dynamic appVersion tag).
+cosign-verified per job) and `inari/agent:e2e` (built in-job — the buildx GHA
+cache covers it).
 
 **Regenerating the manifest**: bump the pin (chart `--version` in
 `stack/suite/provision.go`, `defaultKindNodeImage` in
