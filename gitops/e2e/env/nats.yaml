@@ -1,0 +1,45 @@
+# inari-e2e-nats — JetStream event bus for the e2e environment (wave 1).
+# Single node with R=1 streams (the non-HA baseline; mirrors
+# scripts/e2e/stack/testdata/nats-values-e2e.yaml). HA runs flip to 3-node
+# R=3 at deploy time via the W3 env-prep step, not by editing this file.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inari-e2e-nats
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: inari-e2e
+  source:
+    repoURL: https://nats-io.github.io/k8s/helm/charts/
+    chart: nats
+    targetRevision: 2.15.2
+    helm:
+      releaseName: nats
+      values: |
+        fullnameOverride: nats
+        config:
+          cluster:
+            enabled: false
+          jetstream:
+            enabled: true
+            fileStore:
+              enabled: true
+              pvc:
+                size: 1Gi
+                storageClassName: longhorn-hdd-no-backup
+        container:
+          merge:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inari-e2e
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,32 @@
+# inari-e2e-git-service — in-cluster git service (wave 1). Replaces the
+# kind-era INARI_GIT_PROVIDER=local hostPath coupling: inari-server writes
+# real bare repos with go-git into the shared RWX PVC (INARI_GIT_LOCAL_ROOT
+# /var/lib/inari/git), and this Deployment serves them over the git protocol
+# so suites can clone from a runner pod. Contract value (environment-contract
+# §1): E2E_GIT_URL=git://git-service.inari-e2e.svc:9418
+#
+# git daemon (not HTTP): the local provider never runs update-server-info,
+# so dumb HTTP cannot serve these repos; smart-HTTP CGI is needless moving
+# parts. Unauthenticated, ClusterIP-only — e2e-internal by design.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inari-e2e-git-service
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: inari-e2e
+  source:
+    repoURL: https://github.com/7K-Inari/inari-release-bundle.git
+    targetRevision: main
+    path: gitops/e2e/git-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inari-e2e
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,14 @@
+# Shared git root for INARI_GIT_PROVIDER=local. RWX because HA legs run two
+# inari-server replicas AND this git-service pod, all mounting the same
+# volume (Longhorn share-manager; RWX is in use on this cluster).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: inari-e2e-git
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: longhorn-hdd-no-backup
+  resources:
+    requests:
+      storage: 1Gi
