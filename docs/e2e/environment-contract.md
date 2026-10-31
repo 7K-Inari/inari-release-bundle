@@ -140,10 +140,12 @@ Handoff struct (`suite/env.go` — renames must land in writer and reader):
 | `INARI_E2E_CACHE_BACKEND` | `memory` (`redis` on HA leg) | server cache backend |
 | `E2E_AGENT_INPUT_PATH` | — | agent install input override |
 
-Quarantine today: `suite.Quarantined(t, reason)` skips unless run with
-`-args -include-quarantined` (nightly only; the gate never sets it). This
-mechanism is **retired** by the taxonomy — replaced by
-`Label("quarantine")` (see [test-taxonomy.md](test-taxonomy.md)).
+Quarantine today: Ginkgo `Label("quarantine")` (`suite/labels.go`), excluded
+by the gate's `--ginkgo.label-filter=(p0||smoke)&&!quarantine` and included
+by the nightly's `p0||p1||p2` filter. The old `suite.Quarantined(t, reason)`
++ `-args -include-quarantined` mechanism (`stack/suite/quarantine.go` +
+`internal/quarflag`) was retired in the Ginkgo restructure (PR #106) — see
+[test-taxonomy.md](test-taxonomy.md).
 
 ### 2.2 Playwright UI suite (`scripts/e2e/ui/`)
 

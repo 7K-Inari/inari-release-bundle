@@ -12,13 +12,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
-# shellcheck source=lib/verify.sh
-source "$SCRIPT_DIR/lib/verify.sh"
 
 SKIP_KIND=false
 [[ "${1:-}" == "--skip-kind" ]] && SKIP_KIND=true
 
-require kubectl
+require kubectl chainsaw
 $SKIP_KIND || require kind
 
 if ! $SKIP_KIND; then
@@ -87,7 +85,7 @@ for app in "${OPTIONAL_APPS[@]}"; do
   fi
 done
 
-verify_stack
+verify_chainsaw bootstrap
 
 log "bootstrap complete."
 log "  Keycloak admin console: kubectl -n $NAMESPACE port-forward svc/keycloak-service 8080:8080"

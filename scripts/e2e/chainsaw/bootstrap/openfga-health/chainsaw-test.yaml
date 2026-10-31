@@ -1,0 +1,24 @@
+# Parity with verify.sh verify_openfga: OpenFGA /healthz answers from inside
+# the cluster (ephemeral curl pod, like the bash check).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: openfga-health
+  labels:
+    e2e.inari.io/set: smoke
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: OpenFGA /healthz responds
+    try:
+    - script:
+        timeout: 2m
+        env:
+        - name: NAMESPACE
+          value: ($namespace)
+        content: |
+          set -eu
+          kubectl -n "$NAMESPACE" run inari-verify-openfga --rm -i --restart=Never \
+            --image=curlimages/curl:8.10.1 --quiet -- \
+            -fsS --retry 12 --retry-delay 5 --retry-all-errors \
+            http://openfga:8080/healthz > /dev/null

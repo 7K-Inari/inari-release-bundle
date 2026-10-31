@@ -10,7 +10,6 @@
 package suite
 
 import (
-	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -55,7 +54,7 @@ type seedResult struct {
 // seedKeycloakAndTenant performs the KC realm/user seeding, tenant creation
 // and cluster registration, and installs the agent. Requires the chart
 // stack (provisionCharts) to have completed.
-func seedKeycloakAndTenant(t *testing.T, e *Env, c *ProvisionConfig) (seedResult, string, string) {
+func seedKeycloakAndTenant(t TB, e *Env, c *ProvisionConfig) (seedResult, string, string) {
 	t.Helper()
 	var res seedResult
 

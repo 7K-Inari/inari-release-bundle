@@ -38,7 +38,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"testing"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -94,8 +93,8 @@ const (
 	// externalDNSAppVersion is the upstream external-dns release tag whose
 	// config/crd/standard manifests carry the DNSEndpoint CRD (the helm
 	// chart does not bundle it). Equals the chart's appVersion.
-	externalDNSAppVersion   = "v0.23.0"
-	esoChartVersion         = "2.11.0"
+	externalDNSAppVersion   = "v0.24.0"
+	esoChartVersion         = "2.14.0"
 	crossplaneChartVersion  = "2.4.3"
 	kroChartVersion         = "0.9.4"
 	providerKeycloakVersion = "v3.2.3"
@@ -135,7 +134,7 @@ func testdataFile(name string) string {
 // LoadProvisionConfig reads the provisioning env (same defaults as
 // golden-path.sh). HA comes from E2E_HA — the suite's phase-1 knob — which
 // replaces the script's remaining INARI_HA helm branches.
-func LoadProvisionConfig(t *testing.T) *ProvisionConfig {
+func LoadProvisionConfig(t TB) *ProvisionConfig {
 	t.Helper()
 	repoRoot := envOr("HELM_CHARTS_DIR", filepath.Clean(filepath.Join(stackDir(), "../../..")))
 	cfg := &ProvisionConfig{
@@ -768,7 +767,7 @@ func isStreamNotFound(err error) bool {
 // golden path, in dependency layers (see the package comment graph). The
 // script (phase 2) called this between kind setup and KC seeding; phase 3
 // calls it from the in-process provisioner (Provision).
-func ProvisionStack(t *testing.T) {
+func ProvisionStack(t TB) {
 	provisionCharts(t, LoadProvisionConfig(t))
 }
 
@@ -776,7 +775,7 @@ func ProvisionStack(t *testing.T) {
 // EXISTING kind cluster, in dependency layers. Ends with the toolbox pod
 // running, the Keycloak issuer converged, the console smoke-verified, and
 // the INARI_OUTBOX stream formed.
-func provisionCharts(t *testing.T, c *ProvisionConfig) {
+func provisionCharts(t TB, c *ProvisionConfig) {
 	logf("adding helm repos (serial; component installs run concurrently below)")
 	if err := helmRepoSetup(); err != nil {
 		t.Fatalf("helm repo setup: %v", err)
@@ -875,7 +874,7 @@ type AgentInput struct {
 // ProvisionAgent is TestProvisionAgent: the inari-agent helm install plus
 // the ESO wiring, driven by the agent-input JSON the registration stage
 // wrote ($E2E_AGENT_INPUT_PATH).
-func ProvisionAgent(t *testing.T) {
+func ProvisionAgent(t TB) {
 	path := os.Getenv("E2E_AGENT_INPUT_PATH")
 	if path == "" {
 		t.Fatal("E2E_AGENT_INPUT_PATH not set: the registration stage must write the agent input JSON")
@@ -895,7 +894,7 @@ func ProvisionAgent(t *testing.T) {
 // secret + ClusterSecretStore). Split from provisionCharts because the
 // registration token only exists after tenant + cluster registration
 // against the running server.
-func provisionAgent(t *testing.T, in AgentInput) {
+func provisionAgent(t TB, in AgentInput) {
 	for field, v := range map[string]string{
 		"namespace": in.Namespace, "cluster_id": in.ClusterID, "org_id": in.OrgID,
 		"reg_token": in.RegToken, "agent_chart_dir": in.AgentChartDir, "agent_image": in.AgentImage,

@@ -1,0 +1,35 @@
+# Parity with verify.sh verify_postgres: the inari/keycloak/openfga
+# databases exist on the CNPG primary. No K8s resource proves this, so it
+# stays a probe (psql on the label-selected primary pod).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: databases-exist
+  labels:
+    e2e.inari.io/set: smoke
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: databases inari/keycloak/openfga exist
+    try:
+    - script:
+        env:
+        - name: NAMESPACE
+          value: ($namespace)
+        content: |
+          set -eu
+          primary=$(kubectl -n "$NAMESPACE" get pod \
+            -l "cnpg.io/cluster=postgresql,cnpg.io/instanceRole=primary" \
+            -o jsonpath='{.items[0].metadata.name}')
+          if [ -z "$primary" ]; then
+            echo "no CNPG primary pod found for cluster postgresql" >&2
+            exit 1
+          fi
+          dbs=$(kubectl -n "$NAMESPACE" exec -i "$primary" -c postgres -- \
+            psql -U postgres -Atc \
+            "SELECT datname FROM pg_database WHERE datname IN ('inari','keycloak','openfga') ORDER BY 1")
+          expected=$(printf 'inari\nkeycloak\nopenfga')
+          if [ "$dbs" != "$expected" ]; then
+            echo "expected databases inari/keycloak/openfga, got: ${dbs:-<none>}" >&2
+            exit 1
+          fi

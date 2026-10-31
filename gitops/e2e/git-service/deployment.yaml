@@ -1,0 +1,55 @@
+# Serves the bare repos inari-server writes to the shared git root
+# (INARI_GIT_PROVIDER=local) over the git protocol. --export-all: the local
+# provider's go-git writes never create git-daemon-export-ok markers.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-service
+  labels:
+    app.kubernetes.io/name: git-service
+    app.kubernetes.io/part-of: inari-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: git-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: git-service
+        app.kubernetes.io/part-of: inari-e2e
+    spec:
+      containers:
+        - name: git-daemon
+          image: alpine/git:2.45.2
+          # alpine/git ships the git package WITHOUT the git-daemon
+          # subpackage (Alpine split it out; `git daemon` crashes with
+          # "'daemon' is not a git command" — verified live). Install the
+          # matching subpackage at start, then exec the daemon. The apk
+          # fetch needs one-time egress to the Alpine CDN per pod start.
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              apk add --no-cache git-daemon >/dev/null
+              && exec git daemon --export-all --reuseaddr
+              --base-path=/srv/git /srv/git
+          ports:
+            - name: git
+              containerPort: 9418
+          readinessProbe:
+            tcpSocket:
+              port: git
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: git-root
+              mountPath: /srv/git
+      volumes:
+        - name: git-root
+          persistentVolumeClaim:
+            claimName: inari-e2e-git

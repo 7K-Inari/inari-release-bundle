@@ -1,0 +1,28 @@
+# AppProject for the persistent e2e environment (namespace inari-e2e).
+# Synced by the 7k-app-of-apps pointer app (apps/7kgroup/inari-e2e-env.yaml).
+# Least privilege: only the inari-e2e namespace, no cluster-scoped resources
+# except Namespace itself (CreateNamespace=true needs it).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: inari-e2e
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  description: Inari e2e environment (persistent test env, plan C4)
+  sourceRepos:
+    - "https://github.com/7K-Inari/inari-release-bundle.git"
+    # Pre-rename name; keep until the repo rename cut-over completes.
+    - "https://github.com/7K-Inari/inari-helm-charts.git"
+    - "https://nats-io.github.io/k8s/helm/charts/"
+    - "https://openfga.github.io/helm-charts"
+  destinations:
+    - server: "https://kubernetes.default.svc"
+      namespace: inari-e2e
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

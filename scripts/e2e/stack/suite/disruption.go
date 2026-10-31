@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -19,26 +18,15 @@ import (
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/poll"
 )
 
-// Disruption groups the HA-only assertions (pod kill, rollout under traffic,
-// migration-lock race, leader-lease single-execution, agent stream fencing,
-// agent leader failover). Everything here runs ONLY with E2E_HA=1, after the
-// non-HA golden path above has passed unchanged (replaces the script's
+// HA disruption helpers (pod kill, rollout under traffic, migration-lock
+// race, leader-lease single-execution, agent stream fencing, agent leader
+// failover). The specs at the module root gate them on E2E_HA=1; they run
+// after the non-HA golden path has passed unchanged (replaces the script's
 // INARI_HA branching with explicit skips).
-func Disruption(t *testing.T, e *Env) {
-	if !e.HA {
-		t.Skip("E2E_HA != 1: HA disruption assertions run on the HA leg only")
-	}
-	t.Run("c_migration_lock_race", func(t *testing.T) { haMigrationLockRace(t, e) })
-	t.Run("d1_lease_single_execution", func(t *testing.T) { haLeaseSingleExecution(t, e) })
-	t.Run("d2_stream_fencing", func(t *testing.T) { haStreamFencing(t, e) })
-	t.Run("d3_agent_leader_failover", func(t *testing.T) { haAgentLeaderFailover(t, e) })
-	t.Run("a_pod_kill_under_traffic", func(t *testing.T) { haPodKill(t, e) })
-	t.Run("b_rollout_restart_under_traffic", func(t *testing.T) { haRolloutRestart(t, e) })
-}
 
 const serverLabel = "app.kubernetes.io/name=inari-server"
 
-func serverLogs(t *testing.T, e *Env) string {
+func serverLogs(t TB, e *Env) string {
 	t.Helper()
 	out, err := kube.Logs(e.Namespace, serverLabel)
 	require.NoError(t, err)
@@ -56,7 +44,7 @@ func countLinesContaining(s, sub string) int {
 }
 
 // waitClusterActive polls until the registered cluster reports active.
-func waitClusterActive(t *testing.T, e *Env, msg string) {
+func waitClusterActive(t TB, e *Env, msg string) {
 	t.Helper()
 	poll.Eventually(t, 120*time.Second, 5*time.Second, func() (bool, error) {
 		cl, err := e.API.GetCluster(e.ClusterID)
@@ -83,7 +71,7 @@ done
 echo "ok=$ok fail=$fail"
 `
 
-func installSampler(t *testing.T, e *Env) {
+func installSampler(t TB, e *Env) {
 	t.Helper()
 	_, err := kube.ExecInPodStdin(e.Namespace, e.Toolbox, samplerScript,
 		"sh", "-c", "cat > /tmp/sampler.sh && chmod +x /tmp/sampler.sh")
@@ -93,7 +81,7 @@ func installSampler(t *testing.T, e *Env) {
 // startTraffic launches the sampler for a window of `seconds` (≈5
 // iterations/s — busybox sh has no SECONDS, so the window is an iteration
 // count).
-func startTraffic(t *testing.T, e *Env, seconds int) {
+func startTraffic(t TB, e *Env, seconds int) {
 	t.Helper()
 	_, err := kube.ExecInPod(e.Namespace, e.Toolbox, "sh", "-c",
 		fmt.Sprintf("rm -f /tmp/traffic.out; nohup /tmp/sampler.sh %d 'http://inari-server:8080/readyz' > /tmp/traffic.out 2>&1 &", seconds*5))
@@ -101,7 +89,7 @@ func startTraffic(t *testing.T, e *Env, seconds int) {
 }
 
 // stopTraffic waits out the sampler and returns the failed-request count.
-func stopTraffic(t *testing.T, e *Env) int {
+func stopTraffic(t TB, e *Env) int {
 	t.Helper()
 	var out string
 	poll.Eventually(t, 180*time.Second, 3*time.Second, func() (bool, error) {
@@ -129,14 +117,14 @@ func stopTraffic(t *testing.T, e *Env) int {
 // asserted (goose only logs the locker while migrations are pending; pods
 // that restart during bring-up rotate logs away) — the lock mechanics are
 // covered deterministically by W1's internal/db integration tests.
-func haMigrationLockRace(t *testing.T, e *Env) {
+func HAMigrationLockRace(t TB, e *Env) {
 	require.NoError(t, kube.WaitCondition(e.Namespace, "condition=ready", "300s",
 		"pod", "-l", serverLabel),
 		"HA(c): server pods never became ready")
 
 	expected, err := filepath.Glob(filepath.Join(e.MigrationsDir, "[0-9]*.sql"))
 	require.NoError(t, err)
-	require.NotEmpty(t, expected, "HA(c): no migrations under SERVER_MIGRATIONS_DIR=%s", e.MigrationsDir)
+	require.NotEmpty(t, expected, "HA(c): no migrations under E2E_MIGRATIONS_DIR=%s", e.MigrationsDir)
 	applied, err := kube.PSQLInari(e.Namespace, "SELECT max(version_id) FROM goose_db_version")
 	require.NoError(t, err)
 	assert.Equal(t, strconv.Itoa(len(expected)), applied,
@@ -165,7 +153,7 @@ func haMigrationLockRace(t *testing.T, e *Env) {
 // loops, tzf-reconcile, ...) must have exactly one holder cluster-wide,
 // renewed (expires_at in the future), stable across samples (no flapping),
 // and — within this quiet window — acquired exactly once since boot.
-func haLeaseSingleExecution(t *testing.T, e *Env) {
+func HALeaseSingleExecution(t TB, e *Env) {
 	leases, err := kube.PSQLInari(e.Namespace, "SELECT name || '|' || holder FROM leader_leases")
 	require.NoError(t, err)
 	require.NotEmpty(t, leases, "HA(d1): leader_leases is empty (no lease-gated loop ever acquired?)")
@@ -217,7 +205,7 @@ func haLeaseSingleExecution(t *testing.T, e *Env) {
 // ClusterIP, so 3 agent pods guarantee a collision by pigeonhole (3 streams,
 // 2 pods) — deterministic, no luck involved. The new stream wins; the stale
 // session must be evicted (logged).
-func haStreamFencing(t *testing.T, e *Env) {
+func HAStreamFencing(t TB, e *Env) {
 	evictionsBefore := countLinesContaining(serverLogs(t, e), "evicting stale session")
 
 	_, err := kube.Kubectl("-n", "inari-system", "scale", "deployment/inari-agent", "--replicas=3")
@@ -245,7 +233,7 @@ func haStreamFencing(t *testing.T, e *Env) {
 // killing the leader must promote a standby and restore the stream inside a
 // bounded window. Live run 423ffd13 measured ~19s (kill → new lease holder);
 // budget 60s to absorb kind CI noise.
-func haAgentLeaderFailover(t *testing.T, e *Env) {
+func HAAgentLeaderFailover(t TB, e *Env) {
 	// Leader election is enabled only here: HA(d2) above needs duplicate
 	// streams, which leader election would suppress.
 	_, err := kube.Run("helm", "upgrade", "--install", "inari-agent", e.AgentChartDir,
@@ -293,7 +281,7 @@ func haAgentLeaderFailover(t *testing.T, e *Env) {
 // probes), and the claim-based loops (outbox relay + scaffold reconcile —
 // deliberately NOT lease-gated, ADR-0011) plus the durable JetStream
 // consumer groups (ADR-0014) must keep processing work.
-func haPodKill(t *testing.T, e *Env) {
+func HAPodKill(t TB, e *Env) {
 	installSampler(t, e)
 	victim, err := kube.Kubectl("-n", e.Namespace, "get", "pods", "-l", serverLabel,
 		"-o", "jsonpath={.items[0].metadata.name}")
@@ -311,29 +299,13 @@ func haPodKill(t *testing.T, e *Env) {
 
 	// The claim-based outbox relay must still materialize an RBAC mapping
 	// flip into the tenant state repo after the pod loss.
-	require.NoError(t, e.API.PutRBACMappings("viewers", "admin"),
-		"HA(a): PUT rbac/mappings failed after the pod loss")
-	repo := e.stateRepo()
-	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
-		bindings, err := gitShow(repo, "baseline/rbac/clusterrolebindings.yaml")
-		if err != nil {
-			return false, nil
-		}
-		return strings.Contains(bindings, "  name: tenant-"+e.Tenant+"-viewers-admin\n"), nil
-	}, "HA(a): outbox relay/consumers processing rbac.mappings.updated after the pod loss")
+	FlipRBACMapping(t, e, "viewers", "admin")
 
-	// Restore the pre-disruption mapping (viewers→editor, set in cluster.go):
-	// the console UI suite runs after this phase and its built-in-protection
-	// spec requires exactly one admin-bearing team in the org.
-	require.NoError(t, e.API.PutRBACMappings("viewers", "editor"),
-		"HA(a): restoring viewers→editor mapping failed")
-	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
-		bindings, err := gitShow(repo, "baseline/rbac/clusterrolebindings.yaml")
-		if err != nil {
-			return false, nil
-		}
-		return strings.Contains(bindings, "  name: tenant-"+e.Tenant+"-viewers-editor\n"), nil
-	}, "HA(a): outbox relay processing the viewers→editor restore")
+	// Restore the pre-disruption mapping (viewers→editor, set in the RBAC
+	// phase): the console UI suite runs after this phase and its
+	// built-in-protection spec requires exactly one admin-bearing team in
+	// the org.
+	FlipRBACMapping(t, e, "viewers", "editor")
 
 	// Durable-consumer failover evidence: the shared outbox-rbac-materialize
 	// group kept acking after the pod loss (ack floor advanced past the
@@ -380,7 +352,7 @@ func haPodKill(t *testing.T, e *Env) {
 // (available replicas never drop below 2) and keep failed requests within a
 // small error budget (in-flight connections may reset during pod
 // termination).
-func haRolloutRestart(t *testing.T, e *Env) {
+func HARolloutRestart(t TB, e *Env) {
 	installSampler(t, e)
 	startTraffic(t, e, 150)
 

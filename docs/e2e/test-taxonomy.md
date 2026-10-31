@@ -21,7 +21,8 @@ the same vocabulary everywhere. Companion document:
 Every test carries **exactly one** priority label. A test without a priority
 label never runs anywhere — the stage filters (§3) select by priority, so an
 unlabeled test is dead code. Suites should treat "no priority label" as a
-lint error.
+lint error. The one deliberate exception is the manual-only `renderpath`
+label (§1.5).
 
 ### 1.2 Surface labels (optional, additive)
 
@@ -47,6 +48,12 @@ triage, never for gating decisions on their own:
 |---|---|
 | `quarantine` | Known-flaky test under remediation. **Never runs in any gate**; runs in the nightly (with `include-quarantined` semantics). See §4. |
 
+### 1.5 Manual-only label
+
+| Label | Meaning |
+|---|---|
+| `renderpath` | Ginkgo `Label("renderpath")` (`stack/suite/labels.go` `LabelRenderPath`). The deliberate exception to the "exactly one priority label per spec" rule: the render-path validation flow mutates the stack **destructively** (render cutover + RGD teardown), so it must **never** be selected by a stage filter — neither the gate's `(p0 \|\| smoke) && !quarantine` nor the nightly's `p0 \|\| p1 \|\| p2` matches it. Runs manual-only via an explicit `--ginkgo.label-filter=renderpath` (the Ginkgo port of the old `-run TestRenderPath` targeted invocation). 13 specs in `scripts/e2e/stack/renderpath_test.go`. |
+
 ---
 
 ## 2. One mechanism per runner, one vocabulary overall
@@ -61,18 +68,19 @@ The Ginkgo `Label("p0")` ↔ Playwright `@p0` mapping is **1:1 by name** —
 renaming a label is a cross-suite change. Chainsaw tests carry the same
 label names in metadata.
 
-### Migration of the current quarantine mechanisms
+### Quarantine mechanism migration (done)
 
-Today the two suites quarantine differently; the taxonomy unifies them:
+The two suites quarantined differently before the taxonomy; they are now
+unified:
 
 - **Playwright:** `@quarantine` title tag — **unchanged**.
 - **Go stack suite:** `suite.Quarantined(t, reason)` +
   `-args -include-quarantined` (`stack/suite/quarantine.go` +
-  `internal/quarflag`) is **retired** — replaced by `Label("quarantine")`
-  and `--label-filter`. The gate never selects the label; the nightly
-  always does. This is the same hard rule as inari-server's `flaky` build
-  tag (which is unchanged — it is repo-native unit/integration gating, not
-  part of this taxonomy).
+  `internal/quarflag`) was **retired** in the Ginkgo restructure (PR #106) —
+  replaced by `Label("quarantine")` and `--label-filter`. The gate never
+  selects the label; the nightly always does. This is the same hard rule as
+  inari-server's `flaky` build tag (which is unchanged — it is repo-native
+  unit/integration gating, not part of this taxonomy).
 - **inari-server `flaky` build tag:** unchanged, out of scope here.
 
 ---
@@ -176,11 +184,15 @@ Validated against the specs on 2026-10-30.
 | `tenants/onboarding.spec.ts` | `@p1 @tenants` | org creation; intentionally leaks the org |
 | `tenants/switching.spec.ts` | `@p1 @tenants` | tenant switching; intentionally leaks the org |
 
-**Go stack suite** (`scripts/e2e/stack/`): no labels today — plain `testing`
-phases (`tenant`, `cluster`, `rbac`, `policy`, `disruption` gated on
-`E2E_HA=1`) plus `suite.Quarantined(t, ...)`. The Ginkgo restructure (phase
-P1b) assigns `Label("p0")`/`Label("smoke")`/… per spec; behavior is
-preserved, only structure changes.
+**Go stack suite** (`scripts/e2e/stack/`): Ginkgo v2 labels per spec —
+priority (`p0`/`p1`/`p2`), `smoke`, surface labels (`tenants`, `cluster`,
+`rbac`, `policy`, `disruption`), and `quarantine`, all defined in
+`suite/labels.go`; phases map to spec files (`tenant_test.go`,
+`cluster_test.go`, …, `disruption` specs gated on `E2E_HA=1`). The
+destructive render-path flow (`renderpath_test.go`) carries the manual-only
+`Label("renderpath")` (§1.5) instead of a priority label. The Ginkgo
+restructure (phase P1b, PR #106) assigned the labels; behavior was
+preserved, only structure changed.
 
 **Chainsaw** (`scripts/e2e/chainsaw/`, phase P1a): new — declarative
 cluster-state assertions replacing `scripts/lib/verify.sh` + bootstrap/DR

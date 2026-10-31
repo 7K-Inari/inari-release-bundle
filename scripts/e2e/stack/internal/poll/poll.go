@@ -5,9 +5,17 @@ package poll
 
 import (
 	"fmt"
-	"testing"
 	"time"
 )
+
+// T is the minimal test context Eventually needs. Both *testing.T and
+// Ginkgo's GinkgoT() (via the suite's TB interface) satisfy it; testing.TB
+// itself is not usable because GinkgoT()'s interface type lacks the
+// unexported private() marker.
+type T interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
 
 // Until runs cond every interval until it returns true or the timeout
 // elapses. A non-nil error from cond aborts immediately (permanent failure);
@@ -33,7 +41,7 @@ func Until(timeout, interval time.Duration, cond func() (bool, error)) error {
 
 // Eventually is Until bound to a test: it fails t when the condition never
 // holds. msg describes the condition in words ("org_creator tuple present").
-func Eventually(t *testing.T, timeout, interval time.Duration, cond func() (bool, error), msg string) {
+func Eventually(t T, timeout, interval time.Duration, cond func() (bool, error), msg string) {
 	t.Helper()
 	if err := Until(timeout, interval, cond); err != nil {
 		t.Fatalf("eventually %s: %v", msg, err)
