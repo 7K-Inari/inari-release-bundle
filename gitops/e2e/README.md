@@ -97,7 +97,11 @@ suite leg (contract §1.1).
 1. All seven apps Synced + Healthy (incl. the chart's PostSync
    realm-verify job) — `argocd app list -p inari-e2e`.
 2. `curl https://inari-e2e.7kgroup.org/config.js` → 200;
-   `curl https://inari-e2e.7kgroup.org/api/v1/healthz` → 200.
+   `curl -o /dev/null -w '%{http_code}' https://inari-e2e.7kgroup.org/api/v1/tenants`
+   → 401. (No public health endpoint is routed: inari-server's `/healthz`
+   is server-root only while the HTTPRoute matches prefix `/api`, so a 401
+   from a real API operation is what proves route + server + auth
+   middleware.)
 3. `curl https://auth-e2e.7kgroup.org/realms/inari/.well-known/openid-configuration`
    → 200 with `issuer` == `https://auth-e2e.7kgroup.org/realms/inari`,
    from a runner pod (W3) or any in-namespace pod.
