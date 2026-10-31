@@ -86,6 +86,79 @@ func (c *Client) AdminToken() (string, error) {
 	)
 }
 
+// MasterToken fetches a bootstrap-admin token against the master realm
+// (keycloak-initial-admin secret). Cross-realm assertions (tenant realms
+// created by provider-keycloak) need it: the inari-platform-admin client
+// only holds realm-admin on the inari realm.
+func (c *Client) MasterToken() (string, error) {
+	userB64, err := kube.Kubectl("-n", c.NS, "get", "secret", "keycloak-initial-admin",
+		"-o", "jsonpath={.data.username}")
+	if err != nil {
+		return "", err
+	}
+	passB64, err := kube.Kubectl("-n", c.NS, "get", "secret", "keycloak-initial-admin",
+		"-o", "jsonpath={.data.password}")
+	if err != nil {
+		return "", err
+	}
+	user, err := base64.StdEncoding.DecodeString(strings.TrimSpace(userB64))
+	if err != nil {
+		return "", fmt.Errorf("decoding keycloak-initial-admin username: %w", err)
+	}
+	pass, err := base64.StdEncoding.DecodeString(strings.TrimSpace(passB64))
+	if err != nil {
+		return "", fmt.Errorf("decoding keycloak-initial-admin password: %w", err)
+	}
+	body, err := kube.Curl(c.NS, c.Toolbox,
+		c.base()+"/realms/master/protocol/openid-connect/token",
+		"-d", "grant_type=password",
+		"-d", "client_id=admin-cli",
+		"-d", "username="+string(user),
+		"-d", "password="+string(pass),
+	)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return "", fmt.Errorf("decoding master token response: %w (%s)", err, body)
+	}
+	if resp.AccessToken == "" {
+		return "", fmt.Errorf("master token response carried no access_token")
+	}
+	return resp.AccessToken, nil
+}
+
+// RealmExists reports whether the given realm exists. curl -sf turns the
+// 404 into an error, which maps to false — transient errors also map to
+// false so callers can poll (they fail with context when it never flips).
+func (c *Client) RealmExists(token, realm string) bool {
+	var realmRep struct {
+		Realm string `json:"realm"`
+	}
+	if err := c.get("/admin/realms/"+realm, token, &realmRep); err != nil {
+		return false
+	}
+	return realmRep.Realm == realm
+}
+
+// FindClientIn returns the internal id (UUID) of the client with the given
+// clientId in the given realm, or "" when absent.
+func (c *Client) FindClientIn(token, realm, clientID string) (string, error) {
+	var clients []struct {
+		ID string `json:"id"`
+	}
+	if err := c.get("/admin/realms/"+realm+"/clients?clientId="+clientID, token, &clients); err != nil {
+		return "", err
+	}
+	if len(clients) == 0 {
+		return "", nil
+	}
+	return clients[0].ID, nil
+}
+
 // UserToken is the dev-admin password grant with the organization scope.
 func (c *Client) UserToken() (string, error) {
 	return c.PasswordToken("dev-admin", "dev-admin", "openid organization:*")
