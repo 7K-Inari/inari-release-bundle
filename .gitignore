@@ -2,4 +2,5 @@ dist/
 *.tgz
 charts/*/charts/
 charts/*/Chart.lock
+scripts/e2e/chainsaw/reports/
 .DS_Store

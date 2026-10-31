@@ -226,6 +226,16 @@ jobs:
       - name: Install GNU jq
         run: sudo apt-get update -y && sudo apt-get install -y jq
 
+      - name: Install chainsaw
+        # bootstrap.sh/dr-drill.sh verify via `chainsaw test` (scripts/e2e/chainsaw/).
+        # Pin matches scripts/e2e/chainsaw/README.md; use the release binary —
+        # v0.2.x does not compile with the runner's Go (testing.MainStart drift).
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/kyverno/chainsaw/releases/download/v0.2.13/chainsaw_linux_amd64.tar.gz \
+            | sudo tar xz -C /usr/local/bin chainsaw
+          chainsaw version
+
       - name: Bootstrap platform stack (ArgoCD + gitops apps)
         env:
           GITOPS_TARGET_REVISION: ${{ github.head_ref || github.ref_name }}
@@ -273,6 +283,26 @@ jobs:
           sleep 10
           kubectl -n argocd wait application/platform-config \
             --for=jsonpath='{.status.health.status}'=Healthy --timeout=600s
+
+      - name: Seed DR markers
+        # The DR drill's chainsaw dr set asserts restored *content* (realm row,
+        # public tables in the inari DB, OpenFGA store 'inari'). Without seeded
+        # content the backup is empty and the drill cannot prove the restore
+        # actually carried anything.
+        run: |
+          set -euo pipefail
+          primary=$(kubectl -n inari get pod \
+            -l cnpg.io/cluster=postgresql,cnpg.io/instanceRole=primary \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl -n inari exec -i "$primary" -c postgres -- psql -U postgres -d inari \
+            -c 'CREATE TABLE dr_marker (id int primary key); INSERT INTO dr_marker VALUES (1);'
+          sid=$(kubectl -n inari exec deployment/nats-box -- \
+            curl -sfS -X POST http://openfga:8080/stores \
+            -H 'Content-Type: application/json' -d '{"name": "inari"}' | jq -r .id)
+          kubectl -n inari exec deployment/nats-box -- \
+            curl -sfS -X POST "http://openfga:8080/stores/${sid}/authorization-models" \
+            -H 'Content-Type: application/json' \
+            -d '{"schema_version":"1.1","type_definitions":[{"type":"org"}]}' | jq .
 
       - name: Backup
         run: scripts/backup.sh "$RUNNER_TEMP/backups"

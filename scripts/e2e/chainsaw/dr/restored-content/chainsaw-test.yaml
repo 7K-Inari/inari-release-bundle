@@ -1,0 +1,58 @@
+# Post-restore verification for dr-drill.sh — goes beyond the bootstrap
+# smoke set: proves the backup content actually landed, not just that the
+# stack is healthy (a fresh bootstrap is healthy without any restore).
+#
+# Expects a backup taken from a fully deployed stack (inari-server running,
+# so the inari DB has application tables and the OpenFGA store exists).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: restored-content
+  labels:
+    # Deliberately NOT in the smoke set: PostSync hooks must never select
+    # these (they would fail on a fresh install where nothing was restored).
+    e2e.inari.io/set: dr
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: PostgreSQL restored content (realm row + inari tables)
+    try:
+    - script:
+        env:
+        - name: NAMESPACE
+          value: ($namespace)
+        content: |
+          set -eu
+          primary=$(kubectl -n "$NAMESPACE" get pod \
+            -l "cnpg.io/cluster=postgresql,cnpg.io/instanceRole=primary" \
+            -o jsonpath='{.items[0].metadata.name}')
+          if [ -z "$primary" ]; then
+            echo "no CNPG primary pod found for cluster postgresql" >&2
+            exit 1
+          fi
+          realms=$(kubectl -n "$NAMESPACE" exec -i "$primary" -c postgres -- \
+            psql -U postgres -d keycloak -Atc "SELECT count(*) FROM realm WHERE name='inari'")
+          if [ "$realms" != "1" ]; then
+            echo "realm 'inari' row missing from keycloak DB post-restore (count: ${realms:-<none>})" >&2
+            exit 1
+          fi
+          tables=$(kubectl -n "$NAMESPACE" exec -i "$primary" -c postgres -- \
+            psql -U postgres -d inari -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public'")
+          if [ "$tables" -le 0 ]; then
+            echo "no public tables in inari DB post-restore — pg restore did not land" >&2
+            exit 1
+          fi
+  - name: OpenFGA store 'inari' restored
+    try:
+    - script:
+        env:
+        - name: NAMESPACE
+          value: ($namespace)
+        content: |
+          set -eu
+          if ! kubectl -n "$NAMESPACE" exec deployment/nats-box -- \
+              curl -sfS http://openfga:8080/stores \
+              | jq -e '.stores[] | select(.name == "inari")' > /dev/null; then
+            echo "OpenFGA store 'inari' missing post-restore" >&2
+            exit 1
+          fi

@@ -1,0 +1,23 @@
+# Expected cluster state for the chainsaw smoke/DR assertions.
+#
+# SINGLE SYNC POINT: these values mirror the charts/gitops defaults and must
+# be bumped in the same PR that changes them:
+#   - agent.*           ↔ charts/inari-platform/values.yaml agent.supportedRange / agent.recommended
+#   - postgresql.*      ↔ charts/inari-platform/values.yaml postgresql.instances (and the gitops
+#                         platform-config Application values override)
+#   - keycloak.instances ↔ charts/inari-platform/values.yaml keycloak.instances
+#   - nats.replicas     ↔ gitops/platform/nats.yaml config.cluster.replicas
+#   - openfga.replicas  ↔ gitops/platform/openfga.yaml replicaCount
+agent:
+  supportedRange: ">=0.5.0 <0.6.0"
+  recommended: "0.5.1"
+postgresql:
+  instances: 1
+keycloak:
+  instances: 1
+nats:
+  replicas: 3
+natsBox:
+  replicas: 1
+openfga:
+  replicas: 1

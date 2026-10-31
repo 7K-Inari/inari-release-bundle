@@ -1,0 +1,56 @@
+# Parity with verify.sh verify_workloads: keycloak + nats StatefulSets fully
+# ready, nats-box + openfga Deployments fully available (rollout-status
+# equivalent).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: workloads-ready
+  labels:
+    e2e.inari.io/set: smoke
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: keycloak StatefulSet ready
+    try:
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: keycloak
+          spec:
+            replicas: ($values.keycloak.instances)
+          status:
+            readyReplicas: ($values.keycloak.instances)
+  - name: nats StatefulSet ready
+    try:
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: nats
+          spec:
+            replicas: ($values.nats.replicas)
+          status:
+            readyReplicas: ($values.nats.replicas)
+  - name: nats-box Deployment available
+    try:
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nats-box
+          status:
+            availableReplicas: ($values.natsBox.replicas)
+  - name: openfga Deployment available
+    try:
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: openfga
+          status:
+            availableReplicas: ($values.openfga.replicas)

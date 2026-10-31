@@ -1,0 +1,25 @@
+# Parity with verify.sh wait_cnpg_cluster: the CNPG Cluster reaches
+# "Cluster in healthy state" with all expected instances ready.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: cnpg-ready
+  labels:
+    e2e.inari.io/set: smoke
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: CNPG cluster postgresql is healthy with all instances ready
+    try:
+    - assert:
+        resource:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: postgresql
+          spec:
+            instances: ($values.postgresql.instances)
+          status:
+            phase: Cluster in healthy state
+            instances: ($values.postgresql.instances)
+            readyInstances: ($values.postgresql.instances)
