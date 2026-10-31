@@ -628,6 +628,9 @@ metadata:
 spec:
   provider:
     kubernetes:
+      # ESO's kubernetes provider schema defaults remoteNamespace to
+      # "default" — pin the tenant namespace or reads fail RBAC.
+      remoteNamespace: ` + r.tenantNS + `
       server:
         url: https://kubernetes.default.svc
         caProvider:
