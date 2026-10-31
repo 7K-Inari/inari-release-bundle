@@ -1,0 +1,27 @@
+# Parity with verify.sh verify_nats: /jsz on the NATS monitoring port only
+# serves when JetStream is enabled. The monitor port is pod-local (not on
+# the Service), so this curls the nats-0 pod IP from the nats-box pod.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: nats-jetstream
+  labels:
+    e2e.inari.io/set: smoke
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: NATS JetStream /jsz responds
+    try:
+    - script:
+        env:
+        - name: NAMESPACE
+          value: ($namespace)
+        content: |
+          set -eu
+          ip=$(kubectl -n "$NAMESPACE" get pod nats-0 -o jsonpath='{.status.podIP}')
+          if [ -z "$ip" ]; then
+            echo "could not get nats-0 pod IP" >&2
+            exit 1
+          fi
+          kubectl -n "$NAMESPACE" exec deployment/nats-box -- \
+            curl -sfS "http://${ip}:8222/jsz" > /dev/null

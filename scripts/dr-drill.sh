@@ -13,8 +13,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
-# shellcheck source=lib/verify.sh
-source "$SCRIPT_DIR/lib/verify.sh"
 
 KEEP=false
 SKIP_KIND=false
@@ -71,7 +69,7 @@ log "restoring backup $ARCHIVE"
 "$SCRIPT_DIR/restore.sh" "$ARCHIVE"
 
 log "verifying restored state"
-verify_stack
+verify_chainsaw bootstrap dr
 
 log "DR DRILL PASSED: backup restored and verified on a fresh cluster"
 if $KEEP; then

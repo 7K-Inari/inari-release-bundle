@@ -1,0 +1,26 @@
+# Not in verify.sh — added per the migration plan: the inari-agent-compat
+# ConfigMap must contain the supported agent range/recommendation declared
+# by the platform chart (AGENTS.md: agent.supportedRange/agent.recommended
+# are human-maintained via PR). Expected values come from
+# scripts/e2e/chainsaw/values/expected.yaml — bump them in the same PR as
+# charts/inari-platform/values.yaml agent.*.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: agent-compat
+  labels:
+    e2e.inari.io/set: smoke
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: inari-agent-compat ConfigMap carries the declared range
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: inari-agent-compat
+          data:
+            supportedRange: ($values.agent.supportedRange)
+            recommended: ($values.agent.recommended)
