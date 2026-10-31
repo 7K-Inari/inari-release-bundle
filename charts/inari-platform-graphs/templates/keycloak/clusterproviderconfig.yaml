@@ -8,11 +8,12 @@
 # default providerConfigRef.kind=ClusterProviderConfig).
 #
 # The referenced Secret must hold provider-keycloak's credentials JSON:
-#   {"client_id": "...", "client_secret": "...", "url": "http://keycloak-service.inari.svc:8080"}
-# The inari-platform chart's inari-keycloak-admin Secret carries the admin
-# client credentials as separate keys today; adding the `credentials` JSON
-# key there (or a dedicated ESO-synced secret) is Phase 3 wiring — no
-# credentials live in this chart.
+#   {"client_id": "...", "client_secret": "...", "url": "http://keycloak-service:8080", "realm": "master"}
+# charts/inari-platform renders it (inari-keycloak-provisioner, Phase 3
+# wiring): a dedicated master-realm client with the create-realm role —
+# realm creation is a master-level capability no inari-realm identity can
+# hold. External Keycloak installs must provide an equivalent secret and
+# override keycloak.providerConfig.credentialsSecretRef.
 apiVersion: keycloak.m.crossplane.io/v1beta1
 kind: ClusterProviderConfig
 metadata:

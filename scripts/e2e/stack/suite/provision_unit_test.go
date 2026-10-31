@@ -201,6 +201,16 @@ func TestGitOpsPinParity(t *testing.T) {
 			t.Fatalf("provider.yaml missing %q", want)
 		}
 	})
+	t.Run("function-go-templating", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join(opsDir, "crossplane-provider-keycloak", "function.yaml"))
+		if err != nil {
+			t.Fatalf("reading function.yaml: %v", err)
+		}
+		want := "package: " + functionGoTemplatingPackage + ":" + functionGoTemplatingVersion
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("function.yaml missing %q", want)
+		}
+	})
 }
 
 // targetRevisions returns every spec source's targetRevision in file order.

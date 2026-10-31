@@ -15,7 +15,7 @@ metadata:
 spec:
   compositeTypeRef:
     apiVersion: identity.inari.io/v1alpha1
-    kind: XTenantClient
+    kind: TenantClient
   mode: Pipeline
   pipeline:
     - step: client

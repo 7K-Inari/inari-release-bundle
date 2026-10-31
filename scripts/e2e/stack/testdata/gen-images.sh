@@ -33,6 +33,7 @@ EXTERNAL_DNS_CHART_VERSION="1.23.0"   # suite/provision.go externalDNSChartVersi
 CROSSPLANE_CHART_VERSION="2.4.3"      # suite/provision.go crossplaneChartVersion
 KRO_CHART_VERSION="0.9.4"             # suite/provision.go kroChartVersion (OCI chart)
 PROVIDER_KEYCLOAK_IMAGE="xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3"  # provision.go providerKeycloak*
+FUNCTION_GO_TEMPLATING_IMAGE="xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.13.2"  # provision.go functionGoTemplating*
 REDIS_IMAGE="bitnamilegacy/redis:8.2.1"  # suite/provision.go installServer (HA; registry pinned to docker.io so the rendered ref matches this name)
 CONSOLE_NGINX="nginx:1.27-alpine"            # charts/inari-console values
 CONSOLE_ORAS="ghcr.io/oras-project/oras:v1.3.0" # charts/inari-console values
@@ -107,6 +108,9 @@ chart_images oci://registry.k8s.io/kro/charts/kro "$KRO_CHART_VERSION"
 echo
 echo "# crossplane provider-keycloak package (Provider CR, not a helm chart)"
 echo "$PROVIDER_KEYCLOAK_IMAGE"
+echo
+echo "# crossplane function-go-templating package (composition engine for the keycloak XRs)"
+echo "$FUNCTION_GO_TEMPLATING_IMAGE"
 echo
 echo "# bitnami/redis subchart (HA leg; e2e pins bitnamilegacy — never cache :latest)"
 echo "$REDIS_IMAGE"

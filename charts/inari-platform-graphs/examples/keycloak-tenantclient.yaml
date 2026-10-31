@@ -1,4 +1,4 @@
-# Example TenantClient claim (identity.inari.io/v1alpha1) — hub-side
+# Example TenantClient namespaced XR (identity.inari.io/v1alpha1) — hub-side
 # self-service OIDC client via provider-keycloak, replacing the operator's
 # KeycloakClient catalog item (sunset plan D1).
 #
@@ -16,7 +16,7 @@ spec:
   tenantID: acme
   namespace: tenant-acme
   realm: acme                # required: target realm name (TenantRealm status.realm)
-  # clientID: acme-portal   # optional; defaults to the claim name
+  # clientID: acme-portal   # optional; defaults to the XR name
   public: false              # confidential client (default)
   redirectURIs:
     - https://portal.tenant-acme.7kgroup.org/oauth/callback
@@ -24,6 +24,7 @@ spec:
   # secretName: acme-portal-keycloak-client  # optional; default "<name>-keycloak-client"
 # status.clientID / status.realm / status.secretName are projected by the
 # composition. For confidential clients the provider writes the connection
-# secret <clientID>-keycloak-connection (key attribute.client_secret) into
-# this namespace; the companion ExternalSecret turns it into
+# secret <xr-name>-keycloak-connection (key attribute.client_secret) into
+# this namespace — keyed to the XR name, not clientID, so non-DNS clientIDs
+# are safe; the companion ExternalSecret turns it into
 # <secretName> with keys client-id / client-secret / issuer.

@@ -13,8 +13,10 @@ Phase 0/1, decisions D1/D3/D6/D7):
   `pods` → pods). Instances expose a single `Ready` condition and
   `status.namespace` (agent/inventory contract, D6).
 - **Crossplane XRDs + Compositions** `identity.inari.io/v1alpha1` —
-  `TenantRealm` and `TenantClient` claims backed by provider-keycloak
-  (namespaced managed resources, Crossplane v2). `TenantRealm` composes a
+  `TenantRealm` and `TenantClient` namespaced XRs backed by
+  provider-keycloak (namespaced managed resources, Crossplane v2 — claims
+  no longer exist in v2, so the namespaced XR IS the user-facing kind).
+  `TenantRealm` composes a
   `Realm` and projects `status.realm`/`status.issuerURL`; `TenantClient`
   composes an openid `Client` (confidential by default; `public: true` maps
   to `accessType: PUBLIC` and skips the connection secret) and projects
@@ -42,14 +44,14 @@ there is no adoption/migration of operator-created resources (D7).
 | `keycloak.providerConfigRef` | `keycloak` | provider-keycloak `ClusterProviderConfig` name |
 | `keycloak.issuerBaseURL` | `""` (required) | Public Keycloak base URL; `status.issuerURL = <issuerBaseURL>/realms/<realm>` |
 | `keycloak.providerConfig.enabled` | `true` | Render the `ClusterProviderConfig` the compositions reference |
-| `keycloak.providerConfig.credentialsSecretRef` | `inari-keycloak-admin`/`inari`/`credentials` | Secret holding provider-keycloak's credentials JSON (`{client_id, client_secret, url}`); the `credentials` key on the inari-platform admin secret is Phase 3 wiring |
+| `keycloak.providerConfig.credentialsSecretRef` | `inari-keycloak-provisioner`/`inari`/`credentials` | Secret holding provider-keycloak's credentials JSON (`{client_id, client_secret, url, realm}`); rendered by `charts/inari-platform` (master-realm provisioner client, Phase 3) |
 
 ## Client credential delivery
 
 `TenantClient` (confidential) → provider-keycloak writes
-`<claim-name>-keycloak-connection` (key `attribute.client_secret`) into the
-claim's namespace → the server-rendered `ExternalSecret` materializes
-`<secretName>` (default `<claim>-keycloak-client`) with keys
+`<xr-name>-keycloak-connection` (key `attribute.client_secret`) into the XR's
+namespace → the server-rendered `ExternalSecret` materializes
+`<secretName>` (default `<xr-name>-keycloak-client`) with keys
 `client-id` / `client-secret` / `issuer`, mirroring the operator's Secret
 contract. **Public clients** (`public: true`) get no connection secret; the
 server renders a plain Secret holding only `client-id`/`issuer` in that
@@ -61,14 +63,14 @@ exact per-tenant `ServiceAccount`/`Role`/`RoleBinding`/`SecretStore`/
 ## Examples
 
 `examples/` (not rendered by helm): a TenantNamespace instance, TenantRealm /
-TenantClient claims, and the ESO secret-delivery bundle. These are the
+TenantClient XRs, and the ESO secret-delivery bundle. These are the
 manifest shapes the server commits to `tenants/<org>/` in the hub-facing
 platform repo.
 
 ## Validation
 
 - `helm unittest charts/inari-platform-graphs` — golden suites for the RGD
-  and the claims (also run in CI).
+  and the keycloak XRs+Compositions (also run in CI).
 - `make validate-graphs` — renders the chart and validates the RGD /
   XRD / Composition manifests against the pinned KRO, Crossplane and
   provider-keycloak CRD schemas (kubeconform).
@@ -79,7 +81,7 @@ kind create cluster --name graphs-check
 helm install kro oci://registry.k8s.io/kro/charts/kro --version 0.9.4 \
   -n kro --create-namespace   # or the W1-1 pin in gitops/operators/kro.yaml
 helm install graphs charts/inari-platform-graphs \
-  --set keycloak.enabled=false   # keycloak claims need Crossplane+provider
+  --set keycloak.enabled=false   # keycloak XRs need Crossplane+provider
 kubectl wait --for=condition=Ready rgd/tenantnamespace --timeout=120s
 kubectl create namespace inari   # instance namespace (server's choice in prod)
 kubectl apply -f charts/inari-platform-graphs/examples/tenantnamespace.yaml \

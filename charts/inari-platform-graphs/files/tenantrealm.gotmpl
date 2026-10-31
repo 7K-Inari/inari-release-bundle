@@ -9,22 +9,31 @@
 apiVersion: realm.keycloak.m.crossplane.io/v1alpha1
 kind: Realm
 metadata:
-  # MR name = claim name (always DNS-valid); the realm name lives in
+  # MR name = XR name (always DNS-valid); the realm name lives in
   # forProvider.realm + external-name, so non-DNS realm names can't break
   # the composed resource.
   name: {{ $xr.metadata.name }}
   namespace: {{ $xr.metadata.namespace }}
   annotations:
-    crossplane.io/external-name: {{ $realm }}
+    # Free-string fields are quoted: spec.realm is not DNS-constrained, so
+    # values like "acme: v2" must not break the composed YAML.
+    crossplane.io/external-name: {{ $realm | quote }}
     gotemplating.fn.crossplane.io/composition-resource-name: realm
+    # XR Ready tracks the composed Realm's Ready condition — the function
+    # reports composed resources unready by default; the ready annotation is
+    # the only readiness source. Empty on the first pass (nothing observed
+    # yet) => False.
+    gotemplating.fn.crossplane.io/ready: '{{ $o := index $.observed.resources "realm" }}{{ if $o }}{{ (getResourceCondition "Ready" $o.resource).Status | default "False" }}{{ else }}False{{ end }}'
 spec:
   forProvider:
-    realm: {{ $realm }}
+    realm: {{ $realm | quote }}
     {{- if $spec.displayName }}
     displayName: {{ $spec.displayName | quote }}
     {{- end }}
     enabled: {{ $spec.enabled }}
-  deletionPolicy: Delete
+  # Crossplane v2 namespaced MRs have no spec.deletionPolicy — the default
+  # managementPolicies already cover the full lifecycle incl. delete (the
+  # D7 declarative-recreate semantic: XR deleted → realm deleted).
   providerConfigRef:
     kind: ClusterProviderConfig
     name: @@PROVIDER_CONFIG_REF@@
@@ -34,7 +43,7 @@ spec:
 # composition-resource-name annotation => status-only update of the XR
 # (function-go-templating documented behavior).
 apiVersion: identity.inari.io/v1alpha1
-kind: XTenantRealm
+kind: TenantRealm
 status:
-  realm: {{ $realm }}
+  realm: {{ $realm | quote }}
   issuerURL: "@@ISSUER_BASE_URL@@/realms/{{ $realm }}"

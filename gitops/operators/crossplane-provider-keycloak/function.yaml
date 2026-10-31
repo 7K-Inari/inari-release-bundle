@@ -1,9 +1,10 @@
 # function-go-templating — composition pipeline function used by the Keycloak
 # TenantRealm/TenantClient Compositions in charts/inari-platform-graphs
 # (sunset plan D1). Installed here alongside provider-keycloak so the
-# compositions have their function from day 0. Not mirrored in the e2e
-# provisioner (no claims are exercised there yet); renovate tracks
-# xpkg.crossplane.io packages separately.
+# compositions have their function from day 0. Mirrored in the e2e
+# provisioner (renderpath exercises the XRs); the package pin must match
+# functionGoTemplatingVersion in scripts/e2e/stack/suite/provision.go
+# (guarded by TestGitOpsPinParity).
 apiVersion: pkg.crossplane.io/v1
 kind: Function
 metadata:

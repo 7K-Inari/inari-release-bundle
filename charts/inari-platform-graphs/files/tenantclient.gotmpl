@@ -10,17 +10,23 @@
 apiVersion: openidclient.keycloak.m.crossplane.io/v1alpha1
 kind: Client
 metadata:
-  # MR name = claim name (always DNS-valid); the OIDC clientID lives in
+  # MR name = XR name (always DNS-valid); the OIDC clientID lives in
   # forProvider.clientId only, so non-DNS clientIDs can't break the
   # composed resource.
   name: {{ $xr.metadata.name }}
   namespace: {{ $xr.metadata.namespace }}
   annotations:
     gotemplating.fn.crossplane.io/composition-resource-name: client
+    # XR Ready tracks the composed Client's Ready condition (see
+    # tenantrealm.gotmpl for why the ready annotation is required).
+    gotemplating.fn.crossplane.io/ready: '{{ $o := index $.observed.resources "client" }}{{ if $o }}{{ (getResourceCondition "Ready" $o.resource).Status | default "False" }}{{ else }}False{{ end }}'
 spec:
   forProvider:
-    clientId: {{ $clientID }}
-    realmId: {{ $spec.realm }}
+    # Free-string fields are quoted: spec.clientID / spec.realm are not
+    # DNS-constrained, so values like "portal: v2" must not break the
+    # composed YAML.
+    clientId: {{ $clientID | quote }}
+    realmId: {{ $spec.realm | quote }}
     enabled: true
     accessType: {{ if $spec.public }}PUBLIC{{ else }}CONFIDENTIAL{{ end }}
     serviceAccountsEnabled: {{ $spec.serviceAccountsEnabled }}
@@ -30,14 +36,15 @@ spec:
       - {{ . | quote }}
       {{- end }}
     {{- end }}
-  deletionPolicy: Delete
+  # No spec.deletionPolicy on v2 namespaced MRs — default managementPolicies
+  # cover delete (XR deleted → client deleted).
   providerConfigRef:
     kind: ClusterProviderConfig
     name: @@PROVIDER_CONFIG_REF@@
   {{- if not $spec.public }}
   # Confidential clients only (operator parity): the provider writes
-  # attribute.client_secret here, into the claim's (tenant) namespace.
-  # Name keyed to the claim name (DNS-valid), not clientID.
+  # attribute.client_secret here, into the XR's (tenant) namespace.
+  # Name keyed to the XR name (DNS-valid), not clientID.
   writeConnectionSecretToRef:
     name: {{ $xr.metadata.name }}-keycloak-connection
   {{- end }}
@@ -46,8 +53,8 @@ spec:
 # secretName). No composition-resource-name annotation => status-only
 # update of the XR (function-go-templating documented behavior).
 apiVersion: identity.inari.io/v1alpha1
-kind: XTenantClient
+kind: TenantClient
 status:
-  clientID: {{ $clientID }}
-  realm: {{ $spec.realm }}
-  secretName: {{ $secretName }}
+  clientID: {{ $clientID | quote }}
+  realm: {{ $spec.realm | quote }}
+  secretName: {{ $secretName | quote }}

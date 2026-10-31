@@ -1,8 +1,8 @@
 # Platform resource graphs — the KRO ResourceGraphDefinition
-# (tenantnamespace) and Crossplane Keycloak claims (XRDs + Compositions)
-# that replace the operator's platform.inari.io CRDs (sunset decisions
-# D1/D6). Wave 1: after KRO (-2) and Crossplane (-3), whose CRDs these
-# manifests instantiate.
+# (tenantnamespace) and Crossplane Keycloak namespaced XRs (XRDs +
+# Compositions) that replace the operator's platform.inari.io CRDs (sunset
+# decisions D1/D6). Wave 1: after KRO (-2) and Crossplane (-3), whose CRDs
+# these manifests instantiate.
 #
 # Sources the in-repo chart charts/inari-platform-graphs (authored by
 # sibling task W1-2) so e2e/CI always tests the working tree — same pattern
@@ -26,12 +26,16 @@ spec:
     helm:
       releaseName: platform-graphs
       values: |
-        # Keycloak TenantRealm/TenantClient claims stay off until Phase 3
-        # wires the ClusterProviderConfig (Keycloak credentials) and
-        # function-go-templating onto the hub; the XRDs/Compositions would
-        # render harmlessly but can compose nothing before then.
+        # Phase 3: Keycloak XRs on. The ClusterProviderConfig's credentials
+        # come from the inari-platform chart's inari-keycloak-provisioner
+        # secret (master-realm client with create-realm, ensured by the
+        # client-setup PostSync job); function-go-templating ships with the
+        # provider (gitops/operators/crossplane-provider-keycloak).
+        # issuerBaseURL feeds status.issuerURL on TenantRealms — kind/dev
+        # profile, mirroring platform-config's keycloak hostname.
         keycloak:
-          enabled: false
+          enabled: true
+          issuerBaseURL: http://keycloak.local:8080
   destination:
     server: https://kubernetes.default.svc
     # The chart renders only cluster-scoped kinds (RGD, XRD, Composition);

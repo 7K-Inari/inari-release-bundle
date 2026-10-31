@@ -3,6 +3,7 @@
 package suite
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -17,11 +18,14 @@ import (
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/poll"
 )
 
-// Render-path validation (M5W2, operator-sunset Phase 1): proves the new
-// render path end-to-end on the golden-path stack — server-rendered native
-// AppProject/DNSEndpoint + KRO tenantnamespace instance sync Healthy via
-// ArgoCD, the RGD teardown cascades, agent status streaming on the new GVRs
-// reaches the Resources Inventory, and addon adopt/update rejects
+// Render-path validation (M5W2 + M5W3-2): proves the new render path
+// end-to-end on the golden-path stack — server-rendered native
+// AppProject/DNSEndpoint + KRO tenantnamespace instance + provider-keycloak
+// TenantRealm/TenantClient XRs sync Healthy via ArgoCD, the RGD teardown
+// cascades, Keycloak realms/clients are created (and, for a disposable
+// realm, deleted) by provider-keycloak, client secrets land in the tenant
+// namespace via the ESO delivery bundle, agent status streaming on the new
+// GVRs reaches the Resources Inventory, and addon adopt/update rejects
 // schema-invalid values with 422 field-level errors. D7 scope: clean
 // recreate only — no operator, no adoption, no migration.
 //
@@ -44,6 +48,9 @@ import (
 //     project/dns/namespace/realm); a self-signed ClusterIssuer fixture
 //     proves the native-resource path, and the absence of issuer rendering
 //     is a report finding.
+//   - Keycloak realm assertions use a master-realm bootstrap token
+//     (keycloak-initial-admin): the inari-realm platform admin client
+//     cannot see tenant realms.
 //
 // The phases are ordered and stateful (each builds on the previous one's
 // mutations), so the Ginkgo spec composes them in an Ordered container via
@@ -182,28 +189,55 @@ func (r *RenderPath) gitInPod(t TB, args ...string) (string, error) {
 }
 
 // PlatformGraphs installs the W1-2 chart (tenantnamespace RGD + Keycloak
-// claim XRDs/Compositions) the way gitops/platform/platform-rgd.yaml does,
-// directly from the working tree.
+// XRDs/Compositions) the way gitops/platform/platform-rgd.yaml does,
+// directly from the working tree. Phase 3: keycloak.enabled=true — the XRs
+// reconcile against the mirrored Crossplane 2.4.3 + provider-keycloak +
+// function-go-templating, with credentials from the inari-platform
+// provisioner secret.
 func (r *RenderPath) PlatformGraphs(t TB) {
-	// keycloak.enabled stays false: the chart's claim XRDs use
-	// claimNames, which apiextensions.crossplane.io/v2 (the mirrored
-	// Crossplane 2.4.3) rejects ("Claims aren't supported") — W3-2 must
-	// resolve this before the Keycloak cutover; the realm child app is
-	// expected OutOfSync meanwhile (report finding).
+	r.ensureProvisionerSecret(t)
 	require.NoError(t, helm.UpgradeInstall("platform-graphs",
 		filepath.Join(r.chartsDir, "charts/inari-platform-graphs"),
 		"--namespace", "default",
 		"--set", "tenantNamespace.enabled=true",
-		"--set", "keycloak.enabled=false",
+		"--set", "keycloak.enabled=true",
+		"--set", "keycloak.issuerBaseURL="+r.issuerBaseURL(),
 		"--wait", "--timeout", "120s"))
 	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
 		state, err := kube.Kubectl("get", "resourcegraphdefinition", "tenantnamespace",
 			"-o", "jsonpath={.status.state}")
 		return err == nil && state == "Active", nil
 	}, "tenantnamespace RGD Active")
-	// KRO generates the instance CRD once the RGD is Active.
+	// KRO generates the instance CRD once the RGD is Active; Crossplane
+	// serves the XR CRDs once the XRDs are established.
 	require.NoError(t, kube.WaitCondition("", "condition=established", "180s",
 		"crd/tenantnamespaces.stacks.inari.io"))
+	require.NoError(t, kube.WaitCondition("", "condition=established", "180s",
+		"crd/tenantrealms.identity.inari.io"))
+	require.NoError(t, kube.WaitCondition("", "condition=established", "180s",
+		"crd/tenantclients.identity.inari.io"))
+}
+
+// issuerBaseURL is the hub Keycloak's issuer base in this stack (the
+// golden path pins the issuer hostname to the in-cluster service FQDN).
+func (r *RenderPath) issuerBaseURL() string {
+	return "http://keycloak-service." + r.Namespace + ".svc:8080"
+}
+
+// ensureProvisionerSecret guarantees the Phase 3 credentials wiring exists:
+// fresh provisions render the provisioner secret + client-setup hook from
+// the working tree, but a handoff rerun may attach to a stack provisioned
+// before the wiring landed — upgrade platform-config in that case only.
+func (r *RenderPath) ensureProvisionerSecret(t TB) {
+	t.Helper()
+	if _, err := kube.Kubectl("-n", r.Namespace, "get", "secret", "inari-keycloak-provisioner"); err == nil {
+		return
+	}
+	t.Log("inari-keycloak-provisioner missing (pre-Phase-3 stack) — upgrading platform-config from the working tree")
+	require.NoError(t, helm.UpgradeInstall("platform-config",
+		filepath.Join(r.chartsDir, "charts/inari-platform"),
+		"--namespace", r.Namespace, "--reuse-values",
+		"--wait", "--timeout", "10m"))
 }
 
 // RenderCutover points the server at the platform repo and flips the
@@ -265,6 +299,20 @@ func (r *RenderPath) RenderCommit(t TB) {
 	assert.Contains(t, inst, "apiVersion: stacks.inari.io/v1alpha1")
 	assert.Contains(t, inst, "kind: TenantNamespace")
 	assert.Contains(t, inst, "name: "+r.tenantNS)
+
+	// The realm render targets the v2 namespaced-XR coordinates
+	// (identity.inari.io/v1alpha1 TenantRealm, tenant namespace).
+	realmFiles, err := r.gitInPod(t, "sh", "-c",
+		"git --git-dir=/git/platform.git ls-tree -r --name-only main -- "+
+			"tenants/"+r.Tenant+"/keycloak/realm/manifests/")
+	require.NoError(t, err)
+	realmFile := strings.TrimSpace(realmFiles)
+	require.NotEmpty(t, realmFile, "realm manifests missing from the descriptor commit")
+	realmDoc, err := r.gitInPod(t, "git", "--git-dir=/git/platform.git", "show", "main:"+realmFile)
+	require.NoError(t, err)
+	assert.Contains(t, realmDoc, "apiVersion: identity.inari.io/v1alpha1")
+	assert.Contains(t, realmDoc, "kind: TenantRealm")
+	assert.Contains(t, realmDoc, "namespace: "+r.tenantNS)
 }
 
 // ArgoCDSync rewrites the file:// repo URLs to the git daemon (documented
@@ -339,9 +387,9 @@ spec:
 
 	// Apply the server-rendered child Applications directly (the app-of-apps
 	// root is bootstrap plumbing, not render output; a directory-recurse
-	// root would double-track the raw manifests and fail wholesale on the
-	// realm claim whose CRDs are intentionally absent — W3-2 scope).
-	for _, component := range []string{"project", "dns", "namespace"} {
+	// root would double-track the raw manifests). The realm child app is
+	// included since Phase 3 — the XR CRDs exist on this stack.
+	for _, component := range []string{"project", "dns", "namespace", "keycloak/realm"} {
 		appYAML, err := r.gitInPod(t, "cat",
 			"/tmp/work/tenants/"+r.Tenant+"/"+component+"/application.yaml")
 		require.NoError(t, err)
@@ -377,6 +425,7 @@ spec:
 		"tenant-" + r.Tenant + "-project",
 		"tenant-" + r.Tenant + "-dns",
 		"tenant-" + r.Tenant + "-namespace",
+		"tenant-" + r.Tenant + "-realm",
 	} {
 		poll.Eventually(t, 300*time.Second, 5*time.Second, func() (bool, error) {
 			out, err := kube.Kubectl("-n", "argocd", "get", "application", app,
@@ -444,7 +493,10 @@ spec:
 		if err != nil {
 			return false, nil
 		}
-		return strings.Contains(out, "not permitted"), nil
+		// ArgoCD phrases the rejection "do not match any of the allowed
+		// destinations" (older versions said "not permitted").
+		return strings.Contains(out, "not permitted") ||
+			strings.Contains(out, "do not match any of the allowed destinations"), nil
 	}); err != nil {
 		dump, _ := kube.Kubectl("-n", "argocd", "get", "application", "rogue-"+r.Tenant,
 			"-o", "jsonpath={.status}")
@@ -500,6 +552,239 @@ func (r *RenderPath) KROChildren(t TB) {
 func (r *RenderPath) ClusterIssuerFixture(t TB) {
 	require.NoError(t, kube.WaitCondition("", "condition=Ready", "120s",
 		"clusterissuer/e2e-selfsigned"))
+}
+
+// KeycloakRealmReady proves the server-rendered TenantRealm XR reconciles
+// through provider-keycloak (Phase 3 exit criterion): Ready condition, the
+// projected status contract (status.realm / status.issuerURL), and the
+// realm actually existing in Keycloak. Realm assertions need a master-realm
+// token — the inari-realm admin client cannot see other realms.
+func (r *RenderPath) KeycloakRealmReady(t TB) {
+	require.NoError(t, kube.WaitCondition(r.tenantNS, "condition=Ready", "420s",
+		"tenantrealm.identity.inari.io/"+r.Tenant))
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		token, err := r.KC.MasterToken() // short-lived; refresh per attempt
+		if err != nil {
+			return false, nil
+		}
+		return r.KC.RealmExists(token, r.Tenant), nil
+	}, "tenant realm "+r.Tenant+" exists in Keycloak")
+	status, err := kube.Kubectl("-n", r.tenantNS, "get", "tenantrealm.identity.inari.io", r.Tenant,
+		"-o", "jsonpath={.status.realm}/{.status.issuerURL}")
+	require.NoError(t, err)
+	assert.Equal(t, r.Tenant+"/"+r.issuerBaseURL()+"/realms/"+r.Tenant, status,
+		"composition must project the operator's status contract (realm + issuerURL)")
+}
+
+// keycloakClientSecret proves the client credentials contract (Phase 3 exit
+// criterion): a confidential TenantClient XR → provider-keycloak writes the
+// connection secret into the tenant namespace → the ESO SecretStore +
+// ExternalSecret pair materializes the operator-compatible Secret (keys
+// client-id / client-secret / issuer) — and the secret payload matches the
+// client provider-keycloak actually created in Keycloak.
+func (r *RenderPath) KeycloakClientSecret(t TB) {
+	const client = "e2e-workload-client"
+	issuer := r.issuerBaseURL() + "/realms/" + r.Tenant
+	// Mirrors the server-rendered bundle
+	// (charts/inari-platform-graphs/examples/keycloak-client-secret-delivery.yaml)
+	// applied directly: no registration-time client claim exists on this
+	// stack (the render flag was off when the seed cluster registered).
+	fixture := `
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eso-tenant-secret-reader
+  namespace: ` + r.tenantNS + `
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eso-tenant-secret-reader
+  namespace: ` + r.tenantNS + `
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eso-tenant-secret-reader
+  namespace: ` + r.tenantNS + `
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eso-tenant-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: eso-tenant-secret-reader
+    namespace: ` + r.tenantNS + `
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: keycloak-client-connections
+  namespace: ` + r.tenantNS + `
+spec:
+  provider:
+    kubernetes:
+      server:
+        url: https://kubernetes.default.svc
+        caProvider:
+          type: ConfigMap
+          name: kube-root-ca.crt
+          key: ca.crt
+      auth:
+        serviceAccount:
+          name: eso-tenant-secret-reader
+---
+apiVersion: identity.inari.io/v1alpha1
+kind: TenantClient
+metadata:
+  name: ` + client + `
+  namespace: ` + r.tenantNS + `
+spec:
+  tenantID: ` + r.Tenant + `
+  namespace: ` + r.tenantNS + `
+  realm: ` + r.Tenant + `
+  clientID: ` + client + `
+  public: false
+  serviceAccountsEnabled: true
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: ` + client + `-keycloak-client
+  namespace: ` + r.tenantNS + `
+spec:
+  refreshInterval: 1m
+  secretStoreRef:
+    kind: SecretStore
+    name: keycloak-client-connections
+  target:
+    name: ` + client + `-keycloak-client
+    template:
+      type: Opaque
+      metadata:
+        labels:
+          platform.inari.io/tenant: ` + r.Tenant + `
+      data:
+        client-id: "` + client + `"
+        issuer: "` + issuer + `"
+        client-secret: "{{ .client_secret }}"
+  data:
+    - secretKey: client_secret
+      remoteRef:
+        key: ` + client + `-keycloak-connection
+        property: attribute.client_secret
+`
+	if _, err := kube.ApplyStdin(fixture); err != nil {
+		t.Fatalf("client fixture: %v", err)
+	}
+
+	// The provider must create the client in the tenant realm.
+	require.NoError(t, kube.WaitCondition(r.tenantNS, "condition=Ready", "420s",
+		"tenantclient.identity.inari.io/"+client))
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		token, err := r.KC.MasterToken()
+		if err != nil {
+			return false, nil
+		}
+		id, err := r.KC.FindClientIn(token, r.Tenant, client)
+		return err == nil && id != "", nil
+	}, "client "+client+" exists in tenant realm "+r.Tenant)
+
+	// The provider wrote the connection secret into the tenant namespace…
+	var connSecret string
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		b64, err := kube.Kubectl("-n", r.tenantNS, "get", "secret", client+"-keycloak-connection",
+			"-o", `jsonpath={.data.attribute\.client_secret}`)
+		if err != nil || b64 == "" {
+			return false, nil
+		}
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return false, nil
+		}
+		connSecret = string(raw)
+		return true, nil
+	}, "provider connection secret "+client+"-keycloak-connection written")
+
+	// …and ESO materialized the operator-compatible credentials Secret from
+	// it (same value, contract keys).
+	require.NoError(t, kube.WaitCondition(r.tenantNS, "condition=Ready", "180s",
+		"externalsecret/"+client+"-keycloak-client"))
+	secretField := func(key string) string {
+		b64, err := kube.Kubectl("-n", r.tenantNS, "get", "secret", client+"-keycloak-client",
+			"-o", "jsonpath={.data."+key+"}")
+		require.NoError(t, err)
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		require.NoError(t, err)
+		return string(raw)
+	}
+	assert.Equal(t, client, secretField("client-id"))
+	assert.Equal(t, issuer, secretField("issuer"))
+	assert.NotEmpty(t, connSecret, "connection secret attribute.client_secret empty")
+	assert.Equal(t, connSecret, secretField("client-secret"),
+		"delivered client-secret must equal the provider-written connection secret value")
+
+	// Projected XR status contract.
+	status, err := kube.Kubectl("-n", r.tenantNS, "get", "tenantclient.identity.inari.io", client,
+		"-o", "jsonpath={.status.clientID}/{.status.realm}/{.status.secretName}")
+	require.NoError(t, err)
+	assert.Equal(t, client+"/"+r.Tenant+"/"+client+"-keycloak-client", status)
+}
+
+// keycloakTeardown verifies the provider-keycloak deletion path on a
+// DISPOSABLE realm (Phase 3 exit criterion; the tenant's own realm is never
+// deleted here): deleting the TenantRealm XR cascades XR → Realm MR →
+// Keycloak realm, with no finalizer residue.
+func (r *RenderPath) KeycloakTeardown(t TB) {
+	const name = "e2e-disposable"
+	fixture := `
+apiVersion: identity.inari.io/v1alpha1
+kind: TenantRealm
+metadata:
+  name: ` + name + `
+  namespace: ` + r.tenantNS + `
+spec:
+  tenantID: ` + r.Tenant + `
+  namespace: ` + r.tenantNS + `
+  realm: ` + name + `
+  enabled: true
+`
+	if _, err := kube.ApplyStdin(fixture); err != nil {
+		t.Fatalf("disposable realm fixture: %v", err)
+	}
+	require.NoError(t, kube.WaitCondition(r.tenantNS, "condition=Ready", "420s",
+		"tenantrealm.identity.inari.io/"+name))
+	poll.Eventually(t, 120*time.Second, 5*time.Second, func() (bool, error) {
+		token, err := r.KC.MasterToken()
+		if err != nil {
+			return false, nil
+		}
+		return r.KC.RealmExists(token, name), nil
+	}, "disposable realm exists in Keycloak")
+
+	if _, err := kube.Kubectl("-n", r.tenantNS, "delete", "tenantrealm.identity.inari.io", name,
+		"--wait=false"); err != nil {
+		t.Fatalf("delete disposable realm XR: %v", err)
+	}
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		_, err := kube.Kubectl("-n", r.tenantNS, "get", "tenantrealm.identity.inari.io", name)
+		return err != nil, nil // XR gone (no stuck finalizer)
+	}, "disposable TenantRealm XR deleted")
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		_, err := kube.Kubectl("-n", r.tenantNS, "get", "realm.realm.keycloak.m.crossplane.io", name)
+		return err != nil, nil // composed Realm MR gone
+	}, "composed Realm managed resource deleted")
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		token, err := r.KC.MasterToken()
+		if err != nil {
+			return false, nil
+		}
+		return !r.KC.RealmExists(token, name), nil
+	}, "disposable realm deleted from Keycloak")
 }
 
 // StatusStreaming configures the agent's watch list for the new GVRs
@@ -580,6 +865,23 @@ subjects:
 		}
 	}
 	assert.True(t, dnsSeen, "dns-zone row present in Resources Inventory")
+
+	// The TenantRealm XR's Ready condition folds onto the keycloak-realm row
+	// (renderedKindMap) — the contract the operator's KeycloakRealm CR used
+	// to report against.
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		rows, err := r.API.ListPlatformResources()
+		if err != nil {
+			return false, nil
+		}
+		for _, row := range rows {
+			if row.Kind == "keycloak-realm" && row.Name == r.Tenant {
+				t.Logf("keycloak-realm row: status=%s detail=%s", row.Status, row.Detail)
+				return row.Status == "ready", nil
+			}
+		}
+		return false, nil
+	}, "keycloak-realm row ready via agent status stream")
 }
 
 // AddonSchema422 is the addon track's exit criterion: schema-invalid values
@@ -637,7 +939,11 @@ func (r *RenderPath) RGDTeardown(t TB) {
 		t.Fatalf("delete KRO instance: %v", err)
 	}
 
-	poll.Eventually(t, 120*time.Second, 3*time.Second, func() (bool, error) {
+	// The cascade now runs deeper than the KRO children: the tenant's
+	// TenantRealm XR lives in the namespace, so namespace termination waits
+	// on the XR finalizer → Realm MR finalizer → provider-keycloak deleting
+	// the realm in Keycloak. Generous bound.
+	poll.Eventually(t, 420*time.Second, 3*time.Second, func() (bool, error) {
 		_, err := kube.Kubectl("get", "namespace", r.tenantNS)
 		return err != nil, nil // gone
 	}, "namespace child cascaded on instance delete (KRO owner refs)")
@@ -684,6 +990,20 @@ func (r *RenderPath) RGDTeardown(t TB) {
 		}
 		return false, nil
 	}, "inventory row returned to ready after recreate")
+
+	// The tenant realm rides the same recreate path (D7): the namespace
+	// cascade deleted the XR (provider-keycloak deleted the Keycloak realm);
+	// ArgoCD self-heal re-applied the XR and the provider recreates the
+	// realm — declarative recreate, no adoption.
+	require.NoError(t, kube.WaitCondition(r.tenantNS, "condition=Ready", "420s",
+		"tenantrealm.identity.inari.io/"+r.Tenant))
+	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
+		token, err := r.KC.MasterToken()
+		if err != nil {
+			return false, nil
+		}
+		return r.KC.RealmExists(token, r.Tenant), nil
+	}, "tenant realm recreated in Keycloak after namespace cascade")
 }
 
 // --- pure helpers ----------------------------------------------------------

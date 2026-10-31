@@ -8,9 +8,12 @@ import (
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/suite"
 )
 
-// Render-path validation (M5W2 operator-sunset Phase 1): the
-// server-rendered native resources + KRO instance sync Healthy via ArgoCD,
-// RGD teardown cascades, agent status streaming works on the new GVRs, and
+// Render-path validation (M5W2 + M5W3-2, operator-sunset Phases 1+3): the
+// server-rendered native resources + KRO instance + provider-keycloak
+// TenantRealm/TenantClient XRs sync Healthy via ArgoCD, realms/clients are
+// created (and a disposable realm deleted) by provider-keycloak, client
+// secrets land in the tenant namespace via the ESO delivery bundle, RGD
+// teardown cascades, agent status streaming works on the new GVRs, and
 // addon schema validation rejects bad values with 422. MANUAL-ONLY: the
 // specs carry no priority label, so neither the release-gate filter
 // ((p0||smoke)&&!quarantine) nor the nightly filter (p0||p1||p2) ever
@@ -61,6 +64,15 @@ var _ = Describe("RenderPath", Label(suite.LabelRenderPath), Ordered, func() {
 	})
 	It("readies the harness ClusterIssuer (native-resource proof)", func() {
 		r.ClusterIssuerFixture(GinkgoT())
+	})
+	It("reconciles the TenantRealm XR through provider-keycloak", func() {
+		r.KeycloakRealmReady(GinkgoT())
+	})
+	It("delivers the TenantClient credentials Secret to the tenant namespace", func() {
+		r.KeycloakClientSecret(GinkgoT())
+	})
+	It("tears down a disposable realm end-to-end (XR → MR → Keycloak)", func() {
+		r.KeycloakTeardown(GinkgoT())
 	})
 	It("streams the new GVRs' status into the Resources Inventory", func() {
 		r.StatusStreaming(GinkgoT())

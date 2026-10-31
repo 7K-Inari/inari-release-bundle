@@ -86,6 +86,7 @@ type ProvisionConfig struct {
 //	gitops/operators/crossplane.yaml                  ↔ crossplaneChartVersion
 //	gitops/operators/kro.yaml                         ↔ kroChartVersion
 //	gitops/operators/crossplane-provider-keycloak/    ↔ providerKeycloakVersion
+//	gitops/operators/crossplane-provider-keycloak/    ↔ functionGoTemplatingVersion
 const (
 	certManagerChartVersion = "v1.21.3"
 	externalDNSChartVersion = "1.23.0"
@@ -98,6 +99,12 @@ const (
 	kroChartVersion         = "0.9.4"
 	providerKeycloakVersion = "v3.2.3"
 	providerKeycloakPackage = "xpkg.crossplane.io/crossplane-contrib/provider-keycloak"
+	// function-go-templating powers the TenantRealm/TenantClient
+	// Compositions (charts/inari-platform-graphs) — mirrored from
+	// gitops/operators/crossplane-provider-keycloak/function.yaml since the
+	// renderpath suite exercises the keycloak XRs (Phase 3).
+	functionGoTemplatingVersion = "v0.13.2"
+	functionGoTemplatingPackage = "xpkg.crossplane.io/crossplane-contrib/function-go-templating"
 )
 
 // externalDNSCRDBase is the pinned upstream CRD directory; the helm chart
@@ -445,8 +452,26 @@ spec:
 	// Crossplane's package manager pulls the provider image from
 	// xpkg.crossplane.io itself (node image caches don't cover its OCI
 	// fetches) — generous bound for a cold pull.
+	if err := kube.WaitCondition("", "condition=Healthy", "600s",
+		"provider.pkg.crossplane.io/provider-keycloak"); err != nil {
+		return err
+	}
+	// function-go-templating (gitops/operators/crossplane-provider-keycloak/
+	// function.yaml): the composition engine the TenantRealm/TenantClient
+	// XRs render through. Without it the compositions fail at pipeline
+	// resolution.
+	function := fmt.Sprintf(`apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-go-templating
+spec:
+  package: %s:%s
+`, functionGoTemplatingPackage, functionGoTemplatingVersion)
+	if _, err := kube.ApplyStdin(function); err != nil {
+		return err
+	}
 	return kube.WaitCondition("", "condition=Healthy", "600s",
-		"provider.pkg.crossplane.io/provider-keycloak")
+		"function.pkg.crossplane.io/function-go-templating")
 }
 
 // keycloakLifecycle rolls the StatefulSet, pins the issuer hostname (issuer

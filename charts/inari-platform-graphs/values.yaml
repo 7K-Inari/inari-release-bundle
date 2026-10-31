@@ -1,4 +1,4 @@
-# inari-platform-graphs — platform resource graphs (KRO RGDs + Crossplane claims).
+# inari-platform-graphs — platform resource graphs (KRO RGDs + Crossplane XRs).
 
 tenantNamespace:
   # Render the KRO ResourceGraphDefinition "tenantnamespace"
@@ -26,9 +26,11 @@ keycloak:
     enabled: true
     credentialsSecretRef:
       # Secret holding provider-keycloak's credentials JSON:
-      # {"client_id","client_secret","url"}. Defaults point at the
-      # inari-platform chart's Keycloak admin secret — its `credentials` JSON
-      # key is Phase 3 wiring; until then claims cannot reconcile.
-      name: inari-keycloak-admin
+      # {"client_id","client_secret","url","realm"}. Defaults point at the
+      # inari-platform chart's provisioner secret — a dedicated master-realm
+      # client with create-realm (the inari-realm admin client cannot create
+      # realms). External Keycloak installs must render/sync an equivalent
+      # secret themselves and point these values at it.
+      name: inari-keycloak-provisioner
       namespace: inari
       key: credentials
