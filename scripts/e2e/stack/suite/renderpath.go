@@ -632,11 +632,11 @@ spec:
     kubernetes:
       server:
         url: https://kubernetes.default.svc
-      caProvider:
-        type: ConfigMap
-        name: kube-root-ca.crt
-        key: ca.crt
-        namespace: ` + r.tenantNS + `
+        caProvider:
+          type: ConfigMap
+          name: kube-root-ca.crt
+          key: ca.crt
+          namespace: ` + r.tenantNS + `
       auth:
         serviceAccount:
           name: eso-tenant-secret-reader

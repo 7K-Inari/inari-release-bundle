@@ -24,7 +24,9 @@ spec:
     displayName: {{ $spec.displayName | quote }}
     {{- end }}
     enabled: {{ $spec.enabled }}
-  deletionPolicy: Delete
+  # Crossplane v2 namespaced MRs have no spec.deletionPolicy — the default
+  # managementPolicies already cover the full lifecycle incl. delete (the
+  # D7 declarative-recreate semantic: XR deleted → realm deleted).
   providerConfigRef:
     kind: ClusterProviderConfig
     name: @@PROVIDER_CONFIG_REF@@

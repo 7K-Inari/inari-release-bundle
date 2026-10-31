@@ -146,9 +146,12 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'crossplane\.io/external-name: \{\{ \$realm \}\}'
-      - matchRegex:
+      # Crossplane v2 namespaced MRs dropped spec.deletionPolicy (lifecycle
+      # is governed by managementPolicies; the default full management
+      # includes delete — the D7 declarative-recreate semantic)
+      - notMatchRegex:
           path: spec.pipeline[0].input.inline.template
-          pattern: 'deletionPolicy: Delete'
+          pattern: 'deletionPolicy: '
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'kind: ClusterProviderConfig\s+name: hub-keycloak'
@@ -194,9 +197,12 @@ tests:
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'writeConnectionSecretToRef:\s+name: \{\{ \$xr\.metadata\.name \}\}-keycloak-connection'
-      - matchRegex:
+      # Crossplane v2 namespaced MRs dropped spec.deletionPolicy (lifecycle
+      # is governed by managementPolicies; the default full management
+      # includes delete — the D7 declarative-recreate semantic)
+      - notMatchRegex:
           path: spec.pipeline[0].input.inline.template
-          pattern: 'deletionPolicy: Delete'
+          pattern: 'deletionPolicy: '
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
           pattern: 'name: hub-keycloak'

@@ -30,7 +30,8 @@ spec:
       - {{ . | quote }}
       {{- end }}
     {{- end }}
-  deletionPolicy: Delete
+  # No spec.deletionPolicy on v2 namespaced MRs — default managementPolicies
+  # cover delete (XR deleted → client deleted).
   providerConfigRef:
     kind: ClusterProviderConfig
     name: @@PROVIDER_CONFIG_REF@@
