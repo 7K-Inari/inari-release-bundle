@@ -1,0 +1,36 @@
+# inari-e2e-openfga — authorization store on the CNPG cluster (wave 1;
+# secret inari-db synced by env-extras, wave -1).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inari-e2e-openfga
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: inari-e2e
+  source:
+    repoURL: https://openfga.github.io/helm-charts
+    chart: openfga
+    targetRevision: 0.3.19
+    helm:
+      releaseName: openfga
+      values: |
+        fullnameOverride: openfga
+        replicaCount: 1
+        datastore:
+          engine: postgres
+          existingSecret: inari-db
+          secretKeys:
+            uriKey: openfga-uri
+          migrationType: initContainer
+        playground:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inari-e2e
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

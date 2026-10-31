@@ -1,0 +1,47 @@
+# inari-e2e-console — UI bundle for the e2e environment (wave 3). Single
+# origin with the API: console at https://inari-e2e.7kgroup.org/, API at
+# /api/v1 on the same hostname (the server sends no CORS headers —
+# environment-contract invariant 3). Bundle image via the Harbor ghcr-proxy
+# pull-through cache.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inari-e2e-console
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: inari-e2e
+  source:
+    repoURL: https://github.com/7K-Inari/inari-release-bundle.git
+    targetRevision: main
+    path: charts/inari-console
+    helm:
+      releaseName: inari-console
+      values: |
+        bundle:
+          repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-ui-bundle
+          tag: "2.0.0"
+        gateway:
+          name: internet-gateway
+          namespace: istio
+          sectionName: https-7kgroup
+        route:
+          enabled: true
+          hostnames:
+            - inari-e2e.7kgroup.org
+          pathPrefix: /
+          annotations:
+            external-dns.kubernetes.io/cloudflare-proxied: "false"
+        keycloakUrl: "https://auth-e2e.7kgroup.org"
+        keycloakRealm: inari
+        keycloakClientId: inari-ui
+        apiBaseUrl: /api/v1
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inari-e2e
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
