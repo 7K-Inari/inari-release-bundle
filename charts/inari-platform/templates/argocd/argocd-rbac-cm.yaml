@@ -1,5 +1,7 @@
 {{- if .Values.argocd.enabled }}
 # Maps Keycloak group paths (via the Dex groups claim) to ArgoCD roles.
+# Fail closed by default (policy.default ""): no implicit access beyond the
+# local admin/break-glass account and the explicitly mapped groups.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,8 +15,8 @@ data:
     {{- range .Values.argocd.rbac.adminGroups }}
     g, {{ . }}, role:admin
     {{- end }}
-    {{- if .Values.argocd.breakGlass.staticTokenEnabled }}
-    g, inari-breakglass, role:admin
+    {{- range .Values.argocd.rbac.viewerGroups }}
+    g, {{ . }}, role:readonly
     {{- end }}
     {{- with .Values.argocd.rbac.extraPolicyCsv }}
     {{ . | nindent 4 }}

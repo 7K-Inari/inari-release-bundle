@@ -165,19 +165,22 @@ keycloak:
 
 # ---------------------------------------------------------------------------
 # ArgoCD — per-user SSO via the cluster-local Dex (official dexidp chart) as the DEFAULT
-# login path when enabled. Static accounts.* tokens are a documented
-# legacy/break-glass fallback only (see breakGlass below). Renders argocd-cm /
-# argocd-rbac-cm against a manifest-installed ArgoCD (scripts/install-argocd.sh)
-# — if ArgoCD is operator-managed, configure OIDC through the operator instead
-# and leave argocd.enabled=false.
+# login path when enabled. This is the baseline contract the inari-server
+# clusterdex module renders per tenant cluster (operator sunset Phase 2, the
+# server-rendered ClusterDex replacement): fail-closed RBAC, the local admin
+# account as break-glass, and the Dex static-client/config secrets referenced
+# via ESO — never inlined. Renders argocd-cm / argocd-rbac-cm (and optional
+# ExternalSecrets) against a manifest-installed ArgoCD (scripts/install-argocd.sh).
+# Tenant-cluster usage renders the chart with postgresql.enabled=false and
+# keycloak.enabled=false (argocd section only).
 # ---------------------------------------------------------------------------
 argocd:
   enabled: false
   # Namespace where ArgoCD is installed.
   namespace: argocd
-  # Disable the local admin account when SSO is on (recommended; break-glass
-  # access goes through breakGlass below, not a shared admin password).
-  adminEnabled: false
+  # The local admin account stays enabled as the break-glass path
+  # (ClusterDex parity) — per-user SSO does not cover recovery flows.
+  adminEnabled: true
   oidc:
     # Issuer of THIS cluster's Dex, e.g. https://dex.cluster-abc123.example.org
     issuerUrl: ""
@@ -188,27 +191,48 @@ argocd:
     clientSecretRef:
       name: ""
       key: client-secret
+    # ClusterDex parity: the organization scope carries the tenant claim
+    # through Dex.
     requestedScopes:
       - openid
       - profile
       - email
       - groups
-      - federated:id
+      - organization
   rbac:
-    # Default role for authenticated users not in any mapped group.
-    policyDefault: role:readonly
+    # Default role for authenticated users not in any mapped group. Empty is
+    # FAIL CLOSED (ClusterDex parity): no implicit access beyond the local
+    # admin account and the explicitly mapped groups below.
+    policyDefault: ""
     # Keycloak group paths (carried through the Dex groups claim) mapped to
-    # role:admin. Organization-derived groups can be mapped via extraPolicyCsv.
+    # role:admin.
     adminGroups:
       - /platform-admins
+    # Keycloak group paths mapped to role:readonly.
+    viewerGroups: []
     # Extra policy.csv lines appended verbatim (e.g. org-scoped group mappings).
     extraPolicyCsv: ""
-  breakGlass:
-    # Legacy/break-glass fallback ONLY: creates the local account
-    # `inari-breakglass` (login + apiKey) when per-user SSO is unavailable.
-    # Its password is set out-of-band (argocd CLI / argocd-secret) and is
-    # never stored by this chart. Keep false in normal operation.
-    staticTokenEnabled: false
+  # Legacy/break-glass fallback account: `inari-breakglass` (login + apiKey)
+  # is ALWAYS rendered (ClusterDex parity). Its password is set out-of-band
+  # (argocd CLI / argocd-secret) and is never stored by this chart.
+  #
+  # ESO wiring (optional): project the registration-provisioned Dex material
+  # from the platform Vault into this cluster — the ArgoCD static-client
+  # secret (argocd-cm references it) and the full Dex config.yaml the dex
+  # chart consumes via configSecret.create=false.
+  secrets:
+    enabled: false
+    # ClusterSecretStore/SecretStore holding the platform Vault.
+    secretStore: ""
+    secretStoreKind: ClusterSecretStore
+    # Vault KV path holding the cluster's OIDC material
+    # (inari/clusters/<id>/oidc-client-secret, written by inari-server at
+    # registration; keys dex-config-yaml and dex-argocd-client-secret).
+    vaultPath: ""
+    # Target Secret for the Dex config (created in the Dex namespace, which
+    # the dex Application creates — ArgoCD retries until it exists).
+    dexConfigSecretName: dex-config
+    dexNamespace: dex
 
 # ---------------------------------------------------------------------------
 # Data protection — prune/uninstall safety for stateful resources.

@@ -207,7 +207,7 @@
     },
     "argocd": {
       "type": "object",
-      "description": "Per-user SSO for ArgoCD via the cluster-local Dex. Static accounts.* tokens are a documented break-glass fallback only. Assumes a manifest-installed ArgoCD (scripts/install-argocd.sh).",
+      "description": "Per-user SSO for ArgoCD via the cluster-local Dex — the baseline contract the inari-server clusterdex module renders per tenant cluster (operator sunset Phase 2): fail-closed RBAC, local admin as break-glass, ESO-referenced secrets only. Assumes a manifest-installed ArgoCD (scripts/install-argocd.sh).",
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -218,7 +218,8 @@
         },
         "adminEnabled": {
           "type": "boolean",
-          "description": "Keep the local admin account disabled when SSO is on."
+          "description": "Keep the local admin account enabled as the break-glass path (ClusterDex parity).",
+          "default": true
         },
         "oidc": {
           "type": "object",
@@ -260,11 +261,19 @@
           "properties": {
             "policyDefault": {
               "type": "string",
-              "default": "role:readonly"
+              "description": "Fail closed (ClusterDex parity): empty means no implicit access beyond the local admin account and mapped groups.",
+              "default": ""
             },
             "adminGroups": {
               "type": "array",
               "description": "Keycloak group paths (via the Dex groups claim) mapped to role:admin.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "viewerGroups": {
+              "type": "array",
+              "description": "Keycloak group paths mapped to role:readonly.",
               "items": {
                 "type": "string"
               }
@@ -275,12 +284,32 @@
             }
           }
         },
-        "breakGlass": {
+        "secrets": {
           "type": "object",
-          "description": "Legacy/break-glass fallback only: local inari-breakglass account (password set out-of-band, never stored by this chart).",
+          "description": "Optional ESO projection of the registration-provisioned Dex material: the ArgoCD static-client secret and the Dex config.yaml Secret. References only — values never inline.",
           "properties": {
-            "staticTokenEnabled": {
+            "enabled": {
               "type": "boolean"
+            },
+            "secretStore": {
+              "type": "string",
+              "description": "ESO SecretStore/ClusterSecretStore holding the platform Vault."
+            },
+            "secretStoreKind": {
+              "type": "string",
+              "default": "ClusterSecretStore"
+            },
+            "vaultPath": {
+              "type": "string",
+              "description": "Vault KV path holding the cluster's OIDC material (inari/clusters/<id>/oidc-client-secret)."
+            },
+            "dexConfigSecretName": {
+              "type": "string",
+              "default": "dex-config"
+            },
+            "dexNamespace": {
+              "type": "string",
+              "default": "dex"
             }
           }
         }
@@ -322,6 +351,13 @@
       "if": {
         "properties": {
           "keycloak": {
+            "properties": {
+              "enabled": {
+                "const": false
+              }
+            }
+          },
+          "argocd": {
             "properties": {
               "enabled": {
                 "const": false
