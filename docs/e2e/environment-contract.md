@@ -135,7 +135,7 @@ Handoff struct (`suite/env.go` — renames must land in writer and reader):
 | `SERVER_IMAGE` / `AGENT_IMAGE` / `CONSOLE_BUNDLE_TAG` | `inari/server:e2e` / `inari/agent:e2e` / `edge` | candidate artifacts |
 | `VAULT_DEV_TOKEN` | `e2e-root-token` | dev Vault auth |
 | `KIND_NODE_IMAGE` | pinned digest from `stack/testdata/images.txt` | empty = kind default |
-| `HELM_CHARTS_DIR`, `PLATFORM_CHART_DIR`, `SERVER_CHART_DIR`, `CONSOLE_CHART_DIR`, `AGENT_CHART_DIR`, `OPERATOR_CHART_DIR`, `OPERATOR_CRDS_CHART_DIR` | repo `charts/` + sibling checkouts | chart sources |
+| `HELM_CHARTS_DIR`, `PLATFORM_CHART_DIR`, `SERVER_CHART_DIR`, `CONSOLE_CHART_DIR`, `AGENT_CHART_DIR` | repo `charts/` + sibling checkouts | chart sources |
 | `HELM_REPOS_SEEDED` | — | `1` skips helm repo add/update (CI helm cache hit) |
 | `INARI_E2E_CACHE_BACKEND` | `memory` (`redis` on HA leg) | server cache backend |
 | `E2E_AGENT_INPUT_PATH` | — | agent install input override |
