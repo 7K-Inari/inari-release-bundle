@@ -41,7 +41,11 @@ not the underlying controllers).
   function-go-templating (the composition engine for the Keycloak XRs); the
   `ClusterProviderConfig` (Keycloak credentials) is rendered by
   `charts/inari-platform-graphs` with credentials from the inari-platform
-  chart's `inari-keycloak-provisioner` secret (Phase 3).
+  chart's `inari-keycloak-provisioner` secret (Phase 3). The provider never
+  writes status conditions to the `ClusterProviderConfig` (only
+  `status.users`), so ArgoCD's stock `*.crossplane.io` health check would
+  wedge it in Progressing forever — `scripts/install-argocd.sh` patches
+  `argocd-cm` with a health override that treats it as a config object.
 - `platform-rgd` sources the in-repo chart `charts/inari-platform-graphs`
   (tenantnamespace RGD + Keycloak TenantRealm/TenantClient namespaced XRs).
   The Keycloak XRs are enabled (`keycloak.enabled: true`) since Phase 3 —

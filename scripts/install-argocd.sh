@@ -31,6 +31,32 @@ if kubectl -n argocd get deployment argocd-redis >/dev/null 2>&1; then
     '{"spec":{"template":{"spec":{"containers":[{"name":"redis","imagePullPolicy":"IfNotPresent"}]}}}}'
 fi
 
+# Health override for provider-keycloak's ClusterProviderConfig (rendered by
+# charts/inari-platform-graphs into the platform-rgd Application): the
+# provider only records status.users (usage count) and never writes
+# conditions, so ArgoCD's stock *.crossplane.io wildcard health check wedges
+# the resource in "Progressing ..." forever — and with it any Application
+# that ships one (platform-rgd never became Healthy in install-test).
+# Semantics: presence is Healthy (config object); a Ready=False condition,
+# if the provider ever writes one, surfaces as Degraded. Validated against
+# ArgoCD v3.1.5 via `argocd admin settings resource-overrides health`.
+kubectl -n argocd patch configmap argocd-cm --type merge -p "$(cat <<'EOF'
+data:
+  resource.customizations.health.keycloak.m.crossplane.io_ClusterProviderConfig: |
+    hs = { status = "Healthy", message = "Provider config present (provider-keycloak records only status.users)." }
+    if obj.status ~= nil and obj.status.conditions ~= nil then
+      for _, c in ipairs(obj.status.conditions) do
+        if c.type == "Ready" and c.status == "False" then
+          hs.status = "Degraded"
+          hs.message = c.message or "ClusterProviderConfig not ready"
+          return hs
+        end
+      end
+    end
+    return hs
+EOF
+)"
+
 log "waiting for argocd-server"
 kubectl -n argocd rollout status deployment/argocd-server --timeout=300s
 kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s
