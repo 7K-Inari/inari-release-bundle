@@ -138,6 +138,19 @@ keycloak:
     # dev default; override in real installs (secret stored in
     # inari-keycloak-admin)
     secret: inari-dev-admin-client
+  # Dedicated master-realm client for Crossplane provider-keycloak (operator
+  # sunset Phase 3): tenant realm/client management needs realm CREATION,
+  # which requires the master realm's create-realm role — a role no
+  # inari-realm identity can hold. Keycloak grants the creating service
+  # account full admin on the realms it creates, so create-realm is the only
+  # standing grant needed. The client-setup PostSync job ensures the client
+  # + grant; the provisioner secret feeds the provider's
+  # ClusterProviderConfig (charts/inari-platform-graphs).
+  provisionerClient:
+    clientId: inari-keycloak-provisioner
+    # dev default; override in real installs (secret stored in
+    # inari-keycloak-provisioner)
+    secret: inari-dev-provisioner-client
   # Per-tenant-cluster confidential clients cluster-<id>-dex used by the
   # cluster-local Dex (official dexidp chart) for OIDC pass-through + token exchange
   # into extension audiences. Rendered into the realm import; the realm

@@ -3,6 +3,7 @@ templates:
   - keycloak/keycloak.yaml
   - keycloak/realmimport-inari.yaml
   - keycloak/admin-secret.yaml
+  - keycloak/provisioner-secret.yaml
   - keycloak/realm-verify-job.yaml
   - keycloak/realm-sync-job.yaml
   - keycloak/client-setup-job.yaml
@@ -224,6 +225,85 @@ tests:
           value: inari-platform-admin
       - exists:
           path: stringData.client-secret
+  # --- provider-keycloak provisioner identity (operator sunset Phase 3) ---
+  - it: renders the provisioner secret with the provider-keycloak credentials JSON
+    template: keycloak/provisioner-secret.yaml
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: inari-keycloak-provisioner
+      - equal:
+          path: stringData.client-id
+          value: inari-keycloak-provisioner
+      - exists:
+          path: stringData.client-secret
+      # provider-keycloak credentials format (terraform provider fields):
+      # the provisioner client lives in the master realm — creating realms
+      # requires master-level create-realm, which inari-realm identities
+      # cannot hold.
+      - matchRegex:
+          path: stringData.credentials
+          pattern: '"client_id":\s*"inari-keycloak-provisioner"'
+      - matchRegex:
+          path: stringData.credentials
+          pattern: '"url":\s*"http://keycloak-service:8080"'
+      - matchRegex:
+          path: stringData.credentials
+          pattern: '"realm":\s*"master"'
+  - it: honors keycloak.baseUrl in the provisioner credentials JSON
+    template: keycloak/provisioner-secret.yaml
+    set:
+      keycloak.baseUrl: http://keycloak-alias:8080
+    asserts:
+      - matchRegex:
+          path: stringData.credentials
+          pattern: '"url":\s*"http://keycloak-alias:8080"'
+  - it: renders no provisioner secret when keycloak is disabled
+    template: keycloak/provisioner-secret.yaml
+    set:
+      keycloak.enabled: false
+      keycloak.external.baseUrl: http://keycloak-service.keycloak.svc:8080
+      keycloak.external.issuerUrl: https://auth.example.org
+      keycloak.external.adminSecret.name: inari-keycloak-admin
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: client-setup ensures the master-realm provisioner client and grants create-realm
+    template: keycloak/client-setup-job.yaml
+    asserts:
+      # Realm creation needs master-realm create-realm (a role no inari-realm
+      # identity can hold); Keycloak grants the creating service account full
+      # admin on the realms it creates, so create-realm alone is sufficient.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROV_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: inari-keycloak-provisioner
+                key: client-id
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROV_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: inari-keycloak-provisioner
+                key: client-secret
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: /admin/realms/master/clients\?clientId=\$PROV_CLIENT_ID
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: clientId=master-realm
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: roles/create-realm
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: /admin/realms/master/users/\$PROV_SA_USER/role-mappings/clients/
   - it: renders the verify job as an ArgoCD PostSync hook running after client-setup
     template: keycloak/realm-verify-job.yaml
     asserts:
@@ -345,6 +425,7 @@ tests:
       - keycloak/keycloak.yaml
       - keycloak/realmimport-inari.yaml
       - keycloak/admin-secret.yaml
+      - keycloak/provisioner-secret.yaml
     asserts:
       - hasDocuments:
           count: 0

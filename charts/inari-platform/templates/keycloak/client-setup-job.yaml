@@ -40,6 +40,18 @@ spec:
                 secretKeyRef:
                   name: keycloak-initial-admin
                   key: password
+            # provider-keycloak provisioner identity (master realm) —
+            # ensured below; the secret is chart-rendered at sync wave -1.
+            - name: PROV_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: inari-keycloak-provisioner
+                  key: client-id
+            - name: PROV_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: inari-keycloak-provisioner
+                  key: client-secret
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -73,4 +85,37 @@ spec:
                 -H "$AUTH" -H 'Content-Type: application/json' -d "[$ROLE]")
               [ "$code" = "204" ] || { echo "role assignment failed (HTTP $code)" >&2; exit 1; }
               echo "service account of client '$ADMIN_CLIENT_ID' now has realm-management/realm-admin"
+
+              # --- provider-keycloak provisioner (operator sunset Phase 3) ---
+              # Tenant realm/client management needs realm CREATION, and only
+              # master-realm identities can hold the create-realm role — so
+              # provider-keycloak gets a dedicated master-realm client instead
+              # of the inari-realm admin client. Keycloak grants the creating
+              # service account full admin on the realms it creates, so
+              # create-realm is the only standing grant. Create-only (like the
+              # realm import): an existing client is left untouched, so secret
+              # rotation = delete the client and re-sync.
+              PROV_UUID=$(curl -sS "$KC_BASE/admin/realms/master/clients?clientId=$PROV_CLIENT_ID" -H "$AUTH" | json_id)
+              if [ -z "$PROV_UUID" ]; then
+                code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$KC_BASE/admin/realms/master/clients" \
+                  -H "$AUTH" -H 'Content-Type: application/json' \
+                  -d "{\"clientId\":\"$PROV_CLIENT_ID\",\"enabled\":true,\"publicClient\":false,\"clientAuthenticatorType\":\"client-secret\",\"secret\":\"$PROV_CLIENT_SECRET\",\"standardFlowEnabled\":false,\"directAccessGrantsEnabled\":false,\"serviceAccountsEnabled\":true}")
+                [ "$code" = "201" ] || { echo "provisioner client create failed (HTTP $code)" >&2; exit 1; }
+                PROV_UUID=$(curl -sS "$KC_BASE/admin/realms/master/clients?clientId=$PROV_CLIENT_ID" -H "$AUTH" | json_id)
+                echo "provisioner client '$PROV_CLIENT_ID' created in realm master"
+              else
+                echo "provisioner client '$PROV_CLIENT_ID' already exists in realm master"
+              fi
+              PROV_SA_USER=$(curl -sS "$KC_BASE/admin/realms/master/clients/$PROV_UUID/service-account-user" -H "$AUTH" | json_id)
+              [ -n "$PROV_SA_USER" ] || { echo "provisioner service account user not found" >&2; exit 1; }
+              # In the master realm the realm-management client is named
+              # master-realm; create-realm is one of its roles.
+              MASTER_RM_UUID=$(curl -sS "$KC_BASE/admin/realms/master/clients?clientId=master-realm" -H "$AUTH" | json_id)
+              CREATE_REALM=$(curl -sS "$KC_BASE/admin/realms/master/clients/$MASTER_RM_UUID/roles/create-realm" -H "$AUTH")
+              echo "$CREATE_REALM" | grep -q '"name":"create-realm"' || { echo "create-realm role not found" >&2; exit 1; }
+              code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+                "$KC_BASE/admin/realms/master/users/$PROV_SA_USER/role-mappings/clients/$MASTER_RM_UUID" \
+                -H "$AUTH" -H 'Content-Type: application/json' -d "[$CREATE_REALM]")
+              [ "$code" = "204" ] || { echo "create-realm assignment failed (HTTP $code)" >&2; exit 1; }
+              echo "service account of provisioner client '$PROV_CLIENT_ID' now has master-realm/create-realm"
 {{- end }}

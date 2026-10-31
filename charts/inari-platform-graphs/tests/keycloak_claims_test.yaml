@@ -238,6 +238,20 @@ tests:
           path: spec.credentials.secretRef
           value: {name: inari-keycloak-admin, namespace: inari, key: credentials}
 
+  - it: defaults the ClusterProviderConfig credentials to the inari-platform provisioner secret
+    # The provisioner secret (charts/inari-platform) holds the master-realm
+    # client with create-realm; the inari-realm admin client cannot create
+    # realms, so the default must NOT point at inari-keycloak-admin.
+    template: keycloak/clusterproviderconfig.yaml
+    set:
+      keycloak:
+        enabled: true
+        issuerBaseURL: https://keycloak.example.org
+    asserts:
+      - equal:
+          path: spec.credentials.secretRef
+          value: {name: inari-keycloak-provisioner, namespace: inari, key: credentials}
+
   - it: skips the ClusterProviderConfig when providerConfig.enabled=false
     template: keycloak/clusterproviderconfig.yaml
     set:

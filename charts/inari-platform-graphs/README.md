@@ -44,7 +44,7 @@ there is no adoption/migration of operator-created resources (D7).
 | `keycloak.providerConfigRef` | `keycloak` | provider-keycloak `ClusterProviderConfig` name |
 | `keycloak.issuerBaseURL` | `""` (required) | Public Keycloak base URL; `status.issuerURL = <issuerBaseURL>/realms/<realm>` |
 | `keycloak.providerConfig.enabled` | `true` | Render the `ClusterProviderConfig` the compositions reference |
-| `keycloak.providerConfig.credentialsSecretRef` | `inari-keycloak-admin`/`inari`/`credentials` | Secret holding provider-keycloak's credentials JSON (`{client_id, client_secret, url}`); the `credentials` key on the inari-platform admin secret is Phase 3 wiring |
+| `keycloak.providerConfig.credentialsSecretRef` | `inari-keycloak-provisioner`/`inari`/`credentials` | Secret holding provider-keycloak's credentials JSON (`{client_id, client_secret, url, realm}`); rendered by `charts/inari-platform` (master-realm provisioner client, Phase 3) |
 
 ## Client credential delivery
 
