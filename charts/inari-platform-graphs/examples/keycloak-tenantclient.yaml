@@ -24,6 +24,7 @@ spec:
   # secretName: acme-portal-keycloak-client  # optional; default "<name>-keycloak-client"
 # status.clientID / status.realm / status.secretName are projected by the
 # composition. For confidential clients the provider writes the connection
-# secret <clientID>-keycloak-connection (key attribute.client_secret) into
-# this namespace; the companion ExternalSecret turns it into
+# secret <xr-name>-keycloak-connection (key attribute.client_secret) into
+# this namespace — keyed to the XR name, not clientID, so non-DNS clientIDs
+# are safe; the companion ExternalSecret turns it into
 # <secretName> with keys client-id / client-secret / issuer.
