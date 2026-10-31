@@ -67,6 +67,18 @@ TenantClient XRs, and the ESO secret-delivery bundle. These are the
 manifest shapes the server commits to `tenants/<org>/` in the hub-facing
 platform repo.
 
+## Teardown ordering (operational requirement)
+
+Deleting a TenantRealm/TenantClient XR cascades XR → managed resource →
+Keycloak realm/client (provider-keycloak owns the full lifecycle; the v2
+namespaced MRs have no `deletionPolicy` — default management policies
+include delete). **Drain the XRs and wait for their managed resources to
+disappear BEFORE deleting the tenant namespace**: provider-keycloak tracks
+ProviderConfigUsage in the MR's namespace, and a namespace that is already
+terminating rejects that write — the MR finalizer then wedges and namespace
+termination hangs. The renderpath e2e (`rgd_teardown`) encodes this order;
+server-side tenant teardown sequencing is tracked as a Phase 4 follow-up.
+
 ## Validation
 
 - `helm unittest charts/inari-platform-graphs` — golden suites for the RGD
