@@ -19,7 +19,7 @@ metadata:
     gotemplating.fn.crossplane.io/composition-resource-name: client
     # XR Ready tracks the composed Client's Ready condition (see
     # tenantrealm.gotmpl for why the ready annotation is required).
-    gotemplating.fn.crossplane.io/ready: '{{ $o := index $.observed.resources "client" }}{{ if $o }}{{ (getResourceCondition "Ready" $o.resource).Status | default "False" }}{{ else }}False{{ end }}'
+    gotemplating.fn.crossplane.io/ready: '{{ if $.observed.resources }}{{ $o := index $.observed.resources "client" }}{{ if $o }}{{ (getResourceCondition "Ready" $o.resource).Status | default "False" }}{{ else }}False{{ end }}{{ else }}False{{ end }}'
 spec:
   forProvider:
     # Free-string fields are quoted: spec.clientID / spec.realm are not
