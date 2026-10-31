@@ -19,8 +19,11 @@ metadata:
     gotemplating.fn.crossplane.io/composition-resource-name: client
 spec:
   forProvider:
-    clientId: {{ $clientID }}
-    realmId: {{ $spec.realm }}
+    # Free-string fields are quoted: spec.clientID / spec.realm are not
+    # DNS-constrained, so values like "portal: v2" must not break the
+    # composed YAML.
+    clientId: {{ $clientID | quote }}
+    realmId: {{ $spec.realm | quote }}
     enabled: true
     accessType: {{ if $spec.public }}PUBLIC{{ else }}CONFIDENTIAL{{ end }}
     serviceAccountsEnabled: {{ $spec.serviceAccountsEnabled }}
@@ -49,6 +52,6 @@ spec:
 apiVersion: identity.inari.io/v1alpha1
 kind: TenantClient
 status:
-  clientID: {{ $clientID }}
-  realm: {{ $spec.realm }}
-  secretName: {{ $secretName }}
+  clientID: {{ $clientID | quote }}
+  realm: {{ $spec.realm | quote }}
+  secretName: {{ $secretName | quote }}

@@ -15,11 +15,13 @@ metadata:
   name: {{ $xr.metadata.name }}
   namespace: {{ $xr.metadata.namespace }}
   annotations:
-    crossplane.io/external-name: {{ $realm }}
+    # Free-string fields are quoted: spec.realm is not DNS-constrained, so
+    # values like "acme: v2" must not break the composed YAML.
+    crossplane.io/external-name: {{ $realm | quote }}
     gotemplating.fn.crossplane.io/composition-resource-name: realm
 spec:
   forProvider:
-    realm: {{ $realm }}
+    realm: {{ $realm | quote }}
     {{- if $spec.displayName }}
     displayName: {{ $spec.displayName | quote }}
     {{- end }}
@@ -38,5 +40,5 @@ spec:
 apiVersion: identity.inari.io/v1alpha1
 kind: TenantRealm
 status:
-  realm: {{ $realm }}
+  realm: {{ $realm | quote }}
   issuerURL: "@@ISSUER_BASE_URL@@/realms/{{ $realm }}"

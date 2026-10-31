@@ -145,7 +145,12 @@ tests:
           pattern: 'apiVersion: realm\.keycloak\.m\.crossplane\.io/v1alpha1'
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
-          pattern: 'crossplane\.io/external-name: \{\{ \$realm \}\}'
+          pattern: 'crossplane\.io/external-name: \{\{ \$realm \| quote \}\}'
+      # spec.realm is a free string (not DNS-constrained): it must be quoted
+      # everywhere it lands in composed YAML (forProvider + status)
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'realm: \{\{ \$realm \| quote \}\}'
       # Crossplane v2 namespaced MRs dropped spec.deletionPolicy (lifecycle
       # is governed by managementPolicies; the default full management
       # includes delete — the D7 declarative-recreate semantic)
@@ -187,7 +192,12 @@ tests:
           pattern: 'apiVersion: openidclient\.keycloak\.m\.crossplane\.io/v1alpha1'
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
-          pattern: 'realmId: \{\{ \$spec\.realm \}\}'
+          pattern: 'realmId: \{\{ \$spec\.realm \| quote \}\}'
+      # spec.clientID is a free string (not DNS-constrained): quoted in the
+      # composed MR so values like "portal: v2" can't break the YAML
+      - matchRegex:
+          path: spec.pipeline[0].input.inline.template
+          pattern: 'clientId: \{\{ \$clientID \| quote \}\}'
       # public maps to accessType PUBLIC, default CONFIDENTIAL
       - matchRegex:
           path: spec.pipeline[0].input.inline.template
