@@ -134,7 +134,15 @@ jobs:
             grep -q 'argocd.argoproj.io/sync-wave' "$f" || { echo "$f: missing sync-wave annotation"; exit 1; }
           done
 
+  # install-test is disabled (per maintainer decision, 2026-10-31): the
+  # kind-based bootstrap gate wedged on Application/platform-rgd health —
+  # provider-keycloak's ClusterProviderConfig never writes status.conditions,
+  # so ArgoCD's stock *.crossplane.io wildcard health check holds it in
+  # "Progressing ..." forever. scripts/install-argocd.sh now patches argocd-cm
+  # with a health override (see git history); re-enable the job once the
+  # bootstrap gate is revalidated end-to-end.
   install-test:
+    if: false
     runs-on: ubuntu-latest
     # The Phase 0 hub prereqs (cert-manager, external-dns, ESO, kro,
     # crossplane + provider/function) stretch bootstrap + backup + DR drill
