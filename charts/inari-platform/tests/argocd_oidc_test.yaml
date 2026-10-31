@@ -180,6 +180,19 @@ tests:
     asserts:
       - hasDocuments:
           count: 2
+      # ESO v1 API (the platform installs ESO 2.x, which no longer serves v1beta1).
+      - equal:
+          path: apiVersion
+          value: external-secrets.io/v1
+          documentSelector:
+            path: metadata.name
+            value: argocd-dex-client
+      - equal:
+          path: apiVersion
+          value: external-secrets.io/v1
+          documentSelector:
+            path: metadata.name
+            value: dex-config
       - isKind:
           of: ExternalSecret
       - documentSelector:
