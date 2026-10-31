@@ -1,0 +1,29 @@
+# Chainsaw configuration for the Inari platform smoke/DR assertions.
+# These tests assert cluster state only — never provisioning (hard rule:
+# orchestration stays in bash/ArgoCD; chainsaw verifies outcomes).
+#
+# The target namespace defaults to `inari`; override with
+# `--namespace <ns>` (the bash wrappers pass --namespace "$NAMESPACE").
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Configuration
+metadata:
+  name: inari-e2e
+spec:
+  namespace: inari
+  timeouts:
+    # bootstrap.sh waits for the ArgoCD Applications to be Healthy+Synced
+    # before invoking chainsaw, so these are confirmation retries, not
+    # bring-up waits.
+    assert: 10m
+    exec: 2m
+    error: 1m
+    apply: 30s
+    delete: 30s
+    cleanup: 30s
+  # Assert-only suite: nothing to clean up (the HTTP probes are --rm pods).
+  skipDelete: true
+  # JUnit XML (one testcase per Test) for later ReportPortal ingestion
+  # (plan §3.4). The report lands in CWD unless --report-path is given;
+  # the bash wrappers point it at scripts/e2e/chainsaw/reports/.
+  reportFormat: XML
+  reportName: junit

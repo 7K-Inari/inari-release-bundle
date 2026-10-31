@@ -1,0 +1,50 @@
+# Parity with verify.sh verify_keycloak_realm, strengthened: operator CR
+# readiness (Keycloak + KeycloakRealmImport) is NOT proof the realm is
+# served, so the HTTP probe from verify.sh is kept as the final step.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: keycloak-realm
+  labels:
+    e2e.inari.io/set: smoke
+    e2e.inari.io/tier: p0
+spec:
+  steps:
+  - name: Keycloak CR reports Ready
+    try:
+    - assert:
+        resource:
+          apiVersion: k8s.keycloak.org/v2alpha1
+          kind: Keycloak
+          metadata:
+            name: keycloak
+          status:
+            (conditions[?type == 'Ready']):
+            - status: 'True'
+  - name: KeycloakRealmImport inari reports Done
+    try:
+    - assert:
+        resource:
+          apiVersion: k8s.keycloak.org/v2alpha1
+          kind: KeycloakRealmImport
+          metadata:
+            # Rendered by charts/inari-platform realmimport-inari.yaml.
+            name: inari-realm-inari
+          status:
+            # RealmImport completion is signalled by Done=True (there is no
+            # Ready condition on this CR).
+            (conditions[?type == 'Done']):
+            - status: 'True'
+  - name: realm 'inari' is served over HTTP
+    try:
+    - script:
+        timeout: 3m
+        env:
+        - name: NAMESPACE
+          value: ($namespace)
+        content: |
+          set -eu
+          kubectl -n "$NAMESPACE" run inari-verify-realm --rm -i --restart=Never \
+            --image=curlimages/curl:8.10.1 --quiet -- \
+            -fsS --retry 30 --retry-delay 5 --retry-all-errors \
+            http://keycloak-service:8080/realms/inari > /dev/null

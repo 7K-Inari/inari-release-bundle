@@ -22,6 +22,7 @@ RELEASE="${RELEASE:-inari}"
 CHART_DIR="${CHART_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../charts/inari-platform" && pwd)}"
 GITOPS_DIR="${GITOPS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../gitops" && pwd)}"
 PG_CLUSTER="${PG_CLUSTER:-postgresql}"
+CHAINSAW_DIR="${CHAINSAW_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../e2e/chainsaw" && pwd)}"
 
 kubectl_ns() { kubectl --namespace "$NAMESPACE" "$@"; }
 
@@ -72,4 +73,24 @@ pg_dump_db() { # db outfile — plain-format pg_dump from the CNPG primary
   [[ -n "$pod" ]] || die "no CNPG primary pod found for cluster ${PG_CLUSTER}"
   kubectl_ns exec "$pod" -c postgres -- \
     pg_dump -U postgres --clean --if-exists --no-owner --no-privileges "$1" > "$2"
+}
+
+# Run the declarative chainsaw assertions (scripts/e2e/chainsaw/) — the
+# replacement for the retired lib/verify.sh. Callers pass test sets relative
+# to CHAINSAW_DIR (e.g. `verify_chainsaw bootstrap` or
+# `verify_chainsaw bootstrap dr` post-restore). JUnit XML (one testcase per
+# Test) lands in E2E_CHAINSAW_REPORT_DIR (default: gitignored reports/).
+verify_chainsaw() { # test-set...
+  local report_dir="${E2E_CHAINSAW_REPORT_DIR:-$CHAINSAW_DIR/reports}"
+  mkdir -p "$report_dir"
+  local args=() set
+  for set in "$@"; do args+=(--test-dir "$CHAINSAW_DIR/$set"); done
+  log "verifying stack via chainsaw (sets: $*)"
+  chainsaw test --config "$CHAINSAW_DIR/.chainsaw.yaml" \
+    "${args[@]}" \
+    --values "$CHAINSAW_DIR/values/expected.yaml" \
+    --namespace "$NAMESPACE" \
+    --report-format XML --report-name junit --report-path "$report_dir" \
+    || die "chainsaw verification failed (sets: $*) — report: $report_dir/junit.xml"
+  log "smoke check passed: platform stack is healthy"
 }
