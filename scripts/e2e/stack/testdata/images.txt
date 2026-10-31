@@ -53,6 +53,9 @@ registry.k8s.io/kro/kro:v0.9.4
 # crossplane provider-keycloak package v3.2.3 (Provider CR, not a helm chart)
 xpkg.crossplane.io/crossplane-contrib/provider-keycloak:v3.2.3
 
+# crossplane function-go-templating package (composition engine for the keycloak XRs)
+xpkg.crossplane.io/crossplane-contrib/function-go-templating:v0.13.2
+
 # bitnami/redis subchart 28.2.4 (HA leg; e2e pins bitnamilegacy — the chart
 # default bitnami/redis:latest is mutable and must never be cached)
 bitnamilegacy/redis:8.2.1
