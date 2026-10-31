@@ -295,15 +295,14 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: /admin/realms/master/clients\?clientId=\$PROV_CLIENT_ID
+      # create-realm is a realm-level role of master (Keycloak 26), granted
+      # as a realm role mapping — not a master-realm client role.
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: clientId=master-realm
+          pattern: /admin/realms/master/roles/create-realm
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: roles/create-realm
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: /admin/realms/master/users/\$PROV_SA_USER/role-mappings/clients/
+          pattern: /admin/realms/master/users/\$PROV_SA_USER/role-mappings/realm
   - it: renders the verify job as an ArgoCD PostSync hook running after client-setup
     template: keycloak/realm-verify-job.yaml
     asserts:

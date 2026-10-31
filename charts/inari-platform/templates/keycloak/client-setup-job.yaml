@@ -108,14 +108,13 @@ spec:
               fi
               PROV_SA_USER=$(curl -sS "$KC_BASE/admin/realms/master/clients/$PROV_UUID/service-account-user" -H "$AUTH" | json_id)
               [ -n "$PROV_SA_USER" ] || { echo "provisioner service account user not found" >&2; exit 1; }
-              # In the master realm the realm-management client is named
-              # master-realm; create-realm is one of its roles.
-              MASTER_RM_UUID=$(curl -sS "$KC_BASE/admin/realms/master/clients?clientId=master-realm" -H "$AUTH" | json_id)
-              CREATE_REALM=$(curl -sS "$KC_BASE/admin/realms/master/clients/$MASTER_RM_UUID/roles/create-realm" -H "$AUTH")
+              # create-realm is a REALM-level role of the master realm (not a
+              # master-realm client role) — grant it as a realm role mapping.
+              CREATE_REALM=$(curl -sS "$KC_BASE/admin/realms/master/roles/create-realm" -H "$AUTH")
               echo "$CREATE_REALM" | grep -q '"name":"create-realm"' || { echo "create-realm role not found" >&2; exit 1; }
               code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-                "$KC_BASE/admin/realms/master/users/$PROV_SA_USER/role-mappings/clients/$MASTER_RM_UUID" \
+                "$KC_BASE/admin/realms/master/users/$PROV_SA_USER/role-mappings/realm" \
                 -H "$AUTH" -H 'Content-Type: application/json' -d "[$CREATE_REALM]")
               [ "$code" = "204" ] || { echo "create-realm assignment failed (HTTP $code)" >&2; exit 1; }
-              echo "service account of provisioner client '$PROV_CLIENT_ID' now has master-realm/create-realm"
+              echo "service account of provisioner client '$PROV_CLIENT_ID' now has master create-realm"
 {{- end }}
