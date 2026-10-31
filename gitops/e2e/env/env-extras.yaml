@@ -1,0 +1,28 @@
+# inari-e2e-env-extras — namespace-originating app (wave -1): creates the
+# inari-e2e namespace and syncs plain manifests from gitops/e2e/env-extras/
+# (ESO ExternalSecrets against the vault-internal ClusterSecretStore).
+# All sibling apps depend on the secrets + namespace from this one.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inari-e2e-env-extras
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: inari-e2e
+  source:
+    repoURL: https://github.com/7K-Inari/inari-release-bundle.git
+    targetRevision: main
+    path: gitops/e2e/env-extras
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inari-e2e
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,84 @@
+# inari-e2e-platform-config — CNPG Cluster + Keycloak instance + realm glue
+# for the e2e environment (wave 0). Sourced from this repo's working tree
+# (charts/inari-platform) so the env tracks main; image/OCI candidate
+# overrides at run time are the W3 env-prep step's job, not this file's.
+#
+# Keycloak is BUNDLED here (dedicated e2e instance at auth-e2e.7kgroup.org,
+# realm "inari") — unlike the live instance, which imports into the shared
+# cluster Keycloak. All hostnames are grey-cloud (cloudflare-proxied=false)
+# per the e2e DNS decision.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inari-e2e-platform-config
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: inari-e2e
+  source:
+    repoURL: https://github.com/7K-Inari/inari-release-bundle.git
+    targetRevision: main
+    path: charts/inari-platform
+    helm:
+      releaseName: platform-config
+      values: |
+        gateway:
+          name: internet-gateway
+          namespace: istio
+          sectionName: https-7kgroup
+        postgresql:
+          enabled: true
+          instances: 1
+          storageClass: longhorn-hdd-no-backup
+          storageSize: 5Gi
+          auth:
+            # Synced from Vault (inari-e2e/database) by env-extras.
+            existingSecret: inari-db
+        keycloak:
+          enabled: true
+          # Fixed issuer hostname: tokens carry iss=https://auth-e2e.7kgroup.org
+          # so the browser-reachable URL IS the API-reachable URL (the
+          # kind-era issuer split is gone — environment-contract §1.2).
+          hostname:
+            hostname: "https://auth-e2e.7kgroup.org"
+            strict: false
+          route:
+            enabled: true
+            hostnames:
+              - auth-e2e.7kgroup.org
+            annotations:
+              external-dns.kubernetes.io/cloudflare-proxied: "false"
+          consoleRedirectUris:
+            - "https://inari-e2e.7kgroup.org/*"
+          consoleWebOrigins:
+            - "https://inari-e2e.7kgroup.org"
+          # realmSync stays OFF: the seed step owns the inari-ui redirect
+          # whitelist and re-adds it after every env-prep (plan §8.4);
+          # keycloak-config-cli would fight it.
+          realmSync:
+            enabled: false
+          adminClient:
+            clientId: inari-platform-admin
+            # Throwaway-e2e-realm credential. Must exist at helm-render time
+            # (rendered into the realm import AND the inari-keycloak-admin
+            # secret), so ESO delivery is impossible without a chart change;
+            # committed random value, documented in gitops/e2e/README.md.
+            secret: "218f46d917efb9c3fa6afb36dd0c2b2dafa1154e07bdcffc"
+        # Disposable environment: prune/uninstall may destroy the database.
+        dataProtection:
+          keepOnUninstall: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: inari-e2e
+  syncPolicy:
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
