@@ -10,6 +10,7 @@
 
 import type { Page } from "@playwright/test";
 
+import { DEV_ADMIN, PERSONA_PASSWORDS } from "../helpers/env";
 import { LoginPage } from "../pages/login.page";
 
 export interface Persona {
@@ -20,20 +21,23 @@ export interface Persona {
 }
 
 export const PERSONAS: Record<string, Persona> = {
-  // Provisioned by the golden-path stack suite (platform-admins group, E2E Org creator).
+  // Provisioned by the seed step (scripts/e2e/seed): platform-admins group,
+  // E2E Org creator. Credentials from E2E_USER/E2E_PASSWORD on the live env.
   devAdmin: {
     name: "dev-admin",
-    username: process.env.E2E_USER || "dev-admin",
-    password: process.env.E2E_PASSWORD || "dev-admin",
+    username: DEV_ADMIN.username,
+    password: DEV_ADMIN.password,
   },
-  // Provisioned by seed/seed-personas.mjs (one per ADR-0013 built-in role,
-  // plus the role-less propagation target). Specs must never mutate the role
-  // assignments of operator/editor/viewer; member is owned by the
-  // role-lifecycle spec and must be restored to role-less.
-  operator: { name: "e2e-operator", username: "e2e-operator", password: "e2e-operator" },
-  editor: { name: "e2e-editor", username: "e2e-editor", password: "e2e-editor" },
-  viewer: { name: "e2e-viewer", username: "e2e-viewer", password: "e2e-viewer" },
-  member: { name: "e2e-member", username: "e2e-member", password: "e2e-member" },
+  // Provisioned by the seed step (one per ADR-0013 built-in role, plus the
+  // role-less propagation target). Passwords from the E2E_*_PASSWORD contract
+  // variables (Vault-backed on the live env; username defaults locally).
+  // Specs must never mutate the role assignments of operator/editor/viewer;
+  // member is owned by the role-lifecycle spec and must be restored to
+  // role-less.
+  operator: { name: "e2e-operator", username: "e2e-operator", password: PERSONA_PASSWORDS["e2e-operator"] },
+  editor: { name: "e2e-editor", username: "e2e-editor", password: PERSONA_PASSWORDS["e2e-editor"] },
+  viewer: { name: "e2e-viewer", username: "e2e-viewer", password: PERSONA_PASSWORDS["e2e-viewer"] },
+  member: { name: "e2e-member", username: "e2e-member", password: PERSONA_PASSWORDS["e2e-member"] },
 };
 
 export function authFile(persona: Persona): string {
