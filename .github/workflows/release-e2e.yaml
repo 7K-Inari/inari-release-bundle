@@ -11,8 +11,12 @@ name: release-e2e
 #   1. resolve — candidate set from the PR: charts-ref = PR head SHA;
 #      server/console/agent image tags from the bumped chart appVersions
 #      (agent: the platform chart's agent.recommended); cosign-verify=true,
-#      quarantined excluded (hard rule 5: exactly this artifact set).
-#   2. submit  — argo submit --from workflowtemplate/e2e-stack --wait.
+#      ha=true, quarantined excluded (hard rule 5: exactly this artifact set).
+#   2. submit  — argo submit --from workflowtemplate/e2e-stack (HTTP/1.1 —
+#      gRPC does not survive the istio internet-gateway, probed 2026-11-06),
+#      then a stateless poll loop (no long-lived watch streams).
+#   3. report  — Argo UI + ReportPortal launch links posted to the PR at
+#      submit AND with the final result (pass/fail).
 #
 # Trigger: pull_request on release-please Release PRs only (branch prefix
 # `release-please--` or Chart.yaml/appVersion changes), plus
@@ -21,12 +25,12 @@ name: release-e2e
 # branches always live in this repo, so no untrusted checkout ever gets
 # secrets. Fork PRs are hard-skipped.
 #
-# PREREQUISITES (post-merge, one-time):
+# PREREQUISITES (done 2026-11-06):
 #   - repo secret ARGO_TOKEN: the e2e-submitter ServiceAccount token
 #     (Secret e2e-submitter-token in ns inari-e2e — created by
-#     gitops/e2e/argo-workflows/rbac.yaml).
-#   - the public argo-workflows route (argo-workflows.7kgroup.org) from the
-#     accompanying 7k-app-of-apps PR.
+#     gitops/e2e/argo-workflows/rbac.yaml). SET by the owner.
+#   - the public argo-workflows route (argo-workflows.7kgroup.org)
+#     from 7k-app-of-apps#32. LIVE.
 #
 # REQUIRED CHECK: once this workflow has a green live run, it becomes a
 # required check on Release PRs. Enabling that is a MANUAL branch-
@@ -224,6 +228,10 @@ jobs:
     env:
       ARGO_SERVER: argo-workflows.7kgroup.org:443
       ARGO_SECURE: "true"
+      # gRPC does not survive the istio internet-gateway ("server closed the
+      # stream without sending trailers" on every submit — reproduced and
+      # probed 2026-11-06); the HTTP/1.1 gateway API is verified working.
+      ARGO_HTTP1: "true"
       ARGO_TOKEN: ${{ secrets.ARGO_TOKEN }}
       WF_NAME: ""
     steps:
@@ -255,11 +263,15 @@ jobs:
           AGENT_IMAGE: ${{ needs.resolve.outputs.agent-image }}
           SERVER_SRC_REF: ${{ needs.resolve.outputs.server-src-ref }}
           COSIGN: ${{ needs.resolve.outputs.cosign-verify }}
+          # Release gate runs the env-wide HA flip + disruption specs (the
+          # release contract); edge repair/debug stays non-HA and fast.
+          HA: ${{ needs.resolve.outputs.mode == 'release' && 'true' || 'false' }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           name=$(argo submit --from workflowtemplate/e2e-stack -n inari-e2e \
             -p mode="$MODE" \
+            -p ha="$HA" \
             -p charts-ref="$CHARTS_REF" \
             -p server-image="$SERVER_IMAGE" \
             -p console-image="$CONSOLE_IMAGE" \
@@ -288,21 +300,73 @@ jobs:
           exact candidate artifact set, cosign on, quarantined excluded).
 
           - **Argo UI:** https://argo-workflows.7kgroup.org/workflows/inari-e2e/$WF
-          - **ReportPortal launch:** \`$LAUNCH\` on https://reportportal.int.7kgroup.org (JUnit uploads at run end, including on failure)
+          - **ReportPortal launch:** [\`$LAUNCH\`](https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all?filter.eq.name=$LAUNCH) — JUnit imports at run end, including on failure/abort
 
           This check waits for the workflow and reports its result.
           EOF
           )"
 
-      - name: Wait for the workflow
+      - name: Wait for the workflow (poll — no long-lived watch streams)
+        id: wait
+        if: steps.submit.outputs.wf-name != ''
         env:
           WF: ${{ steps.submit.outputs.wf-name }}
         run: |
+          set -uo pipefail
+          # Stateless GET polling instead of `argo wait`: a multi-hour watch
+          # stream risks being cut by gateway stream-idle timeouts mid-run.
+          # 175x60s = 175m < the job's 185m timeout; the workflow's own
+          # activeDeadlineSeconds (3h) is the real run cap.
+          rc=1
+          for i in $(seq 1 175); do
+            phase=$(argo get -n inari-e2e "$WF" -o json 2>/dev/null | jq -r '.status.phase // empty' || true)
+            echo "[$i/175] $(date -u +%H:%M:%SZ) phase=${phase:-unknown}"
+            case "$phase" in
+              Succeeded) rc=0; break;;
+              Failed|Error) rc=1; break;;
+            esac
+            sleep 60
+          done
+          argo get -n inari-e2e "$WF" 2>/dev/null | tail -30 || true
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # Never fail HERE — the result comment must post first; the final
+          # "Gate result" step re-raises the recorded exit code.
+          exit 0
+
+      - name: Post result to the Release PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WF: ${{ steps.submit.outputs.wf-name }}
+          PR: ${{ github.event.pull_request.number }}
+          LAUNCH: release-${{ github.run_id }}
+          RC: ${{ steps.wait.outputs.rc }}
+        run: |
           set -euo pipefail
-          # argo wait exits nonzero unless the workflow Succeeded — that exit
-          # code IS the gate result.
-          argo wait -n inari-e2e "$WF"
-          argo get -n inari-e2e "$WF" | tail -30
+          if [ -z "$WF" ]; then
+            result="❌ **submission failed** — see this workflow's logs"
+          elif [ "$RC" = "0" ]; then
+            result="✅ **PASSED** — \`$WF\`"
+          else
+            result="❌ **FAILED** — \`$WF\` (or the wait budget elapsed; the Argo run may still be in flight)"
+          fi
+          gh pr comment "$PR" --body "$(cat <<EOF
+          ### e2e release gate — result
+
+          $result
+
+          - **Argo UI:** https://argo-workflows.7kgroup.org/workflows/inari-e2e/$WF
+          - **ReportPortal launch:** [\`$LAUNCH\`](https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all?filter.eq.name=$LAUNCH)
+          EOF
+          )"
+
+      - name: Gate result
+        if: always() && steps.submit.outputs.wf-name != ''
+        env:
+          RC: ${{ steps.wait.outputs.rc }}
+        run: |
+          echo "gate result: rc=${RC:-1}"
+          exit "${RC:-1}"
 
   server-integration:
     # Unchanged repo-native layer: the full inari-server integration suite at

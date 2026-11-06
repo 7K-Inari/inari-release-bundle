@@ -154,6 +154,9 @@ jobs:
     env:
       ARGO_SERVER: argo-workflows.7kgroup.org:443
       ARGO_SECURE: "true"
+      # gRPC does not survive the istio internet gateway (probed 2026-11-06);
+      # the HTTP/1.1 gateway API is verified working.
+      ARGO_HTTP1: "true"
       ARGO_TOKEN: ${{ secrets.ARGO_TOKEN }}
     steps:
       - name: Install argo CLI
@@ -187,3 +190,4 @@ jobs:
             -o name)
           echo "submitted $name"
           echo "watch: https://argo-workflows.7kgroup.org/workflows/inari-e2e/$name"
+          echo "reportportal: launch edge-$RUN_ID — https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all (JUnit imports at run end)"
