@@ -134,10 +134,13 @@ subjects:
     name: e2e-runner
     namespace: inari-e2e
 ---
-# Semaphore lock records are written CONTROLLER-side, and the argo-workflows
-# chart's controller ClusterRole has no configmaps update (verified live on
-# chart 2.0.15 / controller v4.1.6) — without this Role every synchronized
-# workflow hangs/fails at lock acquisition.
+# VESTIGIAL but kept: Argo v3 wrote semaphore holder records into the lock
+# ConfigMap controller-side, needing configmaps update — and the chart's
+# controller ClusterRole lacks it (verified live on chart 2.0.15 /
+# controller v4.1.6). Argo v4 reads the CM value as the permit LIMIT and
+# never writes (verified against v4.1.6 source + live), so this Role is
+# currently unexercised; keep it as cheap insurance against a controller
+# downgrade/behavior change.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
