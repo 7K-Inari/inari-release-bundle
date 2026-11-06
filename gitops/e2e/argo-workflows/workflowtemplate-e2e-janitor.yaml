@@ -3,8 +3,13 @@
 # contract invariant 6, plan C11). Runs as the e2e-janitor CronWorkflow;
 # manual reaps: argo submit --from workflowtemplate/e2e-janitor -n inari-e2e.
 #
-# Algorithm (identity: dev-admin persona — platform-admins member via the
-# seed's GapKCPlatformGroup step, so it can request AND approve decommissions):
+# Algorithm (TWO identities — inari-server authorizeLifecycleApprover: "the
+# requester may never decide their own request", and limbo/frozen orgs are
+# only reachable by a platform org_creator, i.e. a platform-admins member):
+#   0. request decommissions as dev-admin (platform-admins), APPROVE them as
+#      e2e-ops (the dedicated second platform-admins identity — personas must
+#      never join that group; live-verified 2026-11-06: same-identity decide
+#      403s with "requester cannot self-approve");
 #   1. list tenants; select slugs e2e-* (every suite-created org carries the
 #      prefix by convention — workflow runs use e2e-<workflow-uid>-*, manual/
 #      local runs use their own runIds, e.g. the e2e-w3a-* leaks), never the
@@ -55,6 +60,14 @@ spec:
           - name: E2E_PASSWORD
             valueFrom:
               secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          # The approver identity (see the header). optional: the pod still
+          # starts while the Vault property is pending; real reaps fail fast
+          # below with a clear message, dry-runs work regardless.
+          - name: E2E_OPS_USER
+            value: e2e-ops
+          - name: E2E_OPS_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: ops-password, optional: true}
         source: |
           set -eu
           command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
@@ -67,6 +80,17 @@ spec:
             -d "scope=openid organization:*" | jq -r '.access_token // ""')
           [ -n "$TOKEN" ] || { echo "could not obtain a user token" >&2; exit 1; }
           AUTH="Authorization: Bearer $TOKEN"
+
+          # Approver token (decide ≠ request — self-approval is forbidden).
+          if [ "$DRY_RUN" != "true" ]; then
+            [ -n "${E2E_OPS_PASSWORD:-}" ] || { echo "E2E_OPS_PASSWORD unset — the Vault property inari-e2e/personas.ops (and the seed's e2e-ops user) must exist before real reaps" >&2; exit 1; }
+            OPS_TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+              -d grant_type=password -d client_id=inari-server \
+              -d "username=$E2E_OPS_USER" -d "password=$E2E_OPS_PASSWORD" \
+              -d "scope=openid organization:*" | jq -r '.access_token // ""')
+            [ -n "$OPS_TOKEN" ] || { echo "could not obtain the e2e-ops approver token (seed creates the user + platform-admins membership)" >&2; exit 1; }
+            OPS_AUTH="Authorization: Bearer $OPS_TOKEN"
+          fi
 
           # Active runs: their uids must never be reaped under them.
           ACTIVE=$(kubectl -n inari-e2e get workflows -o json \
@@ -112,12 +136,15 @@ spec:
                 | jq -r '.approvalId // ""') || {
                   echo "  decommission request failed for $slug" >&2; FAILED=1; continue; }
               [ -n "$APPROVAL" ] || { echo "  no approvalId for $slug" >&2; FAILED=1; continue; }
-              # Platform-admin lifecycle approval → teardown runs on decide.
-              curl -sf -X POST "$API/tenants/$slug/approvals/$APPROVAL/decide" -H "$AUTH" \
+              # Platform-admin lifecycle approval by the SECOND identity →
+              # teardown runs on decide.
+              curl -sf -X POST "$API/tenants/$slug/approvals/$APPROVAL/decide" -H "$OPS_AUTH" \
                 -H 'Content-Type: application/json' \
                 -d '{"approve":true,"reason":"janitor reap"}' >/dev/null || {
                   echo "  approval $APPROVAL failed for $slug" >&2; FAILED=1; continue; }
-              # Poll until the org disappears (async teardown).
+              # Poll until the org disappears (async teardown). Note: while
+              # deleting, GET returns 403 for dev-admin (the freeze sweeps the
+              # org's FGA tuples), NOT 404 — only teardown completion gives 404.
               i=0
               while [ $i -lt 30 ]; do
                 code=$(curl -s -o /dev/null -w '%{http_code}' "$API/tenants/$slug" -H "$AUTH" || true)
