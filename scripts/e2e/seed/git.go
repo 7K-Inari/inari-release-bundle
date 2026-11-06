@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -16,14 +17,18 @@ import (
 
 // lsRemoteServed reports whether the git daemon serves the repo URL.
 // A freshly initialized repo (no commits) still answers with an empty
-// advertisement — served is about reachability, not content.
+// advertisement — served is about reachability, not content. The per-call
+// timeout keeps a hanging dial (network policy, dead daemon) from defeating
+// the poll budget.
 func lsRemoteServed(repoURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	remote := git.NewRemote(memory.NewStorage(), &gitcfg.RemoteConfig{
 		Name: "origin",
 		URLs: []string{repoURL},
 	})
 	// List advertises refs without transferring objects.
-	if _, err := remote.List(&git.ListOptions{}); err != nil {
+	if _, err := remote.ListContext(ctx, &git.ListOptions{}); err != nil {
 		return fmt.Errorf("ls-remote %s: %w", repoURL, err)
 	}
 	return nil

@@ -140,7 +140,7 @@ func (s *saStore) do(method, path string, body any) (int, []byte, error) {
 
 func (s *saStore) WriteConfigMap(ns, name string, data map[string]string) error {
 	path := "/api/v1/namespaces/" + ns + "/configmaps/" + name
-	status, _, err := s.do("GET", path, nil)
+	status, raw, err := s.do("GET", path, nil)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,34 @@ func (s *saStore) WriteConfigMap(ns, name string, data map[string]string) error 
 		})
 		return err
 	}
-	_, _, err = s.do("PATCH", path, map[string]any{"data": data})
+	// PUT (update), not PATCH: the workflow's e2e-seed Role grants
+	// get/create/update but deliberately no patch. Merge over the existing
+	// data so foreign keys survive; resourceVersion satisfies optimistic
+	// concurrency.
+	var existing struct {
+		Metadata map[string]any    `json:"metadata"`
+		Data     map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &existing); err != nil {
+		return fmt.Errorf("decoding ConfigMap %s: %w", path, err)
+	}
+	merged := map[string]string{}
+	for k, v := range existing.Data {
+		merged[k] = v
+	}
+	for k, v := range data {
+		merged[k] = v
+	}
+	_, _, err = s.do("PUT", path, map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":            name,
+			"namespace":       ns,
+			"resourceVersion": existing.Metadata["resourceVersion"],
+		},
+		"data": merged,
+	})
 	return err
 }
 

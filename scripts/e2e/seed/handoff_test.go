@@ -21,8 +21,7 @@ func TestHandoffKeysMatchSuiteReader(t *testing.T) {
 }
 
 func TestSAStoreWriteConfigMap(t *testing.T) {
-	var created, patched bool
-	var patchedBody map[string]any
+	var created bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "GET":
@@ -41,22 +40,28 @@ func TestSAStoreWriteConfigMap(t *testing.T) {
 	if err := s.WriteConfigMap("inari-e2e", "e2e-handoff", data); err != nil {
 		t.Fatal(err)
 	}
-	if !created || patched {
-		t.Fatalf("missing CM: created=%v patched=%v, want create only", created, patched)
+	if !created {
+		t.Fatal("missing CM: no create issued")
 	}
 
-	// Existing ConfigMap → merge-patch with the data.
+	// Existing ConfigMap → PUT (update verb) with resourceVersion + merged data.
+	var putBody struct {
+		Metadata map[string]any    `json:"metadata"`
+		Data     map[string]string `json:"data"`
+	}
+	var put bool
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			writeJSON(w, 200, map[string]any{"kind": "ConfigMap"})
+			writeJSON(w, 200, map[string]any{
+				"kind":     "ConfigMap",
+				"metadata": map[string]any{"name": "e2e-handoff", "resourceVersion": "42"},
+				"data":     map[string]string{"foreign": "keep"},
+			})
 			return
 		}
-		if r.Method == "PATCH" {
-			patched = true
-			if got := r.Header.Get("Content-Type"); got != "application/merge-patch+json" {
-				t.Errorf("PATCH content-type = %q", got)
-			}
-			_ = json.NewDecoder(r.Body).Decode(&patchedBody)
+		if r.Method == "PUT" {
+			put = true
+			_ = json.NewDecoder(r.Body).Decode(&putBody)
 			writeJSON(w, 200, map[string]any{"kind": "ConfigMap"})
 			return
 		}
@@ -68,12 +73,14 @@ func TestSAStoreWriteConfigMap(t *testing.T) {
 	if err := s2.WriteConfigMap("inari-e2e", "e2e-handoff", data); err != nil {
 		t.Fatal(err)
 	}
-	if !patched {
-		t.Fatal("existing CM: no PATCH issued")
+	if !put {
+		t.Fatal("existing CM: no PUT issued")
 	}
-	patchData, _ := patchedBody["data"].(map[string]any)
-	if patchData["tenant"] != "e2e-org" {
-		t.Fatalf("patch body = %v", patchedBody)
+	if putBody.Metadata["resourceVersion"] != "42" {
+		t.Fatalf("PUT metadata = %v — resourceVersion required for update", putBody.Metadata)
+	}
+	if putBody.Data["tenant"] != "e2e-org" || putBody.Data["foreign"] != "keep" {
+		t.Fatalf("PUT data = %v — want merged (new keys set, foreign keys kept)", putBody.Data)
 	}
 }
 
