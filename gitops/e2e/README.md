@@ -56,8 +56,11 @@ choice.
    Connection URIs are templated in the ExternalSecret; Vault holds
    passwords only.
 2. **Vault KV `inari-e2e/personas`** — properties: `dev-admin`, `operator`,
-   `editor`, `viewer`, `member` (consumed by the W3 seed step and suites;
-   the ExternalSecret maps them onto `-password`-suffixed target keys).
+   `editor`, `viewer`, `member`, `ops` (consumed by the W3 seed step and
+   suites; the ExternalSecret maps them onto `-password`-suffixed target
+   keys). `ops` is the janitor's e2e-ops approver identity (E2E_OPS_PASSWORD);
+   the remoteRef is non-optional, so a missing property fails the WHOLE
+   personas secret.
 3. **Vault Kubernetes-auth role `inari-e2e-server`** — bound to SA
    `inari-server` in namespace `inari-e2e`; policy: `update` on
    `secret/data/inari/clusters/*` (cluster-registration exchange).
