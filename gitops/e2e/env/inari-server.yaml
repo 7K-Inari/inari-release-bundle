@@ -94,6 +94,12 @@ spec:
               value: "/var/lib/inari/git"
             - name: INARI_LOG_FORMAT
               value: "json"
+            # The e2e agent runs in the dedicated inari-e2e-agent namespace
+            # (agent chart namespace knob) — the registration handshake's
+            # ESO delivery reference must point there, not the inari-system
+            # default (inari-server #212).
+            - name: INARI_ESO_SECRET_NAMESPACE
+              value: "inari-e2e-agent"
           extraVolumes:
             - name: git-root
               persistentVolumeClaim:
