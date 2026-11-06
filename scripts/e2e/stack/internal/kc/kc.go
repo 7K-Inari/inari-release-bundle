@@ -160,8 +160,11 @@ func (c *Client) FindClientIn(token, realm, clientID string) (string, error) {
 }
 
 // UserToken is the dev-admin password grant with the organization scope.
+// Credentials come from DevAdminCredentials: E2E_USER/E2E_PASSWORD on the
+// live env (Vault-random), username-as-password on the kind local loop.
 func (c *Client) UserToken() (string, error) {
-	return c.PasswordToken("dev-admin", "dev-admin", "openid organization:*")
+	user, pass := DevAdminCredentials()
+	return c.PasswordToken(user, pass, "openid organization:*")
 }
 
 // PasswordToken fetches a direct-grant token for an arbitrary user/scope.
