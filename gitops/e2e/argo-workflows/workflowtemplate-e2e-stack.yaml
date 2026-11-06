@@ -666,36 +666,53 @@ spec:
           # controlPlane: in-cluster h2c — the live agent precedent (the istio
           # gateway's H2 bidi path to the public gw hostname is broken; the
           # public hostname is for external clusters).
+          # kubectlTunnel.enabled=false: kubeproxy is disabled on the e2e env;
+          # the tunnel chain stays docker-only.
+          # Memory headroom (live-verified OOM loop): the capability watchers'
+          # initial LIST against a real cluster climbs ~1.3MB/s past the
+          # chart's 128Mi default at ~75s — cgroup SIGKILL (reported as exit
+          # 137 / reason Error, no OOMKilled marker). 128Mi/512Mi override.
           # --wait --timeout 600s: cold start is ~5.5min (live-verified: KC
           # client provision + Vault write + ESO sync + the agent's in-process
           # 2m ESO poll + a crash-restart cycle); 300s timed out while the
-          # agent went on to connect. (Comments may NOT interrupt the
-          # backslash continuation — that broke the wait flags once already.)
+          # agent went on to connect.
+          # Values go through a FILE, never a backslash-continued --set list:
+          # a comment line severing the continuation silently dropped every
+          # trailing flag TWICE (2026-11-06 — once losing --wait/--timeout,
+          # once flipping kubectlTunnel back to the chart default true and
+          # skipping the memory/oidc overrides).
+          cat > /tmp/agent-values.yaml <<AGENTVALUES
+          namespace: inari-e2e-agent
+          namespaceCreate: false
+          discovery:
+            name: inari-agent-e2e-discovery
+          image:
+            repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent
+            tag: "$AGENT_TAG"
+            pullPolicy: IfNotPresent
+          config:
+            tenantID: "$ORG_ID"
+            controlPlane: http://inari-server.inari-e2e.svc:8080
+            registrationToken: "$REG_TOKEN"
+            clusterLabels: e2e=true
+            helmNamespaces: inari-e2e-agent
+          resources:
+            requests:
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          kubectlTunnel:
+            enabled: false
+          oidcSecret:
+            create: true
+            secretStore: vault-internal
+            secretStoreKind: ClusterSecretStore
+            remotePath: inari/clusters/${CLUSTER_ID#cluster:}/oidc-client-secret
+          AGENTVALUES
           echo "== helm upgrade --install inari-agent-e2e (image $AGENT_TAG, chart ${VERSION_ARGS:-latest})"
           helm upgrade --install inari-agent-e2e oci://ghcr.io/7k-inari/charts/inari-agent \
             --namespace inari-e2e $VERSION_ARGS \
-            --set namespace=inari-e2e-agent \
-            --set namespaceCreate=false \
-            --set discovery.name=inari-agent-e2e-discovery \
-            --set image.repository=harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent \
-            --set image.tag="$AGENT_TAG" \
-            --set image.pullPolicy=IfNotPresent \
-            --set config.tenantID="$ORG_ID" \
-            --set config.controlPlane=http://inari-server.inari-e2e.svc:8080 \
-            --set config.registrationToken="$REG_TOKEN" \
-            --set config.clusterLabels=e2e=true \
-            # Memory headroom (live-verified OOM loop): the capability
-            # watchers' initial LIST against a real cluster climbs ~1.3MB/s
-            # past the chart's 128Mi default at ~75s — cgroup SIGKILL
-            # (reported as exit 137 / reason Error, no OOMKilled marker).
-            --set resources.requests.memory=128Mi \
-            --set resources.limits.memory=512Mi \
-            --set config.helmNamespaces=inari-e2e-agent \
-            --set kubectlTunnel.enabled=false \
-            --set oidcSecret.create=true \
-            --set oidcSecret.secretStore=vault-internal \
-            --set oidcSecret.secretStoreKind=ClusterSecretStore \
-            --set "oidcSecret.remotePath=inari/clusters/${CLUSTER_ID#cluster:}/oidc-client-secret" \
+            -f /tmp/agent-values.yaml \
             --wait --timeout 600s
           echo "== agent installed; the Ginkgo cluster phase asserts the connected-agent chain"
 
