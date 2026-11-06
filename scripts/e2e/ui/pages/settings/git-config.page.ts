@@ -1,46 +1,43 @@
-// Settings → Git page object (tenant state repo + commit policy). Markup
-// from inari-ui src/pages/settings/org/git.tsx. No assertions.
+// Settings → Git page object (Org defaults card: tenant state repo + commit
+// policy). Markup from inari-ui
+// src/pages/settings/org/git/org-defaults-card.tsx — the current Git
+// settings page is the GitOps repo registry; the tenant git-config write
+// path lives on the "Org defaults" card. No assertions.
 
 import type { Locator, Page } from "@playwright/test";
 
 export class GitConfigSettingsPage {
   static readonly LABEL = "Git";
-  static readonly SAVED_TEXT = "Git config saved.";
+  static readonly SAVED_TEXT = "Defaults saved.";
 
   constructor(readonly page: Page) {}
 
-  /** Transient success card rendered after a successful PUT. */
+  /** Transient success text rendered after a successful PUT. */
   savedMessage(): Locator {
     return this.page.getByText(GitConfigSettingsPage.SAVED_TEXT, { exact: true });
   }
 
-  /** Error card rendered when the PUT fails. */
+  /** Error text rendered when the PUT fails. */
   errorMessage(): Locator {
-    return this.page.locator(".text-destructive").first();
+    return this.page.locator(".u-danger").first();
   }
 
+  /** The state-repo input (card field "Scaffold git org", #org-scaffold). */
   repoInput(): Locator {
-    return this.page.getByLabel("Repository", { exact: true });
+    return this.page.getByLabel("Scaffold git org", { exact: true });
   }
 
-  baseBranchInput(): Locator {
-    return this.page.getByLabel("Base branch", { exact: true });
-  }
-
+  /** Commit policy select (#org-policy). */
   commitPolicySelect(): Locator {
-    return this.page.getByLabel("Commit policy", { exact: true });
+    return this.page.getByLabel("Commit policy default", { exact: true });
   }
 
   saveButton(): Locator {
-    return this.page.getByRole("button", { name: "Save", exact: true });
+    return this.page.getByRole("button", { name: "Save Defaults", exact: true });
   }
 
   async setRepo(repo: string): Promise<void> {
     await this.repoInput().fill(repo);
-  }
-
-  async setBaseBranch(branch: string): Promise<void> {
-    await this.baseBranchInput().fill(branch);
   }
 
   async setCommitPolicy(policy: "direct" | "pull_request"): Promise<void> {

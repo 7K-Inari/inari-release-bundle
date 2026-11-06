@@ -140,3 +140,50 @@ jobs:
           else
             gh release create edge --prerelease --target "$GITHUB_SHA" --title "$title" --notes "$notes"
           fi
+
+  e2e-trigger:
+    # Fire-and-forget edge e2e on the persistent environment (e2e migration
+    # W3b): gate label selection (p0||smoke)&&!quarantine against THIS merge's
+    # charts + the moving edge component images, cosign off (unsigned edge
+    # images). The Argo run is the signal; publishing above must not depend
+    # on it. Skips cleanly when the submitter token is not wired yet.
+    needs: [resolve, publish]
+    if: always() && needs.resolve.outputs.matrix != '' && needs.resolve.outputs.matrix != '[]' && needs.publish.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ARGO_SERVER: argo-workflows.7kgroup.org:443
+      ARGO_SECURE: "true"
+      ARGO_TOKEN: ${{ secrets.ARGO_TOKEN }}
+    steps:
+      - name: Install argo CLI
+        run: |
+          set -euo pipefail
+          curl -sfL -o argo.gz https://github.com/argoproj/argo-workflows/releases/download/v4.1.6/argo-linux-amd64.gz
+          gunzip -f argo.gz
+          chmod +x argo
+          sudo mv argo /usr/local/bin/argo
+
+      - name: Submit e2e-stack (mode=edge, fire-and-forget)
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ARGO_TOKEN" ]; then
+            echo "::warning::repo secret ARGO_TOKEN not set — skipping the edge e2e trigger"
+            echo "(harvest e2e-submitter-token from ns inari-e2e into repo secrets; see release-e2e.yaml header)"
+            exit 0
+          fi
+          name=$(argo submit --from workflowtemplate/e2e-stack -n inari-e2e \
+            -p mode=edge \
+            -p charts-ref="$GITHUB_SHA" \
+            -p server-image=edge \
+            -p console-image=edge \
+            -p agent-image=edge \
+            -p server-src-ref=main \
+            -p cosign-verify=false \
+            -p include-quarantined=false \
+            -p reportportal-launch="edge-$RUN_ID" \
+            -o name)
+          echo "submitted $name"
+          echo "watch: https://argo-workflows.7kgroup.org/workflows/inari-e2e/$name"

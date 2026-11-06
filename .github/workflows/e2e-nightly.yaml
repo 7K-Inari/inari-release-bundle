@@ -1,32 +1,25 @@
 name: e2e-nightly
 
-# Nightly full-surface e2e — NON-BLOCKING by construction: this is a
-# separate workflow, nothing references it from branch protection, and the
-# Playwright step in the reusable leg is continue-on-error. Nightly failure
-# ≠ release gate.
+# Nightly GHA remainder — the full-stack nightly moved to the cluster as the
+# Argo CronWorkflow e2e-nightly (gitops/e2e/argo-workflows/, 03:17 UTC, full
+# surface incl. quarantined, HA). What stays here is what needs GitHub, not
+# a cluster:
+#   1. quarantine-sweep — files/dedupes `e2e-flake` issues for flaky tests.
+#      NEEDS issues:write. NOTE (interim until W4): the sweep aggregates the
+#      ui-e2e-flakes artifacts of prior runs of THIS workflow — with the
+#      stack leg gone those artifacts no longer exist, so the sweep is
+#      inert (no flake input = no issues filed) until W4 re-points it at
+#      ReportPortal. The 14/30-day expiry policy lands with that rewiring.
+#   2. kubectl-tunnel — docker-only kubectl gateway chain e2e
+#      (scripts/e2e/kubectl/kubectl-tunnel.sh): kubeproxy built from
+#      inari-server main, tunnel-agent built from inari-agent main; no kind
+#      cluster, no e2e env.
 #
-# What it does (migration phase 4 — bring-up extracted to e2e-stack.yaml,
-# one stack bring-up per run, not per suite):
-#   1. resolve        — read charts/inari-server appVersion on main, resolve
-#                       the matching inari-server git tag vX.Y.Z.
-#   2. nightly-stack  — the reusable e2e-stack.yaml leg (mode=nightly,
-#                       non-HA): full bring-up, Go stack suite WITH the
-#                       p0||p1||p2 Ginkgo label filter (quarantined Go specs
-#                       run only here), then the FULL Playwright suite
-#                       @p0|@p1|@p2 INCLUDING @quarantine.
-#   3. quarantine-sweep — files/dedupes `e2e-flake` issues for tests flaky
-#                       in 2+ nightly runs within 7 days. Kept in this
-#                       workflow (not the reusable leg) because it needs
-#                       issues:write and downloads artifacts, not a cluster.
-#   4. kubectl-tunnel — docker-only kubectl gateway chain e2e
-#                       (scripts/e2e/kubectl/kubectl-tunnel.sh): kubeproxy
-#                       built from the resolved inari-server tag, tunnel-agent
-#                       built from inari-agent main; no kind cluster.
-#
-# Artifacts (flake report + full Playwright results) are retained 14 days.
+# NON-BLOCKING by construction: nothing references this workflow from branch
+# protection. Nightly failure ≠ release gate.
 on:
   schedule:
-    # 03:17 UTC daily — off-peak.
+    # 03:17 UTC daily — off-peak (same slot as the Argo e2e-nightly cron).
     - cron: "17 3 * * *"
   workflow_dispatch:
 
@@ -40,48 +33,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  resolve:
-    runs-on: ubuntu-latest
-    outputs:
-      server-tag: ${{ steps.resolve.outputs.server-tag }}
-      image-tag: ${{ steps.resolve.outputs.image-tag }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Resolve inari-server under test (edge image from main)
-        id: resolve
-        run: |
-          set -euo pipefail
-          # The nightly tracks inari-server MAIN via the unsigned "edge"
-          # image (published per main merge by inari-server's edge
-          # workflow). Pinning the released appVersion image made the
-          # golden path assert outbox behavior (ADR-0014) that the release
-          # did not contain yet — see the INARI_OUTBOX golden-path failure
-          # postmortem (Oct 2026). cosign-verify=false is passed below
-          # because edge images are not signed.
-          app_version="$(awk '/^appVersion:/ {print $2}' charts/inari-server/Chart.yaml | tr -d '"')"
-          echo "chart appVersion (released combo, informational): $app_version"
-          echo "server-tag=main" >> "$GITHUB_OUTPUT"
-          echo "image-tag=edge" >> "$GITHUB_OUTPUT"
-          echo "resolved inari-server under test: main (image tag edge)"
-
-  nightly-stack:
-    needs: resolve
-    # The reusable leg owns bring-up + both suites + artifacts + teardown.
-    # Non-HA only; quarantined tests (Go Label("quarantine") and Playwright
-    # @quarantine) run ONLY here — never in the release gate.
-    uses: ./.github/workflows/e2e-stack.yaml
-    with:
-      mode: nightly
-      ha: false
-      bundle-ref: ${{ github.ref }}
-      server-src-ref: ${{ needs.resolve.outputs.server-tag }}
-      image-tag: ${{ needs.resolve.outputs.image-tag }}
-      cosign-verify: false # edge image is unsigned (see resolve step)
-      branch-hint: main
-      retention-days: 14
-
   quarantine-sweep:
-    needs: nightly-stack
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -90,7 +42,8 @@ jobs:
       - name: Quarantine sweep (file/dedupe e2e-flake issues)
         # Files an `e2e-flake` issue for any test flaky in 2+ nightly runs
         # within 7 days; comments on the existing open issue for the same
-        # test path instead of opening duplicates.
+        # test path instead of opening duplicates. See the header's interim
+        # note: without flake-report artifacts this is a no-op until W4.
         working-directory: scripts/e2e/ui
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,11 +51,9 @@ jobs:
 
   kubectl-tunnel:
     # Docker-only kubectl gateway e2e (scripts/e2e/kubectl/kubectl-tunnel.sh):
-    # kubeproxy (built from inari-server at the resolved tag) → tunnel-agent
-    # (built from inari-agent) → real etcd/kube-apiserver/Keycloak/Postgres/
-    # OpenFGA containers. No kind cluster needed. Non-blocking like the rest
-    # of this workflow; failures here ≠ release gate.
-    needs: resolve
+    # kubeproxy (built from inari-server main — no release tag contains
+    # cmd/inari-kubeproxy yet) → tunnel-agent (inari-agent main) → real
+    # etcd/kube-apiserver/Keycloak/Postgres/OpenFGA containers.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -111,10 +62,6 @@ jobs:
           ref: ${{ github.ref }}
           path: bundle
 
-      # kubeproxy (cmd/inari-kubeproxy) is not in any inari-server release
-      # tag yet — the resolved server-tag (chart appVersion, v3.0.0) predates
-      # it, and the script aborts on the missing cmd/inari-kubeproxy dir.
-      # Build from main until a release tag contains kubeproxy.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: 7K-Inari/inari-server

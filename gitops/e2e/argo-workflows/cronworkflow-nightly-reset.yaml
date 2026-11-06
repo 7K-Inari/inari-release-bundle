@@ -1,0 +1,37 @@
+# PHASE 2 PLACEHOLDER — nightly restore-from-backup (standing DR drill,
+# plan C2/C11; M0 exit criterion: a TESTED restore).
+#
+# Suspended on purpose: there is nothing to restore FROM yet — the e2e
+# environment's CNPG cluster has no barman backup wiring (its storageClass
+# is longhorn-hdd-no-backup and gitops/e2e/env-extras/ has no ObjectStore /
+# ScheduledBackup), and the reset flow needs:
+#   1. CNPG barman backups (ObjectStore on Garage S3 + ScheduledBackup) for
+#      the env's postgresql cluster, in gitops/e2e/env-extras/;
+#   2. a reset workflow that restores into a fresh cluster, repoints the
+#      apps, and then proves content landed via the chainsaw dr/ set
+#      (scripts/e2e/chainsaw/dr — the smoke set alone cannot detect a no-op
+#      restore);
+#   3. coordination with the env semaphore (a reset mutates the whole env).
+# Until those land this object exists only to inventory the schedule slot.
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: e2e-nightly-reset
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+spec:
+  suspend: true
+  # Sunday 01:17 UTC — after the Saturday weekly chaos/load window.
+  schedules: ["17 1 * * 0"]
+  concurrencyPolicy: Forbid
+  workflowSpec:
+    # Deliberately references nothing yet: the reset template lands with the
+    # backup wiring (item 1 above).
+    entrypoint: whalesay
+    templates:
+      - name: whalesay
+        container:
+          image: alpine:3.22
+          command: [sh, -c]
+          args: ["echo 'e2e-nightly-reset is a suspended placeholder — see the header comment'"]

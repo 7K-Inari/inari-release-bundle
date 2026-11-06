@@ -1,0 +1,29 @@
+# Janitor schedule (plan C11): reaps e2e-<runId>-* tenant orgs the suites
+# leak by design (contract invariant 6), older than retention-days, never
+# touching active runs or the seeded e2e-org. Every 6h, off the hour.
+# Deliberately NOT serialized on the env semaphore (API-level reaping only).
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: e2e-janitor
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+spec:
+  schedules: ["23 */6 * * *"]
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 10
+  failedJobsHistoryLimit: 10
+  workflowSpec:
+    workflowTemplateRef:
+      name: e2e-janitor
+    workflowMetadata:
+      labels:
+        e2e.inari.io/mode: janitor
+    arguments:
+      parameters:
+        - name: retention-days
+          value: "7"
+        - name: dry-run
+          value: "false"

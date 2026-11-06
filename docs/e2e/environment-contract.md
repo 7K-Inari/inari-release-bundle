@@ -32,7 +32,7 @@ those modules.**
 |---|---|---|---|
 | `E2E_BASE_DOMAIN` | yes | — | Public base domain of the e2e environment (e.g. `e2e.inari.example.com`). Console UI and the inari-server API are one origin: console at `https://$E2E_BASE_DOMAIN`, API at `https://$E2E_BASE_DOMAIN/api/v1`. Single-origin topology is required — the server sends no CORS headers. |
 | `E2E_KC_URL` | yes | — | Keycloak base URL. On real ingress the browser-reachable URL **is** the API-reachable URL — one value serves both the Playwright login redirect and direct-grant token calls, and the kind-era issuer mismatch (§ "Keycloak URL") dissolves. |
-| `E2E_KUBECONFIG` | yes | — | Path to a namespace-scoped, least-privilege kubeconfig for cluster-level assertions (Chainsaw, Go suite kubectl execs). Minted per run by the workflow from the runner ServiceAccount; never a long-lived credential in GitHub. |
+| `E2E_KUBECONFIG` | no | — | Path to a namespace-scoped kubeconfig for cluster-level assertions — **only for out-of-cluster runners** (local attach runs). Workflow pods use in-cluster ServiceAccount auth (kubectl's built-in fallback), so the WorkflowTemplate does not set this variable; a minted kubeconfig file would be a redundant credential. |
 | `E2E_USER` / `E2E_PASSWORD` | yes | `dev-admin` / `dev-admin` | The dev-admin persona. Fixed; suites must never mutate it. See "Personas" below. |
 | `E2E_TENANT_NAME` | no | `E2E Org` | Display name of the default seeded tenant (the tenant card the smoke spec clicks). |
 | `E2E_TENANT_SLUG` | no | `e2e-org` | Slug of the default seeded tenant, used in API paths. |

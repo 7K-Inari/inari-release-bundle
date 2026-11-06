@@ -17,9 +17,16 @@ export class MembersTabPage {
 
   /** Card for a team in the Teams section (anchored on the slug text). */
   teamCard(teamName: string): Locator {
+    // Structural, not class-based: the design-system Card's class has
+    // changed before. The team ROW is the innermost div containing both
+    // the team name and its Members button; the expanded members panel is
+    // its sibling inside the card, so the card root is the row's parent.
     return this.page
-      .getByText(teamName, { exact: true })
-      .locator("xpath=ancestor::*[contains(@class,'border')][1]");
+      .locator("div")
+      .filter({ has: this.page.getByText(teamName, { exact: true }) })
+      .filter({ has: this.page.getByRole("button", { name: "Members" }) })
+      .last()
+      .locator("xpath=..");
   }
 
   /** A member entry inside a team's expanded Members panel. */

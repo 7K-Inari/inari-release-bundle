@@ -1,0 +1,476 @@
+# Runner identities + RBAC for the Argo Workflows e2e plane (namespace
+# inari-e2e; plan C1/C11, spec rbac inventory). Synced by the
+# inari-e2e-workflows pointer app (7k-app-of-apps apps/7kgroup/).
+#
+# Posture notes:
+# - The chart-created executor Role in this namespace grants ONLY
+#   workflowtaskresults create/patch (verified live) — every step that needs
+#   more gets a purpose SA, switched per template via podSpecPatch. Each such
+#   Role re-grants workflowtaskresults (the Argo wait container reports step
+#   results as the pod SA).
+# - e2e-agent-ensure holds cluster-scoped CREATE on namespaces/clusterroles/
+#   clusterrolebindings: RBAC resourceNames cannot restrict create, and the
+#   agent chart renders cluster-scoped objects unconditionally (coordinator
+#   Q11 ruling — the e2e agent targets only *-e2e-named objects via the
+#   chart's discovery.name knob, inari-agent PR #88). The token never leaves
+#   the cluster (mounted in workflow pods only).
+# - e2e-submitter exists for the thin GHA wrappers (argo-server client
+#   authMode + this SA's bearer token; no long-lived kubeconfig in GitHub —
+#   plan open question §9.3, ruled Q7). The token Secret is harvested into GH
+#   secrets by W4 after this merges.
+---
+# e2e-runner — default workflow SA (resolve / env-prep / chainsaw / ginkgo /
+# playwright / apischema / exit handler pods).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-runner
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  # Argo wait-container plumbing.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  # Ginkgo suite: handoff CM, toolbox exec, HA disruption pod kills.
+  # "create" is for the chainsaw-verify leg (runs as this SA): the bootstrap
+  # tests kubectl-run ephemeral probe pods (keycloak-realm, openfga-health).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # Run-metadata CM (resolve creates; names are uid-unique, so no
+  # update/patch) + e2e-handoff CM reads (suites). Deliberately NO
+  # update/patch: that would let any step pod stomp the e2e-env-lock
+  # semaphore.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create"]
+  # Persona + KC admin-client credentials (mounted as env, read by scripts).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["inari-e2e-personas", "inari-keycloak-admin"]
+    verbs: ["get"]
+  # Suite + chainsaw assertions.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list"]
+  - apiGroups: ["k8s.keycloak.org"]
+    resources: ["keycloaks", "keycloakrealmimports"]
+    verbs: ["get", "list"]
+  # Janitor: exclude orgs belonging to active runs.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-runner
+subjects:
+  - kind: ServiceAccount
+    name: e2e-runner
+    namespace: inari-e2e
+---
+# env-prep flips candidate charts/images by patching the child Applications.
+# The resources live in the argocd namespace, so the Role must live there too
+# (deployed by the same pointer app — project 7kgroup-workload allows it).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-env-prep
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  # Health checks on every env app (get/list unrestricted by name)…
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list"]
+  # …but mutation only on the three candidate apps (plan §5.3: platform apps
+  # are never touched beyond health checks).
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    resourceNames: ["inari-e2e-server", "inari-e2e-console", "inari-e2e-nats"]
+    verbs: ["patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-env-prep
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-env-prep
+subjects:
+  - kind: ServiceAccount
+    name: e2e-runner
+    namespace: inari-e2e
+---
+# Semaphore lock records are written CONTROLLER-side, and the argo-workflows
+# chart's controller ClusterRole has no configmaps update (verified live on
+# chart 2.0.15 / controller v4.1.6) — without this Role every synchronized
+# workflow hangs/fails at lock acquisition.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-semaphore-write
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["e2e-env-lock"]
+    verbs: ["update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-semaphore-write
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-semaphore-write
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflows-workflow-controller
+    namespace: argo-workflows
+---
+# e2e-chainsaw-hook — PostSync smoke Job (gitops/e2e/chainsaw-hooks/).
+# Assert-only + ephemeral probe pods (psql on the CNPG primary is pod-local
+# peer auth — no secret access needed).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-chainsaw-hook
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-chainsaw
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list"]
+  - apiGroups: ["k8s.keycloak.org"]
+    resources: ["keycloaks", "keycloakrealmimports"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-chainsaw-hook
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-chainsaw
+subjects:
+  - kind: ServiceAccount
+    name: e2e-chainsaw-hook
+    namespace: inari-e2e
+---
+# e2e-seed — the persona/handoff seed step (W3a contract): writes the
+# e2e-handoff ConfigMap, ensures the toolbox pod, reads persona + KC
+# admin-client secrets.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-seed
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-seed
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["inari-e2e-personas", "inari-keycloak-admin"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-seed
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-seed
+subjects:
+  - kind: ServiceAccount
+    name: e2e-seed
+    namespace: inari-e2e
+---
+# Agent namespace — pre-created plainly (the agent chart is installed with
+# namespaceCreate=false, inari-agent PR #88) so the runner Role below can
+# exist before the first agent-ensure run. Dedicated to the e2e agent:
+# inari-system belongs to the LIVE platform-cluster agent (never touch —
+# coordinator Q11 ruling).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inari-e2e-agent
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+    app.kubernetes.io/managed-by: argocd
+---
+# e2e-agent-ensure — helm upgrade --install of the inari-agent chart
+# (release inari-agent-e2e, storage in inari-e2e) + the registration-token
+# handoff. See the posture note at the top of this file for the cluster-scope.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-agent-ensure
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-agent-ensure
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  # Helm release records (secret storage backend) + the token handoff.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-agent-ensure
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-agent-ensure
+subjects:
+  - kind: ServiceAccount
+    name: e2e-agent-ensure
+    namespace: inari-e2e
+---
+# Chart-rendered namespaced resources in inari-e2e-agent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-agent-ensure
+  namespace: inari-e2e-agent
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "secrets", "configmaps", "serviceaccounts"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["*"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["*"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["*"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["*"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-agent-ensure
+  namespace: inari-e2e-agent
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-agent-ensure
+subjects:
+  - kind: ServiceAccount
+    name: e2e-agent-ensure
+    namespace: inari-e2e
+---
+# Cluster-scoped chart resources, e2e-named only (see the posture note).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-agent-ensure
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["inari-e2e-agent"]
+    verbs: ["get", "patch", "update"]
+  # create cannot be resourceNames-restricted (RBAC semantics); get/update/
+  # patch/delete stay pinned to the e2e agent's discovery RBAC.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    resourceNames: ["inari-agent-e2e-discovery"]
+    verbs: ["get", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-agent-ensure
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: e2e-agent-ensure
+subjects:
+  - kind: ServiceAccount
+    name: e2e-agent-ensure
+    namespace: inari-e2e
+---
+# e2e-submitter — GHA thin-wrapper identity (argo-server client authMode).
+# Namespace-scoped: submit + read workflows in inari-e2e, nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-submitter
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-submitter
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtemplates"]
+    verbs: ["get"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["cronworkflows"]
+    verbs: ["get"]
+  # argo watch / log streaming for --wait.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-submitter
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-submitter
+subjects:
+  - kind: ServiceAccount
+    name: e2e-submitter
+    namespace: inari-e2e
+---
+# Long-lived token for the submitter SA (k8s >=1.24: no auto-created token
+# secrets). Harvested into GitHub secrets by W4 — the value lives in-cluster
+# until then.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-submitter-token
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+  annotations:
+    kubernetes.io/service-account.name: e2e-submitter
+type: kubernetes.io/service-account-token

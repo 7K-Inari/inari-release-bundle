@@ -87,10 +87,11 @@ The W3 seed step resolves the discovered values (Keycloak user id, org ids,
 cluster id — the kind-era `Handoff` struct fields) once after every
 env-prep and publishes them as ConfigMap **`e2e-handoff`** in namespace
 `inari-e2e` (keys: `namespace`, `tenant`, `kc_uid`, `org_kc_id`,
-`cluster_id`, `org_id`; the kind-era `git_host_dir`/`agent_chart_dir` are
-gone — replaced by `E2E_GIT_URL` / the env's fixed charts). Suites read the
-ConfigMap instead of a handoff JSON file; `E2E_SEEDED=true` gates every
-suite leg (contract §1.1).
+`cluster_id`, `org_id`, `toolbox` — the curl-transport pod the Go suite
+execs into, see `env-extras/toolbox.yaml`; the kind-era
+`git_host_dir`/`agent_chart_dir` are gone — replaced by `E2E_GIT_URL` / the
+env's fixed charts). Suites read the ConfigMap instead of a handoff JSON
+file; `E2E_SEEDED=true` gates every suite leg (contract §1.1).
 
 ## Verification (P0 exit criteria)
 
@@ -112,10 +113,40 @@ suite leg (contract §1.1).
 6. `git ls-remote git://git-service.inari-e2e.svc:9418/` reachable from a
    pod in the namespace.
 
+## Argo Workflows plane (`argo-workflows/` + `chainsaw-hooks/`)
+
+Synced by the **second pointer app** (`apps/7kgroup/inari-e2e-workflows.yaml`
+in 7k-app-of-apps, path `gitops/e2e/argo-workflows`, destination
+`inari-e2e`). Test DEFINITIONS only — the Argo Workflows install itself
+lives in 7k-app-of-apps (W1).
+
+| File | Contents |
+|---|---|
+| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release) + chainsaw-verify; onExit collects every JUnit (ReportPortal importer = W4) |
+| `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-<runId>-*` orgs older than retention-days (contract invariant 6), skipping active runs; every 6h |
+| `cronworkflow-nightly.yaml` | 03:17 UTC full surface incl. quarantined, edge images, env-wide HA flip |
+| `cronworkflow-weekly.yaml`, `cronworkflow-nightly-reset.yaml` | **Suspended placeholders** (phase 2: load/chaos legs; restore-from-backup needs CNPG barman wiring in env-extras first) |
+| `semaphore-e2e-env-lock.yaml` | One permit — serializes every run against the single env |
+| `rbac.yaml` | Runner SAs (e2e-runner default; e2e-seed, e2e-agent-ensure, e2e-chainsaw-hook per step; e2e-submitter for the GHA wrappers), the env-prep Application-patch Role in ns argocd, the controller semaphore-write fix, and the e2e agent namespace + cluster RBAC |
+| `env-contract-configmap.yaml` | The non-secret half of the env contract, envFrom'd into every leg |
+| `artifact-repo-credentials.yaml` | GarageKey + GarageReferenceGrant copying the artifact-repo S3 creds into inari-e2e (artifact secrets resolve in the workflow's namespace) |
+| `../chainsaw-hooks/smoke-job.yaml` | PostSync chainsaw smoke Job, attached to the inari-e2e-server app as a second source — every candidate flip is smoke-gated. **Deviation (Q9):** only chainsaw runs as a PostSync hook; the taxonomy §3 Ginkgo/Playwright smoke sets run via `mode=smoke` submissions |
+
+Env-prep mutates the child Applications (`inari-e2e-server` /
+`inari-e2e-console` / HA-only `inari-e2e-nats`) by JSON patch —
+`targetRevision` + `helm.valuesObject`. The env pointer app carries
+`ignoreDifferences` for exactly those fields, so the patches persist for
+the run's duration and each run re-converges the env to its own artifact
+set (hard rule 5). Platform apps are health-checked, never mutated.
+
+Manual run: `argo submit --from workflowtemplate/e2e-stack -n inari-e2e -p
+mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token).
+
 ## Ownership / boundaries
 
-- `gitops/e2e/env/`, `env-extras/`, `git-service/` — this task (W2).
-- `gitops/e2e/argo-workflows/` (WorkflowTemplates, CronWorkflows, runner
-  RBAC) — W3, synced by its own pointer (destination `inari-e2e`).
+- `gitops/e2e/env/`, `env-extras/`, `git-service/` — the env task (W2).
+- `gitops/e2e/argo-workflows/`, `chainsaw-hooks/` — the workflows task (W3b),
+  synced by its own pointer (destination `inari-e2e`).
 - CNPG barman backup wiring for the nightly-reset DR drill lands in
-  `env-extras/` with the W3 reset CronWorkflow.
+  `env-extras/` together with the (currently suspended) reset CronWorkflow.
+

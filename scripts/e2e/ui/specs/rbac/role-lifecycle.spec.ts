@@ -119,10 +119,10 @@ test.describe.serial("RBAC role lifecycle and propagation @p0 @rbac", () => {
     for (const slug of slugs.slice(0, 3)) {
       await roles.togglePermission(slug);
     }
-    // Capture the create response explicitly: the POST can take tens of
-    // seconds through the ui-proxy port-forwards on a cold runner (verified
-    // in CI — a 60s poll expired while the row rendered just after), so the
-    // poll below must start from a resolved create, not from the click.
+    // Capture the create response: the POST can take tens of seconds on a
+    // cold runner (verified in CI — a 60s poll expired while the row
+    // rendered just after), so the poll below must start from a resolved
+    // create, not from the click.
     const created = page.waitForResponse(
       (r) =>
         r.request().method() === "POST" &&
@@ -382,7 +382,6 @@ async function ensureMemberBinding(): Promise<void> {
     await gotoAccessTab(page, RolesTabPage.LABEL);
     const roles = new RolesTabPage(page);
 
-    page.once("dialog", (dialog) => void dialog.accept());
     // Wire-level: the 409 is the evidence (kind DOM updates stall at random;
     // the inline error render is covered by roles-tab.test.tsx "surfaces the
     // server 409 when deleting a team-bound role" and by the live run).

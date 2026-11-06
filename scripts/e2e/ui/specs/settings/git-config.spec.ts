@@ -1,11 +1,15 @@
 // @p1 @settings — tenant git config write path (e2e plan P1-3).
 //
-// The kind stack runs with INARI_GIT_PROVIDER=local: golden-path.sh creates a
-// host-side bare-repo root (mktemp), bind-mounts it into the kind node at
-// /git, and hostPath-mounts it into the server pod at /var/lib/inari/git (the
-// provider's INARI_GIT_LOCAL_ROOT). Repos live under that root as
-// <org>/<name> — no external git host is involved, so the local provider is
-// exercised end-to-end with zero extra provisioning.
+// Live e2e environment topology (post kind): inari-server runs with
+// INARI_GIT_PROVIDER=local and writes real bare repos (go-git) into the
+// shared RWX PVC at <root>/<repo>.git; the git-service Deployment serves
+// that PVC over the git protocol (git daemon --export-all, ClusterIP :9418
+// — E2E_GIT_URL). The tenant's default state repo (the bare-name convention
+// e2e-org-inari-state) is materialized by the tenant-created RBAC
+// materialization the seed triggers, so before exercising the UI write path
+// this spec asserts the CURRENT config's repo is actually served — the
+// precondition proves server -> PVC -> daemon end to end. (Skipped when
+// GIT_URL is unset — the legacy kind local loop has no daemon.)
 //
 // As dev-admin in tenant "E2E Org" (slug e2e-org): point the org's git
 // config at a NEW unique state repo (e2e-org/e2e-<runId>-*-state) through
@@ -13,12 +17,19 @@
 // (helpers/api.ts) until the server reports the new value. The config is
 // SHARED, so the spec restores the original values through the same UI path
 // before it exits (spec independence — see README rule 4).
+//
+// The NEW repo's on-disk materialization is deliberately NOT asserted:
+// SetGitConfig only upserts the config row (the local provider's EnsureRepo
+// runs lazily on the next materializing action), so a ls-remote poll on it
+// would be flaky by construction. Repo materialization is the seed's
+// write-path proof (scripts/e2e/seed).
 
 import { expect, test } from "../../fixtures/failure-dump";
 
 import { uniqueName } from "../../fixtures/org";
 import { ApiClient } from "../../helpers/api";
-import { TENANT_SLUG } from "../../helpers/env";
+import { GIT_URL, TENANT_SLUG } from "../../helpers/env";
+import { lsRemote } from "../../helpers/git";
 import { poll } from "../../helpers/poll";
 import { AppShellPage } from "../../pages/app-shell.page";
 import { GitConfigSettingsPage } from "../../pages/settings/git-config.page";
@@ -43,6 +54,20 @@ test("git config write path persists via the local provider @p1 @settings", asyn
       .then((b) => b.config);
   const original = await readConfig();
   expect(original?.repo, "current git config resolvable via API").toBeTruthy();
+
+  // Precondition (live env): the tenant's configured state repo is served
+  // by the in-cluster git service — the git write path is alive before the
+  // UI mutates the config. ls-remote resolves with [] for a ref-less repo,
+  // so the assertion is reachability, not content.
+  if (GIT_URL) {
+    await poll(
+      async () => {
+        const refs = await lsRemote(`${GIT_URL}/${original!.repo}.git`);
+        expect(Array.isArray(refs)).toBe(true);
+      },
+      { timeout: 60_000, interval: 5_000, message: "git service serves the tenant state repo" },
+    );
+  }
 
   // Boot the console as dev-admin and land on Settings → Git.
   const shell = new AppShellPage(page);

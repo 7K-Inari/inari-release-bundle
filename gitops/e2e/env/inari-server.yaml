@@ -6,7 +6,13 @@
 # Baseline is the NON-HA trim (1 replica, R=1 streams, memory cache, no
 # kubeproxy — mirrors scripts/e2e/stack/testdata/server-values-e2e.yaml).
 # HA legs and candidate image tags are applied per run by the W3 env-prep
-# step; this file is the steady state the env converges back to.
+# step (JSON-patch on /spec/sources/0 below; the env pointer app ignores
+# exactly those fields via ignoreDifferences); this file is the steady state
+# the env converges back to.
+#
+# Multi-source: [0] is the chart under test; [1] attaches the chainsaw
+# PostSync smoke hook (gitops/e2e/chainsaw-hooks/) so every sync of THIS app
+# — including every env-prep candidate flip — is smoke-gated.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -16,86 +22,98 @@ metadata:
     argocd.argoproj.io/sync-wave: "3"
 spec:
   project: inari-e2e
-  source:
-    repoURL: https://github.com/7K-Inari/inari-release-bundle.git
-    targetRevision: main
-    path: charts/inari-server
-    helm:
-      releaseName: inari-server
-      values: |
-        replicaCount: 1
-        image:
-          repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-server
-          # Chart appVersion. Pinned explicitly so the proxy path is visible
-          # in review; env-prep overrides it with the candidate tag per run.
-          tag: "3.0.0"
-          pullPolicy: IfNotPresent
-        # External NATS from inari-e2e-nats (wave 1 < 3), subchart off.
-        nats:
-          enabled: false
-          url: nats://nats:4222
-          streamReplicas: 1
-        # kubectl gateway is covered by the docker-only suite
-        # (scripts/e2e/kubectl/kubectl-tunnel.sh); its image is published
-        # only at server release time — enabling it here would
-        # ImagePullBackOff on the chart's appVersion tag.
-        kubeproxy:
-          enabled: false
-        keycloak:
-          baseUrl: "http://keycloak-service:8080"
-          realm: inari
-          adminSecret:
-            name: inari-keycloak-admin
-        oidc:
-          issuerUrl: "https://auth-e2e.7kgroup.org/realms/inari"
-        gateway:
-          name: internet-gateway
-          namespace: istio
-          sectionName: https-7kgroup
-        route:
-          enabled: true
-          hostnames:
-            - inari-e2e.7kgroup.org
-          pathPrefix: /api
-          # Dedicated agent-gateway hostname: PathPrefix matching is
-          # segment-based (live-instance lesson in 7k-app-of-apps
-          # apps/7kgroup/inari.yaml); agent ConnectRPC gets its own
-          # hostname routed wholly to inari-server.
-          agentHostnames:
-            - inari-e2e-gw.7kgroup.org
-          annotations:
-            external-dns.kubernetes.io/cloudflare-proxied: "false"
-        extraEnv:
-          - name: INARI_AGENT_GATEWAY_ADDRESS
-            value: "https://inari-e2e-gw.7kgroup.org"
-          - name: INARI_AGENT_IMAGE_REPO
-            value: "harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent"
-          # Filesystem git provider + in-cluster git service (wave 1 app
-          # inari-e2e-git-service): the server writes real bare repos into
-          # the shared RWX PVC; suites clone them via E2E_GIT_URL.
-          - name: INARI_GIT_PROVIDER
-            value: "local"
-          - name: INARI_GIT_LOCAL_ROOT
-            value: "/var/lib/inari/git"
-          - name: INARI_LOG_FORMAT
-            value: "json"
-        extraVolumes:
-          - name: git-root
-            persistentVolumeClaim:
-              claimName: inari-e2e-git
-        extraVolumeMounts:
-          - name: git-root
-            mountPath: /var/lib/inari/git
-        # Platform Vault for the cluster-registration exchange
-        # (RegisterCluster writes per-cluster OIDC client secrets).
-        # Kubernetes auth: SA JWT login, no static token. PREREQUISITE:
-        # Vault policy + role inari-e2e-server bound to SA inari-server in
-        # ns inari-e2e (gitops/e2e/README.md §Prerequisites).
-        vault:
-          addr: "https://vault.int.7kgroup.org"
-          kvMount: secret
-          authMethod: kubernetes
-          role: inari-e2e-server
+  sources:
+    - repoURL: https://github.com/7K-Inari/inari-release-bundle.git
+      targetRevision: main
+      path: charts/inari-server
+      helm:
+        releaseName: inari-server
+        values: |
+          replicaCount: 1
+          image:
+            repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-server
+            # Steady state tracks inari-server main ("edge"): the suites track
+            # the current API surface, and the nightly tests edge anyway —
+            # pinning the last release here left the env too old for them
+            # (roles/membership APIs postdate 3.0.0). env-prep overrides with
+            # the candidate tag per run; Always re-pulls the moving tag.
+            tag: "edge"
+            pullPolicy: Always
+          # External NATS from inari-e2e-nats (wave 1 < 3), subchart off.
+          nats:
+            enabled: false
+            url: nats://nats:4222
+            streamReplicas: 1
+          # kubectl gateway is covered by the docker-only suite
+          # (scripts/e2e/kubectl/kubectl-tunnel.sh); its image is published
+          # only at server release time — enabling it here would
+          # ImagePullBackOff on the chart's appVersion tag.
+          kubeproxy:
+            enabled: false
+          keycloak:
+            baseUrl: "http://keycloak-service:8080"
+            realm: inari
+            adminSecret:
+              name: inari-keycloak-admin
+          oidc:
+            issuerUrl: "https://auth-e2e.7kgroup.org/realms/inari"
+          gateway:
+            name: internet-gateway
+            namespace: istio
+            sectionName: https-7kgroup
+          route:
+            enabled: true
+            hostnames:
+              - inari-e2e.7kgroup.org
+            pathPrefix: /api
+            # Dedicated agent-gateway hostname: PathPrefix matching is
+            # segment-based (live-instance lesson in 7k-app-of-apps
+            # apps/7kgroup/inari.yaml); agent ConnectRPC gets its own
+            # hostname routed wholly to inari-server.
+            agentHostnames:
+              - inari-e2e-gw.7kgroup.org
+            annotations:
+              external-dns.kubernetes.io/cloudflare-proxied: "false"
+          # KEEP IN SYNC: the W3 env-prep HA patch embeds this whole extraEnv
+          # list (valuesObject arrays replace, they do not merge).
+          extraEnv:
+            - name: INARI_AGENT_GATEWAY_ADDRESS
+              value: "https://inari-e2e-gw.7kgroup.org"
+            - name: INARI_AGENT_IMAGE_REPO
+              value: "harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent"
+            # Filesystem git provider + in-cluster git service (wave 1 app
+            # inari-e2e-git-service): the server writes real bare repos into
+            # the shared RWX PVC; suites clone them via E2E_GIT_URL.
+            - name: INARI_GIT_PROVIDER
+              value: "local"
+            - name: INARI_GIT_LOCAL_ROOT
+              value: "/var/lib/inari/git"
+            - name: INARI_LOG_FORMAT
+              value: "json"
+          extraVolumes:
+            - name: git-root
+              persistentVolumeClaim:
+                claimName: inari-e2e-git
+          extraVolumeMounts:
+            - name: git-root
+              mountPath: /var/lib/inari/git
+          # Platform Vault for the cluster-registration exchange
+          # (RegisterCluster writes per-cluster OIDC client secrets).
+          # Kubernetes auth: SA JWT login, no static token. PREREQUISITE:
+          # Vault policy + role inari-e2e-server bound to SA inari-server in
+          # ns inari-e2e (gitops/e2e/README.md §Prerequisites).
+          vault:
+            addr: "https://vault.int.7kgroup.org"
+            kvMount: secret
+            authMethod: kubernetes
+            role: inari-e2e-server
+    # PostSync smoke hook manifests (see the header comment above). Pins
+    # main: steady-state test definitions for steady-state syncs; per-run
+    # candidate assertions run in the workflow's chainsaw-verify leg at
+    # charts-ref.
+    - repoURL: https://github.com/7K-Inari/inari-release-bundle.git
+      targetRevision: main
+      path: gitops/e2e/chainsaw-hooks
   destination:
     server: https://kubernetes.default.svc
     namespace: inari-e2e

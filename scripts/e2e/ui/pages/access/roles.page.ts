@@ -117,8 +117,9 @@ export class RolesTabPage {
   }
 
   /**
-   * Click Delete on a role's row. The UI guards with window.confirm — the
-   * caller must register `page.once("dialog", ...)` before invoking this.
+   * Click Delete on a role's row and confirm in the DS modal
+   * (inari-ui components/confirm.tsx — a rendered dialog with a danger
+   * "Delete" button; the window.confirm era is gone).
    */
   async deleteRole(roleName: string): Promise<void> {
     // Capability-gated: renders disabled until /me/permissions resolves —
@@ -127,5 +128,7 @@ export class RolesTabPage {
     const btn = this.roleRow(roleName).first().getByRole("button", { name: "Delete" });
     await expect(btn).toBeEnabled({ timeout: 60_000 });
     await btn.click();
+    const modal = this.page.getByRole("dialog", { name: "Delete role" });
+    await modal.getByRole("button", { name: "Delete", exact: true }).click();
   }
 }
