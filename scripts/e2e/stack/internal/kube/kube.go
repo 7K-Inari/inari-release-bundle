@@ -131,24 +131,36 @@ func Scale(ns, resource string, replicas int, timeout string) error {
 }
 
 // PSQLInari runs SQL against the platform database via the CNPG primary pod
-// (the connection URI never leaves the cluster).
+// (the connection never leaves the cluster). Preferred path: pod-local auth
+// as the postgres superuser — CNPG images peer/trust local connections from
+// the container's own user, and kubectl exec lands as that user. This needs
+// NO secret access, so least-privilege runners (the live env's e2e-runner
+// can exec but must not read inari-db) can query — the same posture as the
+// chainsaw bootstrap probes (gitops/e2e/argo-workflows/rbac.yaml). Fallback:
+// the inari-db secret's URI, for environments where pod-local auth is
+// disabled.
 func PSQLInari(ns, sql string) (string, error) {
-	uriB64, err := Kubectl("-n", ns, "get", "secret", "inari-db",
-		"-o", "jsonpath={.data.inari-uri}")
-	if err != nil {
-		return "", err
-	}
-	uri, err := base64.StdEncoding.DecodeString(strings.TrimSpace(uriB64))
-	if err != nil {
-		return "", fmt.Errorf("decoding inari-db uri: %w", err)
-	}
 	primary, err := Kubectl("-n", ns, "get", "cluster.postgresql.cnpg.io/postgresql",
 		"-o", "jsonpath={.status.currentPrimary}")
 	if err != nil {
 		return "", err
 	}
-	out, err := ExecInContainer(ns, strings.TrimSpace(primary), "postgres",
-		"psql", string(uri), "-tAc", sql)
+	pod := strings.TrimSpace(primary)
+	out, err := ExecInContainer(ns, pod, "postgres",
+		"psql", "-U", "postgres", "-d", "inari", "-tAc", sql)
+	if err == nil {
+		return strings.TrimSpace(out), nil
+	}
+	uriB64, serr := Kubectl("-n", ns, "get", "secret", "inari-db",
+		"-o", "jsonpath={.data.inari-uri}")
+	if serr != nil {
+		return "", err // report the primary (peer-auth) failure
+	}
+	uri, derr := base64.StdEncoding.DecodeString(strings.TrimSpace(uriB64))
+	if derr != nil {
+		return "", fmt.Errorf("decoding inari-db uri: %w", derr)
+	}
+	out, err = ExecInContainer(ns, pod, "postgres", "psql", string(uri), "-tAc", sql)
 	if err != nil {
 		return "", err
 	}

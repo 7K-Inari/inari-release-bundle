@@ -29,18 +29,20 @@ func AssertClusterActive(t TB, e *Env) {
 			return false, nil // transient API/KC warm-up: keep polling
 		}
 		return cl.State == "active", nil
-	}, "cluster active (agent connected; logs: kubectl -n inari-system logs deploy/inari-agent)")
+	}, "cluster active (agent connected; logs: kubectl -n "+e.AgentNamespace+" logs deploy/inari-agent)")
 }
 
 // AssertESOAgentClientSecret: ESO sets Ready=True on the ExternalSecret once
 // the Vault read + projection succeeds — an event-driven wait, not a blind
-// poll. The projected secret must match the Keycloak client secret.
+// poll. The projected secret must match the Keycloak client secret. The
+// namespace is the handoff's agent_namespace (inari-system on kind,
+// inari-e2e-agent on the live env) — never hardcoded.
 func AssertESOAgentClientSecret(t TB, e *Env) {
 	t.Helper()
-	require.NoError(t, kube.WaitCondition("inari-system", "condition=Ready",
+	require.NoError(t, kube.WaitCondition(e.AgentNamespace, "condition=Ready",
 		"120s", "externalsecret/inari-agent-oidc-client"),
-		"ESO never projected inari-agent-oidc-client")
-	secB64, err := kube.Kubectl("-n", "inari-system", "get", "secret",
+		"ESO never projected inari-agent-oidc-client in "+e.AgentNamespace)
+	secB64, err := kube.Kubectl("-n", e.AgentNamespace, "get", "secret",
 		"inari-agent-oidc-client", "-o", "jsonpath={.data.client-secret}")
 	require.NoError(t, err, "ExternalSecret Ready but secret missing")
 	esoSecret, err := base64.StdEncoding.DecodeString(strings.TrimSpace(secB64))
@@ -69,7 +71,7 @@ func AssertCapabilitiesStreamed(t TB, e *Env) {
 			return false, nil
 		}
 		return caps > 0, nil
-	}, "capabilities streamed (logs: kubectl -n inari-system logs deploy/inari-agent)")
+	}, "capabilities streamed (logs: kubectl -n "+e.AgentNamespace+" logs deploy/inari-agent)")
 	t.Logf("capabilities streamed: %d", caps)
 }
 
@@ -86,5 +88,5 @@ func AssertHeartbeatAdvances(t TB, e *Env) {
 			return false, nil
 		}
 		return cl2.LastSeenAt != cl1.LastSeenAt, nil
-	}, "heartbeat advancing (lastSeenAt changed; logs: kubectl -n inari-system logs deploy/inari-agent)")
+	}, "heartbeat advancing (lastSeenAt changed; logs: kubectl -n "+e.AgentNamespace+" logs deploy/inari-agent)")
 }

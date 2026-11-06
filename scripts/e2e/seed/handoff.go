@@ -28,8 +28,11 @@ import (
 
 // Handoff keys — the exact set stack/suite/env.go's loadHandoffConfigMap
 // requires (git_host_dir/agent_chart_dir are kind-era and legitimately
-// absent on the live env).
-var handoffKeys = []string{"namespace", "toolbox", "tenant", "kc_uid", "org_kc_id", "cluster_id", "org_id"}
+// absent on the live env). agent_namespace is OPTIONAL on the reader side
+// (defaulted to inari-system) — the seed always publishes it so the suite
+// finds the agent's ESO-projected secret in the right namespace (the live
+// env's agent runs in inari-e2e-agent, not inari-system).
+var handoffKeys = []string{"namespace", "toolbox", "tenant", "kc_uid", "org_kc_id", "cluster_id", "org_id", "agent_namespace"}
 
 // kubeStore is the seed's Kubernetes write surface.
 type kubeStore interface {

@@ -41,7 +41,8 @@ those modules.**
 | `E2E_MODE` | yes | — | `release` \| `edge` \| `nightly` \| `weekly` \| `smoke`. Drives label selection (see [test-taxonomy.md](test-taxonomy.md)) and gate strictness — never suite behavior branches. |
 | `E2E_HA` | no | `0` | `1` selects the HA legs (3-node NATS, HA values, disruption specs). |
 | `E2E_MIGRATIONS_DIR` | when `E2E_HA=1` | — | Mount of inari-server's `internal/db/migrations` from a `server-src-ref` checkout volume; the HA migration-count assertion fails fast without it. |
-| `E2E_GIT_URL` | yes | — | Base URL of the in-cluster git service (replaces the kind hostPath git root + `INARI_GIT_PROVIDER=local` coupling in `git-config.spec.ts`). |
+| `E2E_GIT_URL` | yes | — | Base URL of the in-cluster git service (replaces the kind hostPath git root + `INARI_GIT_PROVIDER=local` coupling in `git-config.spec.ts`). The Go suite also clones the tenant state repo from here for the RBAC-materialization phase. |
+| `E2E_AGENT_NAMESPACE` | yes | `inari-system` | Namespace of the e2e agent chart install (and its ESO-projected OIDC client secret — `INARI_ESO_SECRET_NAMESPACE`). The seed publishes it as the handoff's `agent_namespace` key; suites consume the handoff, never a hardcoded constant. Live env: `inari-e2e-agent`. |
 
 Derived (computed in the shared env modules, overridable only for local
 debugging): `API_BASE = https://$E2E_BASE_DOMAIN/api/v1`.
@@ -52,7 +53,7 @@ debugging): `API_BASE = https://$E2E_BASE_DOMAIN/api/v1`.
 flowchart LR
     WT["WorkflowTemplate e2e-stack<br/>(parameters: mode, image tags, charts-ref, ...)"] -->|env: on every step| SUITES
     PREP["env-prep step<br/>(deploy candidate charts/images)"] --> SEED["seed step<br/>(idempotent personas + inari-ui redirect whitelist)"]
-    SEED -->|writes| CM["ConfigMap e2e-handoff<br/>namespace, tenant, kc_uid,<br/>org_kc_id, cluster_id, org_id"]
+    SEED -->|writes| CM["ConfigMap e2e-handoff<br/>namespace, tenant, kc_uid,<br/>org_kc_id, cluster_id, org_id,<br/>agent_namespace"]
     CM -->|read once at startup| SUITES["suite legs<br/>Ginkgo / Playwright /<br/>Chainsaw / api-schema"]
     SEED -->|E2E_SEEDED=true| SUITES
 ```
@@ -121,7 +122,10 @@ when the path is set.
 Handoff struct (`suite/env.go` — renames must land in writer and reader):
 `namespace`, `toolbox`, `tenant`, `kc_uid` (dev-admin KC user id),
 `org_kc_id` (tenant org's Keycloak organization id), `cluster_id`,
-`org_id`, `git_host_dir`, `agent_chart_dir`.
+`org_id`, `git_host_dir`, `agent_chart_dir`. Live-env ConfigMap handoffs
+additionally carry `agent_namespace` (the agent chart's namespace, sourced
+from `E2E_AGENT_NAMESPACE`; the reader defaults it to `inari-system` for
+kind file handoffs and stale ConfigMaps).
 
 | Variable | Default | Meaning |
 |---|---|---|

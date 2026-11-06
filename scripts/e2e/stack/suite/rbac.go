@@ -22,9 +22,25 @@ import (
 // (new binding, stale pruned).
 
 // stateRepo is the materialized tenant state repo on the host (mounted into
-// the kind node by the provisioner; INARI_GIT_PROVIDER=local).
+// the kind node by the provisioner; INARI_GIT_PROVIDER=local). Kind path
+// only — on the live env GitHostDir is empty and the suite reads the repo
+// from the git daemon via stateRepoURL (E2E_GIT_URL).
 func (e *Env) stateRepo() string {
 	return filepath.Join(e.GitHostDir, e.Tenant+"-inari-state.git")
+}
+
+// stateRepoIsLocal: kind handoffs carry git_host_dir (a host mount); live
+// ConfigMap handoffs deliberately omit it — the state repos live on the
+// in-cluster git service then.
+func (e *Env) stateRepoIsLocal() bool {
+	return e.GitHostDir != ""
+}
+
+// stateRepoURL is the tenant state repo on the in-cluster git service
+// (git daemon, unauthenticated, e2e-internal — the same transport the
+// seed's B4 write-path proof uses).
+func (e *Env) stateRepoURL() string {
+	return e.GitURL + "/" + e.Tenant + "-inari-state.git"
 }
 
 // gitShow returns a file from the state repo's main branch.
@@ -32,13 +48,36 @@ func gitShow(repo, path string) (string, error) {
 	return kube.Run("git", "-C", repo, "show", "main:"+path)
 }
 
+// showStateFile reads a file from main wherever the repo lives: the kind
+// hostPath directly, or a lazily-cloned local copy of the live env's git
+// daemon (fetched fresh per call — the polls use it to watch the
+// rbacmaterialize consumer's commits land).
+func (e *Env) showStateFile(path string) (string, error) {
+	if e.stateRepoIsLocal() {
+		return gitShow(e.stateRepo(), path)
+	}
+	if e.stateClone == "" {
+		dir, err := os.MkdirTemp("", "e2e-state-repo-*")
+		if err != nil {
+			return "", err
+		}
+		if _, err := kube.Run("git", "clone", "-q", "--depth", "1", "--branch", "main", e.stateRepoURL(), dir); err != nil {
+			return "", err // not served yet — leave stateClone empty so the next poll re-clones
+		}
+		e.stateClone = dir
+	}
+	if _, err := kube.Run("git", "-C", e.stateClone, "fetch", "-q", "--depth", "1", "origin", "main"); err != nil {
+		return "", err
+	}
+	return kube.Run("git", "-C", e.stateClone, "show", "FETCH_HEAD:"+path)
+}
+
 // WaitStateRepoMaterialized polls until tenant.created has materialized
 // baseline/rbac/* into the tenant state repo.
 func WaitStateRepoMaterialized(t TB, e *Env) {
 	t.Helper()
-	repo := e.stateRepo()
 	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
-		_, err := gitShow(repo, "baseline/rbac/clusterroles.yaml")
+		_, err := e.showStateFile("baseline/rbac/clusterroles.yaml")
 		return err == nil, nil
 	}, "state repo materialized (server logs: kubectl -n "+e.Namespace+" logs deploy/inari-server)")
 }
@@ -51,9 +90,20 @@ func WaitStateRepoMaterialized(t TB, e *Env) {
 // e2e platform stack does not install.
 func SyncRBAC(t TB, e *Env) {
 	t.Helper()
-	work := filepath.Join(e.GitHostDir, "work")
-	require.NoError(t, os.RemoveAll(work))
-	_, err := kube.Run("git", "clone", "-q", e.stateRepo(), work)
+	// Clone source + work dir: kind reads the hostPath mount in place; the
+	// live env clones from the git daemon (E2E_GIT_URL) into a temp dir.
+	src := e.stateRepoURL()
+	work := ""
+	if e.stateRepoIsLocal() {
+		src = e.stateRepo()
+		work = filepath.Join(e.GitHostDir, "work")
+		require.NoError(t, os.RemoveAll(work))
+	} else {
+		tmp, err := os.MkdirTemp("", "e2e-rbac-sync-*")
+		require.NoError(t, err)
+		work = filepath.Join(tmp, "work")
+	}
+	_, err := kube.Run("git", "clone", "-q", src, work)
 	require.NoError(t, err)
 	_, err = kube.Kubectl("apply", "-f", filepath.Join(work, "baseline", "rbac"))
 	require.NoError(t, err)
@@ -118,9 +168,8 @@ func viewerGroup(e *Env) []string {
 func FlipRBACMapping(t TB, e *Env, team, role string) {
 	t.Helper()
 	require.NoError(t, e.API.PutRBACMappings(team, role))
-	repo := e.stateRepo()
 	poll.Eventually(t, 180*time.Second, 5*time.Second, func() (bool, error) {
-		bindings, err := gitShow(repo, "baseline/rbac/clusterrolebindings.yaml")
+		bindings, err := e.showStateFile("baseline/rbac/clusterrolebindings.yaml")
 		if err != nil {
 			return false, nil
 		}

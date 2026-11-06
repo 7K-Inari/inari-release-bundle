@@ -21,6 +21,10 @@ data:
   E2E_TENANT: e2e-org
   # In-cluster git service (replaces the kind hostPath coupling).
   E2E_GIT_URL: git://git-service.inari-e2e.svc:9418
+  # Where the e2e agent chart (and its ESO-projected OIDC client secret)
+  # lives — the seed publishes this as the handoff's agent_namespace key;
+  # suites must never hardcode it (the kind default is inari-system).
+  E2E_AGENT_NAMESPACE: inari-e2e-agent
   # Attach-mode handoff (suite/env.go): seed writes resolved ids here.
   E2E_HANDOFF_CONFIGMAP: inari-e2e/e2e-handoff
   # Legs run only after the seed step; the var is belt (invariant 4).

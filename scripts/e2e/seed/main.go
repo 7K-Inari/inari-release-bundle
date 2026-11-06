@@ -64,6 +64,11 @@ type config struct {
 	TenantSlug string // E2E_TENANT_SLUG
 	Namespace  string // E2E_NAMESPACE — handoff/toolbox/secret namespace
 	GitURL     string // E2E_GIT_URL ("" disables the B4 proof)
+	// AgentNamespace is where the e2e agent chart is installed (and where
+	// inari-server delivers the ESO-projected OIDC client secret —
+	// INARI_ESO_SECRET_NAMESPACE). E2E_AGENT_NAMESPACE, default inari-system
+	// (the kind path). Published as the handoff's agent_namespace key.
+	AgentNamespace string
 
 	User     string // E2E_USER (dev-admin)
 	Password string // E2E_PASSWORD
@@ -115,6 +120,7 @@ func loadConfig() (config, error) {
 	cfg.TenantName = envOr("E2E_TENANT_NAME", "E2E Org")
 	cfg.TenantSlug = envOr("E2E_TENANT_SLUG", envOr("TENANT", "e2e-org"))
 	cfg.GitURL = os.Getenv("E2E_GIT_URL")
+	cfg.AgentNamespace = envOr("E2E_AGENT_NAMESPACE", "inari-system")
 	cfg.User = envOr("E2E_USER", "dev-admin")
 	cfg.Password = envOr("E2E_PASSWORD", "dev-admin")
 	cfg.OpsUser = envOr("E2E_OPS_USER", "e2e-ops")
@@ -344,13 +350,14 @@ func run() error {
 			return fmt.Errorf("E2E_HANDOFF_CONFIGMAP must be \"namespace/name\", got %q", cfg.HandoffConfigMap)
 		}
 		data := map[string]string{
-			"namespace":  cfg.Namespace,
-			"toolbox":    cfg.ToolboxName,
-			"tenant":     cfg.TenantSlug,
-			"kc_uid":     devAdminID,
-			"org_kc_id":  orgKCID,
-			"cluster_id": clusterID,
-			"org_id":     orgID,
+			"namespace":       cfg.Namespace,
+			"toolbox":         cfg.ToolboxName,
+			"tenant":          cfg.TenantSlug,
+			"kc_uid":          devAdminID,
+			"org_kc_id":       orgKCID,
+			"cluster_id":      clusterID,
+			"org_id":          orgID,
+			"agent_namespace": cfg.AgentNamespace,
 		}
 		if err := k.WriteConfigMap(ns, name, data); err != nil {
 			return fmt.Errorf("writing handoff ConfigMap %s: %w", cfg.HandoffConfigMap, err)

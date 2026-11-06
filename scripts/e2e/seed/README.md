@@ -36,10 +36,10 @@ Idempotent seed for the e2e environment, running as a workflow step between
    (server → PVC → git-daemon; the tenant-created RBAC-materialization
    event commits the baseline there — no synthetic trigger needed).
 6. **The `e2e-handoff` ConfigMap** — `namespace`, `toolbox`, `tenant`,
-   `kc_uid`, `org_kc_id`, `cluster_id`, `org_id` (the exact key set
-   `scripts/e2e/stack/suite/env.go` reads via `E2E_HANDOFF_CONFIGMAP`) —
-   including ensuring the **toolbox pod** the Ginkgo suite uses as its curl
-   transport.
+   `kc_uid`, `org_kc_id`, `cluster_id`, `org_id`, `agent_namespace` (the
+   exact key set `scripts/e2e/stack/suite/env.go` reads via
+   `E2E_HANDOFF_CONFIGMAP`) — including ensuring the **toolbox pod** the
+   Ginkgo suite uses as its curl transport.
 
 ## Persona rules (verbatim from `scripts/e2e/ui/README.md` — hard rule 6)
 
@@ -65,6 +65,7 @@ no suite, and must never be used as a test identity.
 | `E2E_TENANT_NAME` / `E2E_TENANT_SLUG` | no | `E2E Org` / `e2e-org` | the seeded tenant |
 | `E2E_NAMESPACE` | no | CM namespace, else `inari` | namespace for the toolbox + the admin-secret fallback read |
 | `E2E_GIT_URL` | no | — (proof skipped) | in-cluster git service base (`git://…:9418`) |
+| `E2E_AGENT_NAMESPACE` | no | `inari-system` | agent chart namespace — published as the handoff's `agent_namespace` key (live env: `inari-e2e-agent`) |
 | `E2E_USER` / `E2E_PASSWORD` | no | `dev-admin` / `dev-admin` | the dev-admin persona |
 | `E2E_{OPERATOR,EDITOR,VIEWER,MEMBER}_PASSWORD` | no | = username | persona passwords (mounted from `inari-e2e-personas`) |
 | `E2E_OPS_USER` / `E2E_OPS_PASSWORD` | no | `e2e-ops` / `e2e-ops` | non-persona platform-ops identity (janitor approve step; secret key `ops-password`) |

@@ -14,7 +14,10 @@ import (
 func TestHandoffKeysMatchSuiteReader(t *testing.T) {
 	// stack/suite/env.go loadHandoffConfigMap requires every one of these
 	// non-empty (kind-era git_host_dir/agent_chart_dir are optional there).
-	want := []string{"namespace", "toolbox", "tenant", "kc_uid", "org_kc_id", "cluster_id", "org_id"}
+	// agent_namespace is OPTIONAL on the reader side (defaulted to
+	// inari-system for kind file handoffs and stale ConfigMaps) but the seed
+	// always publishes it — pin it here so the contract never silently drops.
+	want := []string{"namespace", "toolbox", "tenant", "kc_uid", "org_kc_id", "cluster_id", "org_id", "agent_namespace"}
 	if !slices.Equal(handoffKeys, want) {
 		t.Fatalf("handoffKeys = %v, want %v", handoffKeys, want)
 	}
