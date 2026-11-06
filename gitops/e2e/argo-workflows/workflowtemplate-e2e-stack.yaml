@@ -20,9 +20,9 @@
 #   (when: mode == release) — this DAG leaves that slot deliberately.
 #
 # Semaphore: one permit (ConfigMap e2e-env-lock, see semaphore-e2e-env-lock.yaml)
-# serializes ALL modes against the single env (plan §5.6). onExit uploads every
-# suite's JUnit unconditionally — aborted/failed runs still report (hard rule
-# 8/10); the ReportPortal importer block is W4's (seam in the exit handler).
+# serializes ALL modes against the single env (plan §5.6). onExit imports every
+# suite's JUnit into ReportPortal unconditionally — aborted/failed runs still
+# report (hard rule 8/10; importer in the exit-handler template, W4).
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
@@ -638,16 +638,19 @@ spec:
           # Chart==component versioning (release.yml seds both from the tag);
           # agent-image=edge pins the TEMPORARY edge chart carrying the
           # discovery.name/namespaceCreate knobs (never a floating tag — see
-          # the step header). 0.6.0-53f8ba4 = inari-agent@53f8ba4 (merge of
-          # #88 knobs + #89 edge publishing), verified via helm show chart +
-          # helm template (knobs render, zero Namespaces with the guard).
+          # the step header). 0.6.0-c74e714 = inari-agent@c74e714 (merge of
+          # #91: chart memory defaults raised to 128Mi/512Mi from the measured
+          # OOM headroom), verified via helm show chart + helm show values
+          # (defaults byte-identical to the override this file used to carry).
+          # Move the pin to the next stable chart version once one carries
+          # the knobs.
           #
           # Tag-prefix convention split (registry-verified): the agent CHART
           # version is unprefixed (0.5.1) but the agent IMAGE tag is
           # v-prefixed (v0.5.1) — normalize the image tag defensively (bare
           # X.Y.Z only; "edge" and per-commit edge builds stay as-is). The
           # systemic convention fix is a separate cross-repo issue.
-          AGENT_CHART_VERSION_EDGE="0.6.0-53f8ba4"
+          AGENT_CHART_VERSION_EDGE="0.6.0-c74e714"
           VERSION_ARGS=""
           AGENT_TAG="$AGENT_IMAGE"
           case "$AGENT_TAG" in
@@ -675,10 +678,11 @@ spec:
           # public hostname is for external clusters).
           # kubectlTunnel.enabled=false: kubeproxy is disabled on the e2e env;
           # the tunnel chain stays docker-only.
-          # Memory headroom (live-verified OOM loop): the capability watchers'
-          # initial LIST against a real cluster climbs ~1.3MB/s past the
-          # chart's 128Mi default at ~75s — cgroup SIGKILL (reported as exit
-          # 137 / reason Error, no OOMKilled marker). 128Mi/512Mi override.
+          # Memory: no override anymore — the chart defaults ARE the measured
+          # values since inari-agent#91 (128Mi/512Mi; the capability watchers'
+          # initial LIST storm climbed ~1.3MB/s past the old 128Mi limit at
+          # ~75s — cgroup SIGKILL, reported as exit 137 / reason Error, no
+          # OOMKilled marker). The edge-chart pin above sits past #91.
           # No helm --wait: helm's kstatus-based waiter NEVER observes the
           # rollout under this SA — it burns the whole timeout and then
           # reports "Deployment ... not ready. status: Unknown" even when the
@@ -694,7 +698,7 @@ spec:
           # a comment line severing the continuation silently dropped every
           # trailing flag TWICE (2026-11-06 — once losing --wait/--timeout,
           # once flipping kubectlTunnel back to the chart default true and
-          # skipping the memory/oidc overrides).
+          # skipping the oidc/memory overrides of that era).
           cat > /tmp/agent-values.yaml <<AGENTVALUES
           namespace: inari-e2e-agent
           namespaceCreate: false
@@ -710,11 +714,6 @@ spec:
             registrationToken: "$REG_TOKEN"
             clusterLabels: e2e=true
             helmNamespaces: inari-e2e-agent
-          resources:
-            requests:
-              memory: 128Mi
-            limits:
-              memory: 512Mi
           kubectlTunnel:
             enabled: false
           oidcSecret:
@@ -1116,15 +1115,17 @@ spec:
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/apischema/junit.xml
 
-    # ----------------------------------------------------- exit-handler (W4)
-    # Unconditional result collection (hard rule 8/10): every suite's JUnit
+    # ----------------------------------------------------- exit-handler
+    # Unconditional result reporting (hard rule 8/10): every suite's JUnit
     # lands here even when the run failed or was aborted (optional inputs
-    # tolerate absence). Always exits 0 — reporting never masks the result.
-    #
-    # W4 SEAM: replace the marked block with the ReportPortal import client
-    # (launch = reportportal-launch or "<mode>-<uid>"; attributes: mode,
-    # E2E_RUN_ID, image tags, charts-ref; endpoint https://reportportal.int
-    # .7kgroup.org; creds from a future ESO secret `reportportal-importer`).
+    # tolerate absence) and is imported into ReportPortal as ONE launch per
+    # run (name = reportportal-launch or "<mode>-<uid>"; attributes: mode,
+    # run-id, image tags, charts-ref, status — plan §3.4). A synthesized
+    # run-outcome testsuite anchors runs that died before any suite wrote
+    # JUnit. Always exits 0 — reporting never masks the result; a missing
+    # reportportal-importer secret (pre-owner-action) degrades to a skip
+    # warning. Endpoint: the reportportal-api service directly (no gateway);
+    # creds: ESO secret reportportal-importer (reportportal-importer-secret.yaml).
     - name: exit-handler
       activeDeadlineSeconds: 900
       inputs:
@@ -1218,6 +1219,22 @@ spec:
       script:
         image: alpine:3.22
         command: [sh]
+        env:
+          # Direct service DNS — no gateway/TLS/external-DNS dependency in the
+          # reporting path. Humans use https://reportportal.int.7kgroup.org.
+          - name: RP_ENDPOINT
+            value: http://reportportal-api.reportportal.svc.cluster.local:8585
+          - name: RP_PROJECT
+            value: inari-e2e
+          # optional: true is load-bearing — before the owner provisions the
+          # ReportPortal API key (gitops/e2e/README.md §Prerequisites) the
+          # secret does not exist and the exit-handler pod MUST still start.
+          - name: RP_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: reportportal-importer
+                key: api-key
+                optional: true
         source: |
           set -u
           LAUNCH="{{workflow.parameters.reportportal-launch}}"
@@ -1242,13 +1259,97 @@ spec:
             fi
           done
 
-          # --- W4 SEAM: ReportPortal import ------------------------------
-          # if [ -n "$RP_TOKEN" ]; then
-          #   for f in /junit/*.xml; do
-          #     curl -sf -X POST "$RP_ENDPOINT/api/v1/$RP_PROJECT/launch/import" ...
-          #   done
-          # fi
-          # -----------------------------------------------------------------
+          # --- ReportPortal import (W4) --------------------------------
+          # ONE launch per run: all suite JUnits in a single zip via the
+          # bundled JUnit import plugin; launchImportRq carries the launch
+          # name + attributes (plan §3.4). Unconditional (hard rule 8/10):
+          # this runs even when the DAG failed or was aborted. Every failure
+          # below degrades to a warning — reporting never masks the result.
+          apk add --no-cache curl zip jq >/dev/null 2>&1 \
+            || echo "WARNING: apk add failed — ReportPortal tooling unavailable"
+
+          if ! command -v curl >/dev/null 2>&1 || ! command -v zip >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+            echo "WARNING: curl/zip/jq missing — skipping ReportPortal import"
+            echo "rp-import=skipped" >> /artifacts/out/manifest.txt
+          elif [ -z "${RP_API_KEY:-}" ]; then
+            echo "WARNING: RP_API_KEY unset (secret reportportal-importer not synced — owner action pending) — skipping ReportPortal import"
+            echo "rp-import=skipped" >> /artifacts/out/manifest.txt
+          else
+            echo "== ReportPortal import: launch '$LAUNCH' -> $RP_ENDPOINT project $RP_PROJECT"
+
+            # Hard rule 8/10 anchor: a run that died before any suite wrote
+            # JUnit still lands in ReportPortal (failed launch) instead of
+            # vanishing. Kept OUT of /junit so the collection log above
+            # reflects suite artifacts only.
+            mkdir -p /tmp/rp-in
+            cp /junit/*.xml /tmp/rp-in/ 2>/dev/null || true
+            if [ "{{workflow.status}}" = "Succeeded" ]; then
+              echo '<?xml version="1.0" encoding="UTF-8"?><testsuite name="e2e.run" tests="1" failures="0"><testcase classname="e2e.run" name="workflow-outcome"/></testsuite>' \
+                > /tmp/rp-in/run-outcome.xml
+            else
+              echo '<?xml version="1.0" encoding="UTF-8"?><testsuite name="e2e.run" tests="1" failures="1"><testcase classname="e2e.run" name="workflow-outcome"><failure message="workflow {{workflow.status}}">Run ended in phase {{workflow.status}}; suite JUnits may be missing or partial. See the Argo workflow for node-level detail.</failure></testcase></testsuite>' \
+                > /tmp/rp-in/run-outcome.xml
+            fi
+
+            rm -f /tmp/launch.zip
+            (cd /tmp/rp-in && zip -q /tmp/launch.zip ./*.xml)
+
+            RQ=$(jq -nc \
+              --arg name "$LAUNCH" \
+              --arg desc "Argo: https://argo-workflows.7kgroup.org/workflows/inari-e2e/{{workflow.name}} — workflow status {{workflow.status}}" \
+              --arg mode "{{workflow.parameters.mode}}" \
+              --arg runid "{{workflow.uid}}" \
+              --arg chartsref "{{workflow.parameters.charts-ref}}" \
+              --arg server "{{workflow.parameters.server-image}}" \
+              --arg console "{{workflow.parameters.console-image}}" \
+              --arg agent "{{workflow.parameters.agent-image}}" \
+              --arg status "{{workflow.status}}" \
+              '{name: $name, mode: "DEFAULT", description: $desc, attributes: [
+                {key: "mode", value: $mode},
+                {key: "run-id", value: $runid},
+                {key: "charts-ref", value: $chartsref},
+                {key: "server-image", value: $server},
+                {key: "console-image", value: $console},
+                {key: "agent-image", value: $agent},
+                {key: "status", value: $status},
+                {key: "skippedIsNotIssue", value: "true", system: true}]}')
+
+            IMPORTED=""
+            for attempt in 1 2 3; do
+              if curl -sf -m 120 -X POST "$RP_ENDPOINT/api/v1/plugin/$RP_PROJECT/junit/import" \
+                  -H "Authorization: Bearer $RP_API_KEY" \
+                  -F "file=@/tmp/launch.zip;type=application/x-zip-compressed" \
+                  -F "launchImportRq=$RQ;type=application/json"; then
+                IMPORTED=1
+                break
+              fi
+              echo "  import attempt $attempt failed — retrying in 10s"
+              sleep 10
+            done
+
+            if [ -z "$IMPORTED" ]; then
+              echo "WARNING: ReportPortal import failed after 3 attempts (run result unaffected; JUnits remain in S3 at e2e/{{workflow.uid}}/)"
+              echo "rp-import=failed" >> /artifacts/out/manifest.txt
+            else
+              echo "rp-import=ok" >> /artifacts/out/manifest.txt
+              # Import is processed asynchronously — poll until the launch is
+              # visible so the step log carries the proof.
+              LAUNCH_ID=""
+              for i in $(seq 1 12); do
+                LAUNCH_ID=$(curl -sf -m 30 "$RP_ENDPOINT/api/v1/$RP_PROJECT/launch?filter.eq.name=$LAUNCH&page.size=1&page.sort=startTime%2CDESC" \
+                  -H "Authorization: Bearer $RP_API_KEY" 2>/dev/null | jq -r '.content[0].id // empty') || LAUNCH_ID=""
+                [ -n "$LAUNCH_ID" ] && break
+                sleep 15
+              done
+              if [ -n "$LAUNCH_ID" ]; then
+                echo "  launch visible: id=$LAUNCH_ID — https://reportportal.int.7kgroup.org/ui/#$RP_PROJECT/launches/all/$LAUNCH_ID"
+                echo "rp-launch-id=$LAUNCH_ID" >> /artifacts/out/manifest.txt
+              else
+                echo "WARNING: launch '$LAUNCH' not visible after 3m (async import lag) — check ReportPortal manually"
+              fi
+            fi
+          fi
+          # ------------------------------------------------------------------
           echo "== exit-handler done"
       outputs:
         artifacts:

@@ -71,6 +71,13 @@ choice.
    `https://ghcr.io`, no upstream credentials, pull-blocking OFF. Requires
    a Harbor admin credential (Vault `harbor/app`); without the project the
    e2e image values ImagePullBackOff.
+5. **ReportPortal importer credential** (reporting only — runs work without
+   it, the onExit import just skips): on https://reportportal.int.7kgroup.org
+   (superadmin) create project **`inari-e2e`**, create local user
+   **`e2e-importer`** assigned to it (MEMBER suffices), generate an API key,
+   then `vault kv put secret/inari-e2e/reportportal api-key=<uuid>`. Synced
+   by `argo-workflows/reportportal-importer-secret.yaml` (ESO, hourly; force
+   via a `force-sync` annotation on the ExternalSecret).
 
 DNS needs no action: external-dns creates the records from the HTTPRoute
 annotations (same mechanism as the live instance, proxied flag flipped).
@@ -125,7 +132,8 @@ lives in 7k-app-of-apps (W1).
 
 | File | Contents |
 |---|---|
-| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release) + chainsaw-verify; onExit collects every JUnit (ReportPortal importer = W4) |
+| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release) + chainsaw-verify; onExit imports every suite's JUnit into ReportPortal as ONE launch per run (name = `reportportal-launch`, attributes mode/run-id/image tags/charts-ref/status; a synthesized run-outcome testsuite anchors aborted runs — hard rule 8/10) |
+| `reportportal-importer-secret.yaml` | ESO ExternalSecret syncing the ReportPortal API key (Vault `inari-e2e/reportportal`) for the onExit importer; optional reference — runs skip the import with a warning until the owner provisions it |
 | `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-*` orgs older than retention-days (contract invariant 6), skipping `e2e-org` + active runs; every 6h. Two identities: requests as dev-admin, approves as **e2e-ops** (lifecycle approvals are never self-decidable) |
 | `cronworkflow-nightly.yaml` | 03:17 UTC full surface incl. quarantined, edge images, env-wide HA flip |
 | `cronworkflow-weekly.yaml`, `cronworkflow-nightly-reset.yaml` | **Suspended placeholders** (phase 2: load/chaos legs; restore-from-backup needs CNPG barman wiring in env-extras first) |
@@ -148,7 +156,10 @@ own artifact set (hard rule 5). Platform apps are health-checked, never
 mutated.
 
 Manual run: `argo submit --from workflowtemplate/e2e-stack -n inari-e2e -p
-mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token).
+mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token). Every
+run — succeeded, failed, or aborted — lands in ReportPortal project
+`inari-e2e` as one launch (`https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all`);
+JUnit XMLs also persist in the Garage bucket at `e2e/<workflow-uid>/`.
 
 ## Ownership / boundaries
 
