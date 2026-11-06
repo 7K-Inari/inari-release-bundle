@@ -400,47 +400,60 @@ spec:
             container: {merge: {resources: {requests: {cpu: "50m", memory: "128Mi"}}}}
           }')
 
-          # patch_app <app> <jsonPatchBase> <jqBase> <desiredValuesObject>:
-          # applies targetRevision + valuesObject ONLY when they differ from
-          # live, and records the pre-patch generation in $GEN_DIR for
-          # wait_app. No-op awareness matters: an identical re-patch does not
-          # bump .metadata.generation, so a generation wait on a no-op would
-          # hang forever (steady-state reruns hit exactly that).
+          # patch_app <app> <jsonPatchBase> <jqBase> <desiredValuesObject>
+          # <rev|"-">: applies valuesObject (+ targetRevision when rev != "-")
+          # ONLY on drift, recording the pre-patch reconciledAt in $GEN_DIR
+          # for wait_app. rev="-" for nats: its targetRevision is the upstream
+          # CHART VERSION (2.15.2), never the bundle ref — patching it to
+          # charts-ref breaks the render (live-verified 2026-11-06) and the
+          # env pointer's ignoreDifferences deliberately covers only
+          # valuesObject for nats, so the bad revision self-healed back.
           GEN_DIR=/tmp/gens; mkdir -p "$GEN_DIR"
           patch_app() {
-            app="$1"; pbase="$2"; jbase="$3"; desired="$4"
-            gen=$(kubectl -n argocd get application "$app" -o jsonpath='{.metadata.generation}')
+            app="$1"; pbase="$2"; jbase="$3"; desired="$4"; rev="$5"
+            rec=$(kubectl -n argocd get application "$app" -o jsonpath='{.status.reconciledAt}')
             cur=$(kubectl -n argocd get application "$app" -o json | jq -cS ".${jbase}.helm.valuesObject // {}")
-            ref=$(kubectl -n argocd get application "$app" -o json | jq -r ".${jbase}.targetRevision // \"\"")
             des=$(echo "$desired" | jq -cS .)
-            if [ "$cur" = "$des" ] && [ "$ref" = "$CHARTS_REF" ]; then
-              echo "  $app already at the candidate set — no patch"
-              rm -f "$GEN_DIR/$app"
-              return
+            if [ "$rev" = "-" ]; then
+              if [ "$cur" = "$des" ]; then
+                echo "  $app values already at the candidate set — no patch"
+                rm -f "$GEN_DIR/$app"
+                return
+              fi
+              kubectl -n argocd patch application "$app" --type=json -p '[
+                {"op":"add","path":"'"$pbase"'/helm/valuesObject","value":'"$desired"'}
+              ]'
+            else
+              ref=$(kubectl -n argocd get application "$app" -o json | jq -r ".${jbase}.targetRevision // \"\"")
+              if [ "$cur" = "$des" ] && [ "$ref" = "$rev" ]; then
+                echo "  $app already at the candidate set — no patch"
+                rm -f "$GEN_DIR/$app"
+                return
+              fi
+              kubectl -n argocd patch application "$app" --type=json -p '[
+                {"op":"replace","path":"'"$pbase"'/targetRevision","value":"'"$rev"'"},
+                {"op":"add","path":"'"$pbase"'/helm/valuesObject","value":'"$desired"'}
+              ]'
             fi
-            kubectl -n argocd patch application "$app" --type=json -p '[
-              {"op":"replace","path":"'"$pbase"'/targetRevision","value":'"$CHARTS_REF_JSON"'},
-              {"op":"add","path":"'"$pbase"'/helm/valuesObject","value":'"$desired"'}
-            ]'
-            echo "$gen" > "$GEN_DIR/$app"
+            echo "$rec" > "$GEN_DIR/$app"
           }
 
           # wait_app <app> — Healthy+Synced, 10s interval, 15m budget. When a
-          # patch WAS applied, additionally require status.observedGeneration
-          # to pass the pre-patch generation first: the patch→poll race
+          # patch WAS applied, additionally require status.reconciledAt to
+          # ADVANCE past the pre-patch value: the patch→poll race
           # (live-verified 2026-11-06) is that health/sync status is STALE
-          # until the controller observes the new spec — without the
-          # generation gate env-prep greenlights runs whose rollout has not
-          # even started.
+          # until the controller's first reconciliation against the new
+          # spec. (Application status has NO observedGeneration on ArgoCD
+          # v3.3.8 — reconciledAt is the field that advances.)
           wait_app() {
             app="$1"
-            gen=$(cat "$GEN_DIR/$app" 2>/dev/null || echo "")
+            base=$(cat "$GEN_DIR/$app" 2>/dev/null || echo "")
             i=0
             while [ $i -lt 90 ]; do
-              out=$(kubectl -n argocd get application "$app" -o jsonpath='{.status.health.status}/{.status.sync.status}/{.status.observedGeneration}' 2>/dev/null || echo "Unknown/Unknown/0")
+              out=$(kubectl -n argocd get application "$app" -o jsonpath='{.status.health.status}/{.status.sync.status}/{.status.reconciledAt}' 2>/dev/null || echo "Unknown/Unknown/")
               echo "  $app: $out"
-              h="${out%%/*}"; rest="${out#*/}"; sy="${rest%%/*}"; og="${rest#*/}"
-              if [ "$h/$sy" = "Healthy/Synced" ] && { [ -z "$gen" ] || [ "$og" -gt "$gen" ] 2>/dev/null; }; then return 0; fi
+              h="${out%%/*}"; rest="${out#*/}"; sy="${rest%%/*}"; rec="${rest#*/}"
+              if [ "$h/$sy" = "Healthy/Synced" ] && { [ -z "$base" ] || [ "$rec" \> "$base" ]; }; then return 0; fi
               i=$((i+1)); sleep 10
             done
             echo "  $app never became Healthy/Synced" >&2
@@ -448,13 +461,13 @@ spec:
           }
 
           echo "== patching inari-e2e-server (charts-ref=$CHARTS_REF, image=$SERVER_IMAGE, ha=$HA)"
-          patch_app inari-e2e-server "/spec/sources/0" "spec.sources[0]" "$SERVER_VALUES"
+          patch_app inari-e2e-server "/spec/sources/0" "spec.sources[0]" "$SERVER_VALUES" "$CHARTS_REF"
 
           echo "== patching inari-e2e-console (charts-ref=$CHARTS_REF, bundle=$CONSOLE_IMAGE)"
-          patch_app inari-e2e-console "/spec/source" "spec.source" "$CONSOLE_VALUES"
+          patch_app inari-e2e-console "/spec/source" "spec.source" "$CONSOLE_VALUES" "$CHARTS_REF"
 
           echo "== patching inari-e2e-nats (ha=$HA)"
-          patch_app inari-e2e-nats "/spec/source" "spec.source" "$NATS_VALUES"
+          patch_app inari-e2e-nats "/spec/source" "spec.source" "$NATS_VALUES" "-"
 
           echo "== waiting for candidate apps"
           wait_app inari-e2e-server
