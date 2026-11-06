@@ -70,9 +70,12 @@ type Env struct {
 	// git://git-service.inari-e2e.svc:9418) — the live-env replacement for
 	// the kind hostPath git root. Empty on the kind path.
 	GitURL string
-	KC     *kc.Client
-	API    *inariapi.Client
-	FGA    *fga.Client
+	// stateClone is the lazily-initialized local clone of the live env's
+	// tenant state repo (showStateFile); "" until the first successful read.
+	stateClone string
+	KC         *kc.Client
+	API        *inariapi.Client
+	FGA        *fga.Client
 }
 
 // Load resolves the suite environment, in priority order:
