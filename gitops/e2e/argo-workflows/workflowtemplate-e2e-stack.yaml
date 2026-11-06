@@ -287,6 +287,11 @@ spec:
           command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
           mkdir -p /artifacts/out
 
+          # JSON-encode the git ref before embedding it in the JSON patches
+          # (raw shell interpolation would break/mangle the patch on a ref
+          # containing a quote or backslash).
+          CHARTS_REF_JSON=$(jq -nc --arg v "$CHARTS_REF" '$v')
+
           if [ "$HA" = "true" ]; then
             SERVER_VALUES=$(jq -nc --arg tag "$SERVER_IMAGE" '{
               replicaCount: 2,
@@ -312,13 +317,13 @@ spec:
 
           echo "== patching inari-e2e-server (charts-ref=$CHARTS_REF, image=$SERVER_IMAGE, ha=$HA)"
           kubectl -n argocd patch application inari-e2e-server --type=json -p '[
-            {"op":"replace","path":"/spec/sources/0/targetRevision","value":"'"$CHARTS_REF"'"},
+            {"op":"replace","path":"/spec/sources/0/targetRevision","value":'"$CHARTS_REF_JSON"'},
             {"op":"add","path":"/spec/sources/0/helm/valuesObject","value":'"$SERVER_VALUES"'}
           ]'
 
           echo "== patching inari-e2e-console (charts-ref=$CHARTS_REF, bundle=$CONSOLE_IMAGE)"
           kubectl -n argocd patch application inari-e2e-console --type=json -p '[
-            {"op":"replace","path":"/spec/source/targetRevision","value":"'"$CHARTS_REF"'"},
+            {"op":"replace","path":"/spec/source/targetRevision","value":'"$CHARTS_REF_JSON"'},
             {"op":"add","path":"/spec/source/helm/valuesObject","value":'"$CONSOLE_VALUES"'}
           ]'
 
@@ -445,8 +450,11 @@ spec:
               secretKeyRef: {name: inari-keycloak-admin, key: client-secret}
         source: |
           set -eu
-          cd /work
-          go run ./scripts/e2e/seed
+          # The seed is a nested Go module (scripts/e2e/seed/go.mod) and the
+          # repo root has no go.mod — `go run ./scripts/e2e/seed` from /work
+          # fails with "go.mod file not found". Run from inside the module.
+          cd /work/scripts/e2e/seed
+          go run .
         volumeMounts:
           - name: work
             mountPath: /work
@@ -666,6 +674,8 @@ spec:
             value: "{{workflow.parameters.mode}}"
           - name: E2E_HA
             value: "{{workflow.parameters.ha}}"
+          - name: INCLUDE_QUARANTINED
+            value: "{{workflow.parameters.include-quarantined}}"
           - name: E2E_MIGRATIONS_DIR
             value: /srv/internal/db/migrations
           - name: E2E_USER
@@ -680,7 +690,8 @@ spec:
 
           case "$E2E_MODE" in
             release|edge) FILTER="(p0||smoke)&&!quarantine";;
-            nightly)      FILTER="p0||p1||p2";;
+            nightly)      FILTER="p0||p1||p2"
+                          [ "$INCLUDE_QUARANTINED" = "true" ] || FILTER="($FILTER)&&!quarantine";;
             smoke)        FILTER="smoke";;
             *) echo "no ginkgo selection for mode $E2E_MODE" >&2; exit 1;;
           esac
@@ -772,13 +783,19 @@ spec:
           - name: E2E_MEMBER_PASSWORD
             valueFrom:
               secretKeyRef: {name: inari-e2e-personas, key: member-password}
+          - name: INCLUDE_QUARANTINED
+            value: "{{workflow.parameters.include-quarantined}}"
         source: |
           set -eu
           # set -- keeps the grep expressions quoted (the | would otherwise
           # be a shell pipe).
           case "$E2E_MODE" in
             release|edge) set -- --grep "@p0|@smoke" --grep-invert @quarantine;;
-            nightly)      set -- --grep "@p0|@p1|@p2";;
+            nightly)      if [ "$INCLUDE_QUARANTINED" = "true" ]; then
+                            set -- --grep "@p0|@p1|@p2"
+                          else
+                            set -- --grep "@p0|@p1|@p2" --grep-invert @quarantine
+                          fi;;
             smoke)        set -- --grep "@smoke";;
             *) echo "no playwright selection for mode $E2E_MODE" >&2; exit 1;;
           esac
@@ -790,7 +807,11 @@ spec:
           # A red suite exits nonzero here — the wait container still uploads
           # the JUnit + report artifacts below (Argo collects outputs on
           # failure), so no exit-code masking needed.
-          PLAYWRIGHT_JUNIT_OUTPUT_NAME="test-results/junit-{{inputs.parameters.shard-safe}}.xml" \
+          # PLAYWRIGHT_JUNIT_OUTPUT_FILE (not _OUTPUT_NAME — that one is only
+          # consulted when the config sets no outputFile, and
+          # playwright.config.ci.ts does) overrides the config's junit path
+          # per shard.
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE="test-results/junit-{{inputs.parameters.shard-safe}}.xml" \
             npx playwright test --config playwright.config.ci.ts \
               "$@" --shard={{inputs.parameters.shard}}
 

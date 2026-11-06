@@ -217,7 +217,10 @@ jobs:
   submit:
     needs: resolve
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Must exceed the workflow's activeDeadlineSeconds (10800s = 3h): if this
+    # job timed out first, the check would go red while the Argo run was
+    # still legitimately in flight (and still holding the env semaphore).
+    timeout-minutes: 185
     env:
       ARGO_SERVER: argo-workflows.7kgroup.org:443
       ARGO_SECURE: "true"

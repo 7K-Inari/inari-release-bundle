@@ -42,9 +42,11 @@ rules:
     resources: ["workflowtaskresults"]
     verbs: ["create", "patch"]
   # Ginkgo suite: handoff CM, toolbox exec, HA disruption pod kills.
+  # "create" is for the chainsaw-verify leg (runs as this SA): the bootstrap
+  # tests kubectl-run ephemeral probe pods (keycloak-realm, openfga-health).
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
