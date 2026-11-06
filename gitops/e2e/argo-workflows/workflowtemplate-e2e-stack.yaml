@@ -1290,6 +1290,13 @@ spec:
             # reflects suite artifacts only.
             mkdir -p /tmp/rp-in
             cp /junit/*.xml /tmp/rp-in/ 2>/dev/null || true
+            # The JUnit import plugin's duration parser is Long/Double-strict:
+            # an empty time attribute (time="") crashes the whole import with
+            # "Error while importing the file. 'empty String'" (live-verified
+            # 2026-11-06 — chainsaw's JUNIT-TEST report leaves the testsuite
+            # Time unset and go-junit-report emits time=""). Strip the empty
+            # attributes; real durations are untouched.
+            sed -i 's/ time=""//g' /tmp/rp-in/*.xml
             if [ "{{workflow.status}}" = "Succeeded" ]; then
               echo '<?xml version="1.0" encoding="UTF-8"?><testsuite name="e2e.run" tests="1" failures="0"><testcase classname="e2e.run" name="workflow-outcome"/></testsuite>' \
                 > /tmp/rp-in/run-outcome.xml
