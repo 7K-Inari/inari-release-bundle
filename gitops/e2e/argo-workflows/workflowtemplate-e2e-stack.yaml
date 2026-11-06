@@ -528,16 +528,16 @@ spec:
           # Chart==component versioning (release.yml seds both from the tag);
           # agent-image=edge pins the TEMPORARY edge chart carrying the
           # discovery.name/namespaceCreate knobs (never a floating tag — see
-          # the step header). Empty until inari-agent #89 merges and the edge
-          # chart is verified; unset means "latest chart" so the step fails
-          # loudly on the missing knobs rather than silently floating.
+          # the step header). 0.6.0-53f8ba4 = inari-agent@53f8ba4 (merge of
+          # #88 knobs + #89 edge publishing), verified via helm show chart +
+          # helm template (knobs render, zero Namespaces with the guard).
           #
           # Tag-prefix convention split (registry-verified): the agent CHART
           # version is unprefixed (0.5.1) but the agent IMAGE tag is
           # v-prefixed (v0.5.1) — normalize the image tag defensively (bare
           # X.Y.Z only; "edge" and per-commit edge builds stay as-is). The
           # systemic convention fix is a separate cross-repo issue.
-          AGENT_CHART_VERSION_EDGE=""
+          AGENT_CHART_VERSION_EDGE="0.6.0-53f8ba4"
           VERSION_ARGS=""
           AGENT_TAG="$AGENT_IMAGE"
           case "$AGENT_TAG" in
