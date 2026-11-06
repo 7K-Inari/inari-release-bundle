@@ -393,8 +393,18 @@ rules:
     verbs: ["get", "patch", "update"]
   # create cannot be resourceNames-restricted (RBAC semantics); get/update/
   # patch/delete stay pinned to the e2e agent's discovery RBAC.
+  # escalate+bind (live-verified 2026-11-06): the discovery ClusterRole the
+  # chart renders grants permissions this SA does not itself hold (cluster
+  # discovery reads), so plain create is rejected by the apiserver's
+  # RBAC escalation prevention. escalate lets it CREATE such roles, bind
+  # lets it REFERENCE them in bindings. Accepted blast radius (same Q11
+  # posture as create): this SA exists only to install the e2e agent chart
+  # and lives in short-lived workflow pods.
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles", "clusterrolebindings"]
+    resources: ["clusterroles"]
+    verbs: ["create", "escalate", "bind"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings"]
     verbs: ["create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles", "clusterrolebindings"]
@@ -414,6 +424,41 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: e2e-agent-ensure
+    namespace: inari-e2e
+---
+# Namespaces are cluster-scoped, so a namespaced Role cannot grant reading
+# even THIS namespace — but chainsaw (DAG leg + PostSync hook) and parts of
+# the Ginkgo suite assert the namespace exists (live-verified 2026-11-06:
+# chainsaw INTERNAL ERROR "cannot get resource namespaces"). get pinned to
+# the two e2e namespaces by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-namespaces-read
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["inari-e2e", "inari-e2e-agent"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-namespaces-read-runner
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: e2e-namespaces-read
+subjects:
+  - kind: ServiceAccount
+    name: e2e-runner
+    namespace: inari-e2e
+  - kind: ServiceAccount
+    name: e2e-chainsaw-hook
     namespace: inari-e2e
 ---
 # e2e-submitter — GHA thin-wrapper identity (argo-server client authMode).

@@ -17,7 +17,9 @@ spec:
     targetRevision: 2.15.2
     helm:
       releaseName: nats
-      values: |
+      # valuesObject, NOT values — ArgoCD never merges the two (see the
+      # server app). env-prep flips config.cluster per HA run.
+      valuesObject:
         fullnameOverride: nats
         config:
           cluster:
@@ -40,6 +42,7 @@ spec:
     namespace: inari-e2e
   syncPolicy:
     automated:
+      prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true

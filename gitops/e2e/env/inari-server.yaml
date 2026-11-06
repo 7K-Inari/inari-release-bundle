@@ -28,7 +28,11 @@ spec:
       path: charts/inari-server
       helm:
         releaseName: inari-server
-        values: |
+        # valuesObject, NOT values: ArgoCD's ValuesYAML() returns
+        # valuesObject XOR values — it NEVER merges them (v3.3.8
+        # pkg/apis/application/v1alpha1/values.go; "takes precedence" means
+        # REPLACES). env-prep patches this object wholesale per run.
+        valuesObject:
           replicaCount: 1
           image:
             repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-server
@@ -119,6 +123,9 @@ spec:
     namespace: inari-e2e
   syncPolicy:
     automated:
+      # prune: env-prep candidate flips routinely add/remove resources
+      # (redis on HA flips); without prune the removed ones linger.
+      prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true

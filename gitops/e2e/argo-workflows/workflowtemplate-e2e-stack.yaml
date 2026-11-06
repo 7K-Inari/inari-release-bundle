@@ -273,11 +273,12 @@ spec:
     # changes converge post-merge and are exercised by the nightly.
     #
     # HA flip (ha=true): NATS 3-node + R=3 streams, server 2 replicas + redis
-    # cache + scaffold knobs (ported from suite/provision.go). valuesObject is
-    # REPLACED wholesale per run, so a non-HA run deterministically resets
-    # HA-only keys back to the file baseline.
+    # cache + scaffold knobs (ported from suite/provision.go). Every patch
+    # writes the COMPLETE valuesObject (baseline + flip) — ArgoCD never merges
+    # a values string with valuesObject — so a non-HA run deterministically
+    # resets HA-only keys back to the file baseline.
     #
-    # KEEP IN SYNC: the HA extraEnv list embeds the baseline extraEnv from
+    # KEEP IN SYNC: the valuesObject bodies below embed the baselines from
     # gitops/e2e/env/inari-server.yaml (valuesObject arrays replace, they do
     # not merge) — bump both sides together.
     - name: env-prep
@@ -304,28 +305,99 @@ spec:
           # containing a quote or backslash).
           CHARTS_REF_JSON=$(jq -nc --arg v "$CHARTS_REF" '$v')
 
-          if [ "$HA" = "true" ]; then
-            SERVER_VALUES=$(jq -nc --arg tag "$SERVER_IMAGE" '{
-              replicaCount: 2,
-              image: {tag: $tag},
-              cache: {backend: "redis"},
-              redis: {enabled: true, image: {registry: "docker.io", repository: "bitnamilegacy/redis", tag: "8.2.1"}},
-              nats: {streamReplicas: 3},
+          # KEEP IN SYNC with gitops/e2e/env/*.yaml: the patches carry the
+          # COMPLETE desired valuesObject — ArgoCD's ValuesYAML() returns
+          # valuesObject XOR values, it never merges (v3.3.8 values.go;
+          # "valuesObject takes precedence over values" = REPLACES). A delta
+          # patch would silently drop the whole baseline (live-verified
+          # 2026-11-06: chart defaults rendered, embedded nats + kubeproxy
+          # came up). The env files hold the same baseline as valuesObject.
+          SERVER_VALUES=$(jq -nc --arg tag "$SERVER_IMAGE" --arg ha "$HA" '
+            def base: {
+              replicaCount: 1,
+              image: {
+                repository: "harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-server",
+                tag: $tag,
+                pullPolicy: "Always"
+              },
+              nats: {enabled: false, url: "nats://nats:4222", streamReplicas: 1},
+              kubeproxy: {enabled: false},
+              keycloak: {
+                baseUrl: "http://keycloak-service:8080",
+                realm: "inari",
+                adminSecret: {name: "inari-keycloak-admin"}
+              },
+              oidc: {issuerUrl: "https://auth-e2e.7kgroup.org/realms/inari"},
+              gateway: {name: "internet-gateway", namespace: "istio", sectionName: "https-7kgroup"},
+              route: {
+                enabled: true,
+                hostnames: ["inari-e2e.7kgroup.org"],
+                pathPrefix: "/api",
+                agentHostnames: ["inari-e2e-gw.7kgroup.org"],
+                annotations: {"external-dns.kubernetes.io/cloudflare-proxied": "false"}
+              },
               extraEnv: [
                 {name: "INARI_AGENT_GATEWAY_ADDRESS", value: "https://inari-e2e-gw.7kgroup.org"},
                 {name: "INARI_AGENT_IMAGE_REPO", value: "harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent"},
                 {name: "INARI_GIT_PROVIDER", value: "local"},
                 {name: "INARI_GIT_LOCAL_ROOT", value: "/var/lib/inari/git"},
-                {name: "INARI_LOG_FORMAT", value: "json"},
-                {name: "INARI_SCAFFOLD_TEMPLATE_DIR", value: "/templates"},
-                {name: "INARI_SCAFFOLD_GIT_ORG", value: "e2e-platform"},
-                {name: "INARI_SCAFFOLD_RECONCILE_INTERVAL", value: "5s"}
-              ]
-            }')
-          else
-            SERVER_VALUES=$(jq -nc --arg tag "$SERVER_IMAGE" '{image: {tag: $tag}}')
-          fi
-          CONSOLE_VALUES=$(jq -nc --arg tag "$CONSOLE_IMAGE" '{bundle: {tag: $tag}}')
+                {name: "INARI_LOG_FORMAT", value: "json"}
+              ],
+              extraVolumes: [{name: "git-root", persistentVolumeClaim: {claimName: "inari-e2e-git"}}],
+              extraVolumeMounts: [{name: "git-root", mountPath: "/var/lib/inari/git"}],
+              vault: {
+                addr: "https://vault.int.7kgroup.org",
+                kvMount: "secret",
+                authMethod: "kubernetes",
+                role: "inari-e2e-server"
+              }
+            };
+            if $ha == "true" then
+              base
+              | .replicaCount = 2
+              | .cache = {backend: "redis"}
+              | .redis = {enabled: true, image: {registry: "docker.io", repository: "bitnamilegacy/redis", tag: "8.2.1"}}
+              | .nats.streamReplicas = 3
+              | .extraEnv += [
+                  {name: "INARI_SCAFFOLD_TEMPLATE_DIR", value: "/templates"},
+                  {name: "INARI_SCAFFOLD_GIT_ORG", value: "e2e-platform"},
+                  {name: "INARI_SCAFFOLD_RECONCILE_INTERVAL", value: "5s"}
+                ]
+            else base end')
+          CONSOLE_VALUES=$(jq -nc --arg tag "$CONSOLE_IMAGE" '{
+            bundle: {
+              repository: "harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-ui-bundle",
+              tag: $tag
+            },
+            gateway: {name: "internet-gateway", namespace: "istio", sectionName: "https-7kgroup"},
+            route: {
+              enabled: true,
+              hostnames: ["inari-e2e.7kgroup.org"],
+              pathPrefix: "/",
+              annotations: {"external-dns.kubernetes.io/cloudflare-proxied": "false"}
+            },
+            keycloakUrl: "https://auth-e2e.7kgroup.org",
+            keycloakRealm: "inari",
+            keycloakClientId: "inari-ui",
+            apiBaseUrl: "/api/v1"
+          }')
+          # Nats: full baseline either way — HA flips the cluster block,
+          # non-HA deterministically writes the single-node baseline back
+          # (no get-check/remove dance).
+          NATS_VALUES=$(jq -nc --arg ha "$HA" '{
+            fullnameOverride: "nats",
+            config: {
+              cluster: (if $ha == "true" then {enabled: true, replicas: 3} else {enabled: false} end),
+              jetstream: {
+                enabled: true,
+                fileStore: {
+                  enabled: true,
+                  pvc: {size: "1Gi", storageClassName: "longhorn-hdd-no-backup"}
+                }
+              }
+            },
+            container: {merge: {resources: {requests: {cpu: "50m", memory: "128Mi"}}}}
+          }')
 
           echo "== patching inari-e2e-server (charts-ref=$CHARTS_REF, image=$SERVER_IMAGE, ha=$HA)"
           kubectl -n argocd patch application inari-e2e-server --type=json -p '[
@@ -339,20 +411,10 @@ spec:
             {"op":"add","path":"/spec/source/helm/valuesObject","value":'"$CONSOLE_VALUES"'}
           ]'
 
-          if [ "$HA" = "true" ]; then
-            echo "== patching inari-e2e-nats (3-node JetStream)"
-            kubectl -n argocd patch application inari-e2e-nats --type=json -p '[
-              {"op":"add","path":"/spec/source/helm/valuesObject","value":{"config":{"cluster":{"enabled":true,"replicas":3}}}}
-            ]'
-          else
-            # Deterministic reset after a HA run (valuesObject replaces, so
-            # removing it restores the file baseline single-node config).
-            if kubectl -n argocd get application inari-e2e-nats -o jsonpath='{.spec.source.helm.valuesObject}' 2>/dev/null | grep -q .; then
-              kubectl -n argocd patch application inari-e2e-nats --type=json -p '[
-                {"op":"remove","path":"/spec/source/helm/valuesObject"}
-              ]'
-            fi
-          fi
+          echo "== patching inari-e2e-nats (ha=$HA)"
+          kubectl -n argocd patch application inari-e2e-nats --type=json -p '[
+            {"op":"add","path":"/spec/source/helm/valuesObject","value":'"$NATS_VALUES"'}
+          ]'
 
           wait_app() { # app — Healthy+Synced, 10s interval, 15m budget
             i=0
@@ -369,7 +431,7 @@ spec:
           echo "== waiting for candidate apps"
           wait_app inari-e2e-server
           wait_app inari-e2e-console
-          [ "$HA" = "true" ] && wait_app inari-e2e-nats
+          wait_app inari-e2e-nats
 
           echo "== platform apps health check (never mutated)"
           for app in inari-e2e-env-extras inari-e2e-platform-config inari-e2e-openfga inari-e2e-git-service; do
