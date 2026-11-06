@@ -678,6 +678,13 @@ spec:
           # public hostname is for external clusters).
           # kubectlTunnel.enabled=false: kubeproxy is disabled on the e2e env;
           # the tunnel chain stays docker-only.
+          # pullPolicy: floating tags need Always — with IfNotPresent the node
+          # serves its FIRST cached "edge" manifest forever on this long-lived
+          # cluster (live-verified 2026-11-06: agent-image=edge resolved to a
+          # stale pre-#90 image and crash-looped on the inari-system
+          # registration-CM lookup that #90 fixed).
+          PULL_POLICY=IfNotPresent
+          [ "$AGENT_IMAGE" = "edge" ] && PULL_POLICY=Always
           # Memory: no override anymore — the chart defaults ARE the measured
           # values since inari-agent#91 (128Mi/512Mi; the capability watchers'
           # initial LIST storm climbed ~1.3MB/s past the old 128Mi limit at
@@ -707,7 +714,7 @@ spec:
           image:
             repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent
             tag: "$AGENT_TAG"
-            pullPolicy: IfNotPresent
+            pullPolicy: $PULL_POLICY
           config:
             tenantID: "$ORG_ID"
             controlPlane: http://inari-server.inari-e2e.svc:8080
@@ -1316,14 +1323,22 @@ spec:
 
             IMPORTED=""
             for attempt in 1 2 3; do
-              if curl -sf -m 120 -X POST "$RP_ENDPOINT/api/v1/plugin/$RP_PROJECT/junit/import" \
+              # No -f: capture the HTTP code + response body — an unexplained
+              # "import failed" costs a debug pod to diagnose (learned the
+              # hard way, 2026-11-06: a bad API-key value was indistinguishable
+              # from a plugin outage in the logs).
+              CODE=$(curl -s -m 120 -o /tmp/rp-resp.txt -w '%{http_code}' -X POST \
+                  "$RP_ENDPOINT/api/v1/plugin/$RP_PROJECT/junit/import" \
                   -H "Authorization: Bearer $RP_API_KEY" \
                   -F "file=@/tmp/launch.zip;type=application/x-zip-compressed" \
-                  -F "launchImportRq=$RQ;type=application/json"; then
-                IMPORTED=1
-                break
-              fi
-              echo "  import attempt $attempt failed — retrying in 10s"
+                  -F "launchImportRq=$RQ;type=application/json" 2>/dev/null) || CODE="000"
+              case "$CODE" in
+                2*)
+                  IMPORTED=1
+                  echo "  import accepted (HTTP $CODE): $(head -c 200 /tmp/rp-resp.txt 2>/dev/null)"
+                  break;;
+              esac
+              echo "  import attempt $attempt failed (HTTP $CODE): $(head -c 300 /tmp/rp-resp.txt 2>/dev/null)"
               sleep 10
             done
 
