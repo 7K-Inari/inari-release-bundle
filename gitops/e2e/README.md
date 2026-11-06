@@ -97,7 +97,9 @@ The W3 seed step resolves the discovered values (Keycloak user id, org ids,
 cluster id — the kind-era `Handoff` struct fields) once after every
 env-prep and publishes them as ConfigMap **`e2e-handoff`** in namespace
 `inari-e2e` (keys: `namespace`, `tenant`, `kc_uid`, `org_kc_id`,
-`cluster_id`, `org_id`, `toolbox` — the curl-transport pod the Go suite
+`cluster_id`, `org_id`, `agent_namespace` — the agent chart's namespace,
+from `E2E_AGENT_NAMESPACE`, so suites never hardcode `inari-system` —
+`toolbox` — the curl-transport pod the Go suite
 execs into, see `env-extras/toolbox.yaml`; the kind-era
 `git_host_dir`/`agent_chart_dir` are gone — replaced by `E2E_GIT_URL` / the
 env's fixed charts). Suites read the ConfigMap instead of a handoff JSON
