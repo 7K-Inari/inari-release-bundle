@@ -20,6 +20,12 @@ Idempotent seed for the e2e environment, running as a workflow step between
    tenant's KC organization. Passwords converge from the `E2E_*_PASSWORD`
    contract variables (the Vault-backed `inari-e2e-personas` secret on the
    live env) — a Vault rotation propagates on the next seed run.
+   Plus **one non-persona platform-ops identity** (`e2e-ops`,
+   `E2E_OPS_USER`/`E2E_OPS_PASSWORD`, secret key `ops-password`): a
+   `platform-admins` member the janitor's approve step authenticates as —
+   inari-server forbids a requester deciding their own decommission request
+   (four-eyes), and the suite personas are deliberately not platform-admins.
+   It gets NO role assignments and NO suite consumes it.
 4. **Role assignment through the real inari-server membership API**
    (`PUT /api/v1/tenants/{org}/members/{subject}`) — never KC groups, never
    direct DB. A broken roles/members API fails the seed loudly (P0 signal).
@@ -42,7 +48,13 @@ Idempotent seed for the e2e environment, running as a workflow step between
 - `e2e-member` is the only persona whose role may change; the role-lifecycle
   spec owns it and MUST restore it to role-less. The seed detects a leaked
   role on `e2e-member` and **warns** — it never silently repairs spec state.
-- KC users are NOT added to `platform-admins` (only `dev-admin` is).
+- KC users are NOT added to `platform-admins` (only `dev-admin` and the
+  non-persona `e2e-ops` ops identity are).
+
+`e2e-ops` is **not a test persona**: it exists so the janitor CronWorkflow
+can *approve* decommission requests it did not create (a requester may never
+decide their own request). It carries no tenant role assignment, appears in
+no suite, and must never be used as a test identity.
 
 ## Environment
 
@@ -55,6 +67,7 @@ Idempotent seed for the e2e environment, running as a workflow step between
 | `E2E_GIT_URL` | no | — (proof skipped) | in-cluster git service base (`git://…:9418`) |
 | `E2E_USER` / `E2E_PASSWORD` | no | `dev-admin` / `dev-admin` | the dev-admin persona |
 | `E2E_{OPERATOR,EDITOR,VIEWER,MEMBER}_PASSWORD` | no | = username | persona passwords (mounted from `inari-e2e-personas`) |
+| `E2E_OPS_USER` / `E2E_OPS_PASSWORD` | no | `e2e-ops` / `e2e-ops` | non-persona platform-ops identity (janitor approve step; secret key `ops-password`) |
 | `SEED_KC_ADMIN_CLIENT_SECRET` | no | read from secret `inari-keycloak-admin` | the `inari-platform-admin` client secret |
 | `E2E_HANDOFF_CONFIGMAP` | CM mode | — | `namespace/name` of the handoff ConfigMap; unset = local mode |
 | `E2E_TOOLBOX_NAME` | no | `e2e-toolbox` | toolbox pod name |
@@ -94,7 +107,7 @@ go run ./scripts/e2e/seed
   `charts-ref`; command `go run ./scripts/e2e/seed` (cold build ~1–2 min).
 - **Env:** the table above; persona passwords + `SEED_KC_ADMIN_CLIENT_SECRET`
   via `secretKeyRef` (`inari-e2e-personas` keys
-  `{dev-admin,operator,editor,viewer,member}-password`;
+  `{dev-admin,operator,editor,viewer,member,ops}-password`;
   `inari-keycloak-admin` key `client-secret`).
 - **SA RBAC (ns inari-e2e):** `configmaps` get/create/update (handoff —
   PUT with resourceVersion, deliberately no patch),

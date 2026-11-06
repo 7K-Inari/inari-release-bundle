@@ -37,6 +37,12 @@
 // never mutate e2e-operator/e2e-editor/e2e-viewer assignments or dev-admin;
 // e2e-member is owned by the role-lifecycle spec which must restore it
 // role-less — the seed warns on a leak but never repairs spec state.
+//
+// Besides the personas the seed converges ONE non-persona identity:
+// e2e-ops (E2E_OPS_USER/E2E_OPS_PASSWORD), a platform-admins member used by
+// the janitor's approve step (a requester may never decide their own
+// decommission — four-eyes). It carries no role assignments and no suite
+// consumes it.
 package main
 
 import (
@@ -63,6 +69,14 @@ type config struct {
 	Password string // E2E_PASSWORD
 	// PersonaPasswords maps persona username -> password.
 	PersonaPasswords map[string]string
+
+	// OpsUser/OpsPassword are the NON-persona platform-ops identity
+	// (E2E_OPS_USER/E2E_OPS_PASSWORD): the janitor's approve step runs as it
+	// — inari-server forbids a requester deciding their own decommission, and
+	// the suite personas are deliberately not platform-admins. No role
+	// assignments, no suite consumption.
+	OpsUser     string
+	OpsPassword string
 
 	AdminClientSecret string // SEED_KC_ADMIN_CLIENT_SECRET (else read from the inari-keycloak-admin secret)
 
@@ -103,6 +117,8 @@ func loadConfig() (config, error) {
 	cfg.GitURL = os.Getenv("E2E_GIT_URL")
 	cfg.User = envOr("E2E_USER", "dev-admin")
 	cfg.Password = envOr("E2E_PASSWORD", "dev-admin")
+	cfg.OpsUser = envOr("E2E_OPS_USER", "e2e-ops")
+	cfg.OpsPassword = envOr("E2E_OPS_PASSWORD", "e2e-ops")
 	cfg.PersonaPasswords = map[string]string{}
 	for _, p := range Personas {
 		key := "E2E_" + strings.ToUpper(strings.TrimPrefix(p.Username, "e2e-")) + "_PASSWORD"
@@ -234,6 +250,19 @@ func run() error {
 	}
 	if err := kc.AddUserToGroup(at, devAdminID, groupID); err != nil {
 		return fmt.Errorf("adding dev-admin to platform-admins: %w", err)
+	}
+
+	// --- A6: e2e-ops platform-ops identity (NOT a persona) ----------------
+	// The janitor's approve step authenticates as this user: inari-server
+	// forbids a requester deciding their own decommission request, and the
+	// suite personas are deliberately NOT platform-admins (four-eyes).
+	// platform-admins member, no role assignments, no suite consumption.
+	opsID, err := ensureUser(kc, at, cfg.OpsUser, cfg.OpsPassword, "E2E", "Ops")
+	if err != nil {
+		return fmt.Errorf("ensuring %s: %w", cfg.OpsUser, err)
+	}
+	if err := kc.AddUserToGroup(at, opsID, groupID); err != nil {
+		return fmt.Errorf("adding %s to platform-admins: %w", cfg.OpsUser, err)
 	}
 
 	// --- A4: token probe (tripwire for the scope repair) ------------------
