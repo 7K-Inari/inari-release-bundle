@@ -30,10 +30,12 @@ spec:
           kind: StatefulSet
           metadata:
             name: nats
-          spec:
-            replicas: ($values.nats.replicas)
-          status:
-            readyReplicas: ($values.nats.replicas)
+          # Count-agnostic ("fully rolled"): the persistent e2e env flips
+          # nats between 1 (baseline) and 3 (env-prep HA runs), and this
+          # smoke set also fires as the ArgoCD PostSync hook in BOTH
+          # shapes. ($values.nats.replicas pinned the kind-era HA shape
+          # and failed the non-HA baseline — live-verified 2026-11-06.)
+          (spec.replicas == status.readyReplicas): true
   - name: nats-box Deployment available
     try:
     - assert:

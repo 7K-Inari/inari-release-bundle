@@ -5,8 +5,10 @@
 #
 # Algorithm (identity: dev-admin persona — platform-admins member via the
 # seed's GapKCPlatformGroup step, so it can request AND approve decommissions):
-#   1. list tenants; select slugs e2e-<runId>-* (runId = a workflow uid), never
-#      the seeded default e2e-org;
+#   1. list tenants; select slugs e2e-* (every suite-created org carries the
+#      prefix by convention — workflow runs use e2e-<workflow-uid>-*, manual/
+#      local runs use their own runIds, e.g. the e2e-w3a-* leaks), never the
+#      seeded default e2e-org;
 #   2. skip orgs whose runId belongs to a Running/Pending workflow, and orgs
 #      younger than retention-days (createdAt — RFC3339 UTC compares via jq);
 #   3. DELETE /tenants/{org} {force:true} → approvalId (idempotent re-request:
@@ -78,9 +80,12 @@ spec:
           curl -sf "$API/tenants" -H "$AUTH" | jq -r '.tenants[] | [.slug, .createdAt, .status] | @tsv' \
           | while IFS="$(printf '\t')" read -r slug created status; do
               case "$slug" in
-                e2e-????????-????-????-????-????????????-*) ;;
+                e2e-org) continue;;  # the seeded default tenant — never reap
+                e2e-*) ;;
                 *) continue;;
               esac
+              # Active-run exclusion: only uid-shaped runIds can map to a
+              # workflow; other runIds never match the uid list below.
               run_id=$(echo "$slug" | cut -c5-40)
               if echo "$ACTIVE" | grep -q "$run_id"; then
                 echo "skip $slug — belongs to an active run"
@@ -132,7 +137,7 @@ spec:
           # — so their orgs never trip this check.)
           LEFT=$(curl -sf "$API/tenants" -H "$AUTH" \
             | jq -r --argjson cut "$CUTOFF" '.tenants[]
-                | select(.slug | test("^e2e-[0-9a-f-]{36}-"))
+                | select((.slug | startswith("e2e-")) and .slug != "e2e-org")
                 | select((.createdAt | fromdateiso8601) <= $cut)
                 | .slug' || true)
           if [ "$DRY_RUN" != "true" ] && [ -n "$LEFT" ]; then
