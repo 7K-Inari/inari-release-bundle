@@ -209,7 +209,7 @@ func (c *KC) EnsureProtocolMapper(adminToken, clientUUID, name string, body map[
 			return false, nil
 		}
 	}
-	_, _, err = c.api(adminToken, "POST", "/clients/"+clientUUID+"/protocol-mappers/add-models", body)
+	_, _, err = c.api(adminToken, "POST", "/clients/"+clientUUID+"/protocol-mappers/models", body)
 	if err != nil {
 		return false, err
 	}

@@ -2,14 +2,14 @@
 //
 // Live e2e environment topology (post kind): inari-server runs with
 // INARI_GIT_PROVIDER=local and writes real bare repos (go-git) into the
-// shared RWX PVC at <root>/<org>/<name>.git; the git-service Deployment
-// serves that PVC over the git protocol (git daemon --export-all,
-// ClusterIP :9418 — E2E_GIT_URL). The seed step materializes the tenant's
-// default state repo (e2e-org/e2e-org-inari-state) via a platform-resources
-// reconcile, so before exercising the UI write path this spec asserts the
-// CURRENT config's repo is actually served — the precondition proves
-// server -> PVC -> daemon end to end. (Skipped when GIT_URL is unset —
-// the legacy kind local loop has no daemon.)
+// shared RWX PVC at <root>/<repo>.git; the git-service Deployment serves
+// that PVC over the git protocol (git daemon --export-all, ClusterIP :9418
+// — E2E_GIT_URL). The tenant's default state repo (the bare-name convention
+// e2e-org-inari-state) is materialized by the tenant-created RBAC
+// materialization the seed triggers, so before exercising the UI write path
+// this spec asserts the CURRENT config's repo is actually served — the
+// precondition proves server -> PVC -> daemon end to end. (Skipped when
+// GIT_URL is unset — the legacy kind local loop has no daemon.)
 //
 // As dev-admin in tenant "E2E Org" (slug e2e-org): point the org's git
 // config at a NEW unique state repo (e2e-org/e2e-<runId>-*-state) through

@@ -279,20 +279,24 @@ func run() error {
 		return err
 	}
 
-	// --- B3: default git-config --------------------------------------------
-	defaultRepo := cfg.TenantSlug + "/" + cfg.TenantSlug + "-inari-state"
-	if err := ensureGitConfig(api, cfg.TenantSlug, defaultRepo); err != nil {
+	// --- B3 + B4: default git-config and the git write-path proof ----------
+	// The default repo follows the server's own convention for the local
+	// provider (bare <slug>-inari-state — INARI_GIT_STATE_REPO_ORG is empty):
+	// the tenant-created RBAC-materialization event commits the baseline there
+	// automatically, so no synthetic trigger is needed. (The retired .mjs
+	// seeded the org-prefixed form, which nothing ever materialized — the
+	// kind hostPath never surfaced that.)
+	defaultRepo := cfg.TenantSlug + "-inari-state"
+	repoInForce, err := ensureGitConfig(api, cfg.TenantSlug, defaultRepo)
+	if err != nil {
 		return err
 	}
-
-	// --- B4: git write-path proof (server -> PVC -> git-daemon) -----------
 	if cfg.GitURL != "" {
-		if err := api.ReconcilePlatformResources(cfg.TenantSlug); err != nil {
-			return fmt.Errorf("triggering platform-resources reconcile: %w", err)
-		}
-		repoURL := strings.TrimRight(cfg.GitURL, "/") + "/" + defaultRepo + ".git"
+		repoURL := strings.TrimRight(cfg.GitURL, "/") + "/" + repoInForce + ".git"
 		if err := waitGitServed(repoURL, 180*time.Second, 5*time.Second); err != nil {
-			return fmt.Errorf("git write-path proof failed: %w", err)
+			return fmt.Errorf("git write-path proof failed for %s: %w "+
+				"(the tenant-created RBAC materialization never landed — check the rbacmaterialize consumer)",
+				repoURL, err)
 		}
 		logf("git service serves %s", repoURL)
 	}
@@ -388,6 +392,15 @@ func ensureUser(kc *KC, at, username, password, firstName, lastName string) (str
 	stored["emailVerified"] = true
 	stored["requiredActions"] = []string{}
 	stored["enabled"] = true
+	// KC 26's declarative user profile marks firstName/lastName required;
+	// the realm import ships dev-admin without them and every grant dies
+	// with "Account is not fully set up". Fill only when absent.
+	if stored["firstName"] == nil || stored["firstName"] == "" {
+		stored["firstName"] = firstName
+	}
+	if stored["lastName"] == nil || stored["lastName"] == "" {
+		stored["lastName"] = lastName
+	}
 	if err := kc.PutUser(at, id, stored); err != nil {
 		return "", fmt.Errorf("converging user %s: %w", username, err)
 	}
@@ -556,20 +569,22 @@ func ensureRoleAssignments(api *API, userIDs map[string]string, tenant string) e
 // ensureGitConfig seeds a stable default exactly once (the server 404s
 // until the first write and there is no DELETE; the git-config spec saves
 // and restores the ORIGINAL repo, so a config must exist before it runs).
-func ensureGitConfig(api *API, tenant, defaultRepo string) error {
+// Returns the repo currently in force (the seeded default, or whatever a
+// previous run/environment set).
+func ensureGitConfig(api *API, tenant, defaultRepo string) (string, error) {
 	cfg, err := api.GetGitConfig(tenant)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if cfg != nil {
-		logf("git-config for %s already set — skipped", tenant)
-		return nil
+		logf("git-config for %s already set (%s) — skipped", tenant, cfg.Repo)
+		return cfg.Repo, nil
 	}
 	if err := api.PutGitConfig(tenant, defaultRepo); err != nil {
-		return fmt.Errorf("seeding git-config: %w", err)
+		return "", fmt.Errorf("seeding git-config: %w", err)
 	}
 	logf("git-config for %s: seeded %s (direct)", tenant, defaultRepo)
-	return nil
+	return defaultRepo, nil
 }
 
 // fatalError marks a poll callback error as final (no retry).

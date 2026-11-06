@@ -193,11 +193,3 @@ func (a *API) PutGitConfig(org, repo string) error {
 		"repo": repo, "commitPolicy": "direct",
 	}, nil)
 }
-
-// ReconcilePlatformResources triggers a re-render + commit of the tenant's
-// manifests into its configured state repo — the materializing action that
-// makes the local provider's EnsureRepo create the bare repo the git
-// service then serves (B4 git write-path proof).
-func (a *API) ReconcilePlatformResources(org string) error {
-	return a.call("POST", "/tenants/"+org+"/platform-resources/reconcile", nil, nil)
-}

@@ -24,9 +24,11 @@ Idempotent seed for the e2e environment, running as a workflow step between
    (`PUT /api/v1/tenants/{org}/members/{subject}`) — never KC groups, never
    direct DB. A broken roles/members API fails the seed loudly (P0 signal).
 5. **The default tenant, cluster, and git-config** (`e2e-org`, `e2e-self`,
-   `e2e-org/e2e-org-inari-state`), plus the **git write-path proof**: a
-   platform-resources reconcile followed by a `git ls-remote` poll against
-   `E2E_GIT_URL` (server → PVC → git-daemon).
+   `e2e-org-inari-state` — the server's bare-name convention for the local
+   provider), plus the **git write-path proof**: a `git ls-remote` poll
+   against `E2E_GIT_URL` until the tenant's state repo is served
+   (server → PVC → git-daemon; the tenant-created RBAC-materialization
+   event commits the baseline there — no synthetic trigger needed).
 6. **The `e2e-handoff` ConfigMap** — `namespace`, `toolbox`, `tenant`,
    `kc_uid`, `org_kc_id`, `cluster_id`, `org_id` (the exact key set
    `scripts/e2e/stack/suite/env.go` reads via `E2E_HANDOFF_CONFIGMAP`) —
