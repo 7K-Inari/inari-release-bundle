@@ -684,6 +684,12 @@ spec:
             --set config.controlPlane=http://inari-server.inari-e2e.svc:8080 \
             --set config.registrationToken="$REG_TOKEN" \
             --set config.clusterLabels=e2e=true \
+            # Memory headroom (live-verified OOM loop): the capability
+            # watchers' initial LIST against a real cluster climbs ~1.3MB/s
+            # past the chart's 128Mi default at ~75s — cgroup SIGKILL
+            # (reported as exit 137 / reason Error, no OOMKilled marker).
+            --set resources.requests.memory=128Mi \
+            --set resources.limits.memory=512Mi \
             --set config.helmNamespaces=inari-e2e-agent \
             --set kubectlTunnel.enabled=false \
             --set oidcSecret.create=true \
