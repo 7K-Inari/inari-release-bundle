@@ -1,21 +1,18 @@
 name: release-e2e
 
-# Release-PR gate for the bundle: when release-please opens/updates a
-# Release PR (chart version + appVersion bumps), this workflow proves the
-# bundle releasable before merge:
-#   1. resolve            — read charts/inari-server appVersion, resolve the
-#                           matching inari-server git tag vX.Y.Z.
-#   2. server-integration — run the full `go test -tags=integration` suite
-#                           against that exact tag (the artifact being
-#                           released, not a floating branch).
-  #   3. golden-path        — REMOVED from the gate (2026-10-29, owner
-  #                           decision): the kind-based bundle e2e stack is
-  #                           being reworked onto a live persistent test
-  #                           environment with a structured testing framework;
-  #                           the ephemeral path was too fragile/slow to gate
-  #                           milestone work (ubuntu-26.04 runner regressions).
-  #                           The reusable e2e-stack.yaml stays for the
-  #                           non-blocking nightly and the rework.
+# Release-PR gate for the bundle, THIN WRAPPER edition (e2e migration W3b):
+# the e2e stack no longer runs here — this workflow detects Release PRs,
+# resolves the exact candidate artifact set, submits the Argo
+# WorkflowTemplate e2e-stack on the persistent e2e environment
+# (gitops/e2e/argo-workflows/), waits for it, and posts the Argo UI +
+# ReportPortal launch links to the PR. All orchestration (env-prep, seed,
+# suites, JUnit upload) lives in the cluster.
+#
+#   1. resolve — candidate set from the PR: charts-ref = PR head SHA;
+#      server/console/agent image tags from the bumped chart appVersions
+#      (agent: the platform chart's agent.recommended); cosign-verify=true,
+#      quarantined excluded (hard rule 5: exactly this artifact set).
+#   2. submit  — argo submit --from workflowtemplate/e2e-stack --wait.
 #
 # Trigger: pull_request on release-please Release PRs only (branch prefix
 # `release-please--` or Chart.yaml/appVersion changes), plus
@@ -24,38 +21,46 @@ name: release-e2e
 # branches always live in this repo, so no untrusted checkout ever gets
 # secrets. Fork PRs are hard-skipped.
 #
+# PREREQUISITES (post-merge, one-time):
+#   - repo secret ARGO_TOKEN: the e2e-submitter ServiceAccount token
+#     (Secret e2e-submitter-token in ns inari-e2e — created by
+#     gitops/e2e/argo-workflows/rbac.yaml).
+#   - the public argo-workflows route (argo-workflows.7kgroup.org) from the
+#     accompanying 7k-app-of-apps PR.
+#
 # REQUIRED CHECK: once this workflow has a green live run, it becomes a
 # required check on Release PRs. Enabling that is a MANUAL branch-
-# protection/admin step (Settings → Branches → require `release-e2e` on
-# the release-please branches / main); it is intentionally not encoded
-# here.
+# protection/admin step — intentionally not encoded here; land the Argo gate
+# as non-required first (plan §10 P1d: ~2 weeks of stable signal before
+# flipping branch protection).
 on:
   pull_request:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Run mode (edge = gate selection without cosign, for repair/debug)
+        type: choice
+        options: [edge, release]
+        default: edge
       chart-path:
-        description: Chart directory whose appVersion pins the server under test
+        description: Chart directory whose appVersion pins the server under test (release mode)
         required: true
         default: charts/inari-server
-      build-from-ref:
-        description: >-
-          Optional inari-server ref/tag to build the e2e image from instead
-          of pulling the published ghcr.io image (unreleased combos).
-        required: false
-        default: ""
       image-tag:
         description: >-
-          Optional published ghcr.io image tag override for the server under
-          test (e.g. "edge" — the tag the inari-server edge workflow gives
-          the latest main merge). Repair/debug path: edge images are not
-          cosign-signed, so verification is skipped, and the inari-server
-          source checkout moves to `main` so the HA migration-count check
-          matches the image.
+          Optional server image tag override (e.g. a specific published tag or
+          "edge"). Release mode still requires a version tag and derives the
+          inari-server source ref as v<tag>.
+        required: false
+        default: ""
+      charts-ref:
+        description: "Bundle repo ref to test (default: the dispatched ref)"
         required: false
         default: ""
 
 permissions:
   contents: read
+  pull-requests: write # post the run links to the Release PR
 
 concurrency:
   group: release-e2e-${{ github.ref }}
@@ -128,10 +133,11 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     outputs:
-      app-version: ${{ steps.resolve.outputs.app-version }}
-      server-tag: ${{ steps.resolve.outputs.server-tag }}
-      image-tag: ${{ steps.resolve.outputs.image-tag }}
-      build-from-ref: ${{ steps.resolve.outputs.build-from-ref }}
+      mode: ${{ steps.resolve.outputs.mode }}
+      charts-ref: ${{ steps.resolve.outputs.charts-ref }}
+      server-image: ${{ steps.resolve.outputs.server-image }}
+      console-image: ${{ steps.resolve.outputs.console-image }}
+      agent-image: ${{ steps.resolve.outputs.agent-image }}
       server-src-ref: ${{ steps.resolve.outputs.server-src-ref }}
       cosign-verify: ${{ steps.resolve.outputs.cosign-verify }}
     steps:
@@ -139,69 +145,179 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
-      - name: Resolve server tag from chart appVersion
+      - name: Resolve the candidate artifact set
         id: resolve
         env:
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MODE_IN: ${{ github.event.inputs.mode }}
           CHART_PATH: ${{ github.event.inputs.chart-path || 'charts/inari-server' }}
-          BUILD_FROM_REF: ${{ github.event.inputs.build-from-ref }}
           IMAGE_TAG_OVERRIDE: ${{ github.event.inputs.image-tag }}
+          CHARTS_REF_IN: ${{ github.event.inputs.charts-ref }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          app_version="$(awk '/^appVersion:/ {print $2}' "$CHART_PATH/Chart.yaml" | tr -d '"')"
-          if [ -z "$app_version" ]; then
-            echo "no appVersion found in $CHART_PATH/Chart.yaml" >&2
-            exit 1
+          app_version() { awk '/^appVersion:/ {print $2}' "$1/Chart.yaml" | tr -d '"'; }
+
+          # The agent image under test for release runs is the platform
+          # chart's declared recommendation (inari-agent-compat ConfigMap
+          # source) — the agent has no chart in this repo to bump.
+          agent_recommended() {
+            awk '/^  recommended:/ {print $2; exit}' charts/inari-platform/values.yaml | tr -d '"'
+          }
+
+          if [ "$EVENT" = "pull_request" ]; then
+            # Release PR: exactly the candidate set, cosign ON, quarantined
+            # excluded (hard rule 5). ghcr tags are UNPREFIXED, git tags
+            # v-prefixed.
+            server_app="$(app_version "$CHART_PATH")"
+            console_app="$(app_version charts/inari-console)"
+            [ -n "$server_app" ] && [ -n "$console_app" ] || { echo "missing appVersion" >&2; exit 1; }
+            echo "mode=release" >> "$GITHUB_OUTPUT"
+            echo "charts-ref=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+            echo "server-image=${server_app#v}" >> "$GITHUB_OUTPUT"
+            echo "console-image=${console_app#v}" >> "$GITHUB_OUTPUT"
+            echo "agent-image=$(agent_recommended)" >> "$GITHUB_OUTPUT"
+            echo "server-src-ref=v${server_app#v}" >> "$GITHUB_OUTPUT"
+            echo "cosign-verify=true" >> "$GITHUB_OUTPUT"
+            # The Release PR must point at a published server tag.
+            if ! git ls-remote --exit-code https://github.com/7K-Inari/inari-server.git "refs/tags/v${server_app#v}" >/dev/null 2>&1; then
+              echo "inari-server tag v${server_app#v} does not exist — refuse to gate an unpublished server" >&2
+              exit 1
+            fi
+            echo "resolved release candidate: server=${server_app#v} console=${console_app#v} agent=$(agent_recommended) charts@${HEAD_SHA:0:8}"
+            exit 0
           fi
-          server_tag="v${app_version#v}"
-          echo "app-version=$app_version" >> "$GITHUB_OUTPUT"
-          echo "server-tag=$server_tag" >> "$GITHUB_OUTPUT"
-          # Sentinel "none": empty job outputs are dropped from the needs
-          # context, so comparing against '' is unreliable downstream.
-          echo "build-from-ref=${BUILD_FROM_REF:-none}" >> "$GITHUB_OUTPUT"
-          # Golden-path server under test: the unsigned "edge" image (latest
-          # inari-server main merge) BY DEFAULT, with the source checkout on
-          # main to match. The released appVersion image predates behavior
-          # the suite asserts (ADR-0014 outbox — the Oct 2026 INARI_OUTBOX
-          # golden-path failure: every leg burned 2m waiting for a stream a
-          # Sep-24 server never creates). edge is unsigned → cosign off.
-          # Explicit dispatch overrides keep the old semantics: a published
-          # version tag image (cosign-signed) or a build-from-ref repair.
-          if [ -n "$IMAGE_TAG_OVERRIDE" ]; then
-            echo "image-tag=$IMAGE_TAG_OVERRIDE" >> "$GITHUB_OUTPUT"
-            echo "server-src-ref=main" >> "$GITHUB_OUTPUT"
-            echo "cosign-verify=false" >> "$GITHUB_OUTPUT"
-          elif [ -n "$BUILD_FROM_REF" ]; then
-            # GHCR image tags are UNPREFIXED (1.8.0), git tags are v-prefixed.
-            echo "image-tag=${app_version#v}" >> "$GITHUB_OUTPUT"
-            echo "server-src-ref=$server_tag" >> "$GITHUB_OUTPUT"
+
+          # workflow_dispatch repair/debug path. mode=edge (default): gate
+          # label selection without cosign (unsigned edge images). mode=
+          # release: exact candidate combo, still validated by the workflow's
+          # own resolve step.
+          charts_ref="${CHARTS_REF_IN:-$GITHUB_SHA}"
+          echo "charts-ref=$charts_ref" >> "$GITHUB_OUTPUT"
+          echo "console-image=edge" >> "$GITHUB_OUTPUT"
+          echo "agent-image=edge" >> "$GITHUB_OUTPUT"
+          if [ "$MODE_IN" = "release" ]; then
+            tag="${IMAGE_TAG_OVERRIDE:-$(app_version "$CHART_PATH")}"
+            tag="${tag#v}"
+            echo "$tag" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "release mode needs a version tag (got $tag)" >&2; exit 1; }
+            echo "mode=release" >> "$GITHUB_OUTPUT"
+            echo "server-image=$tag" >> "$GITHUB_OUTPUT"
+            echo "console-image=$(app_version charts/inari-console | tr -d v)" >> "$GITHUB_OUTPUT"
+            echo "agent-image=$(agent_recommended)" >> "$GITHUB_OUTPUT"
+            echo "server-src-ref=v$tag" >> "$GITHUB_OUTPUT"
             echo "cosign-verify=true" >> "$GITHUB_OUTPUT"
           else
-            echo "image-tag=edge" >> "$GITHUB_OUTPUT"
+            echo "mode=edge" >> "$GITHUB_OUTPUT"
+            echo "server-image=${IMAGE_TAG_OVERRIDE:-edge}" >> "$GITHUB_OUTPUT"
             echo "server-src-ref=main" >> "$GITHUB_OUTPUT"
             echo "cosign-verify=false" >> "$GITHUB_OUTPUT"
           fi
-          # The Release PR must still point at a published server tag — the
-          # server-integration job tests exactly that artifact.
-          if ! git ls-remote --exit-code https://github.com/7K-Inari/inari-server.git "refs/tags/$server_tag" >/dev/null 2>&1; then
-            echo "inari-server tag $server_tag does not exist — refuse to gate an unpublished server" >&2
+
+  submit:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ARGO_SERVER: argo-workflows.7kgroup.org:443
+      ARGO_SECURE: "true"
+      ARGO_TOKEN: ${{ secrets.ARGO_TOKEN }}
+      WF_NAME: ""
+    steps:
+      - name: Install argo CLI (matches the cluster's controller)
+        run: |
+          set -euo pipefail
+          curl -sfL -o argo.gz https://github.com/argoproj/argo-workflows/releases/download/v4.1.6/argo-linux-amd64.gz
+          gunzip -f argo.gz
+          chmod +x argo
+          sudo mv argo /usr/local/bin/argo
+          argo version --short
+
+      - name: "Preflight: submitter token present"
+        run: |
+          if [ -z "$ARGO_TOKEN" ]; then
+            echo "::error::repo secret ARGO_TOKEN is not set — harvest the e2e-submitter-token Secret"
+            echo "  (ns inari-e2e, created by gitops/e2e/argo-workflows/rbac.yaml) into repo secrets."
+            echo "  See the release-e2e.yaml header for the full prerequisite list."
             exit 1
           fi
-          echo "resolved inari-server tag: $server_tag"
+
+      - name: Submit e2e-stack to the e2e environment
+        id: submit
+        env:
+          MODE: ${{ needs.resolve.outputs.mode }}
+          CHARTS_REF: ${{ needs.resolve.outputs.charts-ref }}
+          SERVER_IMAGE: ${{ needs.resolve.outputs.server-image }}
+          CONSOLE_IMAGE: ${{ needs.resolve.outputs.console-image }}
+          AGENT_IMAGE: ${{ needs.resolve.outputs.agent-image }}
+          SERVER_SRC_REF: ${{ needs.resolve.outputs.server-src-ref }}
+          COSIGN: ${{ needs.resolve.outputs.cosign-verify }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          name=$(argo submit --from workflowtemplate/e2e-stack -n inari-e2e \
+            -p mode="$MODE" \
+            -p charts-ref="$CHARTS_REF" \
+            -p server-image="$SERVER_IMAGE" \
+            -p console-image="$CONSOLE_IMAGE" \
+            -p agent-image="$AGENT_IMAGE" \
+            -p server-src-ref="$SERVER_SRC_REF" \
+            -p cosign-verify="$COSIGN" \
+            -p include-quarantined=false \
+            -p reportportal-launch="release-$RUN_ID" \
+            -o name)
+          echo "submitted: $name"
+          echo "wf-name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Post run links to the Release PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WF: ${{ steps.submit.outputs.wf-name }}
+          PR: ${{ github.event.pull_request.number }}
+          LAUNCH: release-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR" --body "$(cat <<EOF
+          ### e2e release gate (Argo Workflows)
+
+          Submitted \`$WF\` to the persistent e2e environment (mode=release —
+          exact candidate artifact set, cosign on, quarantined excluded).
+
+          - **Argo UI:** https://argo-workflows.7kgroup.org/workflows/inari-e2e/$WF
+          - **ReportPortal launch:** \`$LAUNCH\` on https://reportportal.int.7kgroup.org (JUnit uploads at run end, including on failure)
+
+          This check waits for the workflow and reports its result.
+          EOF
+          )"
+
+      - name: Wait for the workflow
+        env:
+          WF: ${{ steps.submit.outputs.wf-name }}
+        run: |
+          set -euo pipefail
+          # argo wait exits nonzero unless the workflow Succeeded — that exit
+          # code IS the gate result.
+          argo wait -n inari-e2e "$WF"
+          argo get -n inari-e2e "$WF" | tail -30
 
   server-integration:
+    # Unchanged repo-native layer: the full inari-server integration suite at
+    # the resolved source ref (the artifact being released, not a floating
+    # branch). Runs beside the Argo gate, not inside it.
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout inari-server at pinned tag
+      - name: Checkout inari-server at pinned ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: 7K-Inari/inari-server
-          ref: ${{ needs.resolve.outputs.server-tag }}
+          ref: ${{ needs.resolve.outputs.server-src-ref }}
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
 
-      - name: Integration suite @ ${{ needs.resolve.outputs.server-tag }}
+      - name: Integration suite @ ${{ needs.resolve.outputs.server-src-ref }}
         run: go test -tags=integration -count=1 ./...

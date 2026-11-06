@@ -1,0 +1,49 @@
+# PHASE 2 PLACEHOLDER — weekly load/chaos run (plan C2, taxonomy §1.3
+# execution-profile labels: load|chaos, never in PR/release gates).
+#
+# Suspended on purpose: the e2e-stack template has no load/chaos legs yet
+# (k6 via k6-operator and LitmusChaos land in phase 2 — tasks W7/W9).
+# Scheduling the chaos legs the night before the nightly-reset CronWorkflow
+# is the plan's DR-adjacent ordering.
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: e2e-weekly
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+spec:
+  suspend: true
+  # Saturday 02:17 UTC — off-peak, ahead of a reset window.
+  schedules: ["17 2 * * 6"]
+  concurrencyPolicy: Forbid
+  workflowSpec:
+    workflowTemplateRef:
+      name: e2e-stack
+    workflowMetadata:
+      labels:
+        e2e.inari.io/mode: weekly
+    arguments:
+      parameters:
+        - name: mode
+          value: weekly
+        - name: ha
+          value: "true"
+        - name: charts-ref
+          value: main
+        - name: server-image
+          value: edge
+        - name: console-image
+          value: edge
+        - name: agent-image
+          value: edge
+        - name: server-src-ref
+          value: main
+        - name: cosign-verify
+          value: "false"
+        - name: include-quarantined
+          value: "true"
+        - name: retention-days
+          value: "7"
+        - name: reportportal-launch
+          value: ""

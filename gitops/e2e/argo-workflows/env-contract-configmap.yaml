@@ -1,0 +1,27 @@
+# Non-secret half of the e2e environment contract (docs/e2e/environment-contract.md
+# §1) — envFrom'd into every suite leg. Per-run values (E2E_RUN_ID, E2E_MODE,
+# E2E_HA) and secrets (persona passwords) are injected per template, never
+# here. Suites read these through their shared env modules only (invariant 7).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-env-contract
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+data:
+  # Console + API single origin (invariant 3); API at /api/v1 on this host.
+  E2E_BASE_DOMAIN: inari-e2e.7kgroup.org
+  # One URL serves browser redirect AND direct-grant/API calls (§1.2).
+  E2E_KC_URL: https://auth-e2e.7kgroup.org
+  E2E_NAMESPACE: inari-e2e
+  E2E_TENANT_NAME: E2E Org
+  E2E_TENANT_SLUG: e2e-org
+  # Legacy alias until the suites finish the E2E_TENANT_* rename.
+  E2E_TENANT: e2e-org
+  # In-cluster git service (replaces the kind hostPath coupling).
+  E2E_GIT_URL: git://git-service.inari-e2e.svc:9418
+  # Attach-mode handoff (suite/env.go): seed writes resolved ids here.
+  E2E_HANDOFF_CONFIGMAP: inari-e2e/e2e-handoff
+  # Legs run only after the seed step; the var is belt (invariant 4).
+  E2E_SEEDED: "true"

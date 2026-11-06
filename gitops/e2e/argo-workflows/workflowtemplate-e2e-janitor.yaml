@@ -1,0 +1,142 @@
+# WorkflowTemplate e2e-janitor — reaps leaked tenant orgs on the persistent
+# env (tenant specs leak orgs by design: delete is approval-gated/async —
+# contract invariant 6, plan C11). Runs as the e2e-janitor CronWorkflow;
+# manual reaps: argo submit --from workflowtemplate/e2e-janitor -n inari-e2e.
+#
+# Algorithm (identity: dev-admin persona — platform-admins member via the
+# seed's GapKCPlatformGroup step, so it can request AND approve decommissions):
+#   1. list tenants; select slugs e2e-<runId>-* (runId = a workflow uid), never
+#      the seeded default e2e-org;
+#   2. skip orgs whose runId belongs to a Running/Pending workflow, and orgs
+#      younger than retention-days (createdAt — RFC3339 UTC compares via jq);
+#   3. DELETE /tenants/{org} {force:true} → approvalId (idempotent re-request:
+#      a second janitor run while a deletion is pending returns the same id —
+#      tenancy/deletion.go), then approve via the lifecycle approvals API;
+#   4. poll the org until it disappears.
+# Exit 1 if any reap fails (surfaces in cron history). dry-run=true lists only.
+#
+# No env semaphore: reaping is API-level, the retention window (days) far
+# exceeds run duration (hours), and active runs are excluded by uid.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: e2e-janitor
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+spec:
+  entrypoint: reap
+  serviceAccountName: e2e-runner
+  activeDeadlineSeconds: 3600
+  arguments:
+    parameters:
+      - name: retention-days
+        value: "7"
+      - name: dry-run
+        value: "false"
+        enum: ["true", "false"]
+  templates:
+    - name: reap
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: RETENTION_DAYS
+            value: "{{workflow.parameters.retention-days}}"
+          - name: DRY_RUN
+            value: "{{workflow.parameters.dry-run}}"
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+        source: |
+          set -eu
+          command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
+          API="https://$E2E_BASE_DOMAIN/api/v1"
+
+          echo "== janitor: retention=${RETENTION_DAYS}d dry-run=$DRY_RUN"
+          TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+            -d grant_type=password -d client_id=inari-server \
+            -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
+            -d "scope=openid organization:*" | jq -r '.access_token // ""')
+          [ -n "$TOKEN" ] || { echo "could not obtain a user token" >&2; exit 1; }
+          AUTH="Authorization: Bearer $TOKEN"
+
+          # Active runs: their uids must never be reaped under them.
+          ACTIVE=$(kubectl -n inari-e2e get workflows -o json \
+            | jq -r '.items[] | select(.status.phase=="Running" or .status.phase=="Pending") | .metadata.uid' || true)
+          echo "active workflow uids: $(echo "$ACTIVE" | grep -c . || echo 0)"
+
+          CUTOFF=$(($(date +%s) - RETENTION_DAYS * 86400))
+          FAILED=0
+          REAPED=0
+
+          curl -sf "$API/tenants" -H "$AUTH" | jq -r '.tenants[] | [.slug, .createdAt, .status] | @tsv' \
+          | while IFS="$(printf '\t')" read -r slug created status; do
+              case "$slug" in
+                e2e-????????-????-????-????-????????????-*) ;;
+                *) continue;;
+              esac
+              run_id=$(echo "$slug" | cut -c5-40)
+              if echo "$ACTIVE" | grep -q "$run_id"; then
+                echo "skip $slug — belongs to an active run"
+                continue
+              fi
+              age=$(echo "$created" | jq -r 'fromdateiso8601' 2>/dev/null || echo 0)
+              if [ "$age" -gt "$CUTOFF" ]; then
+                echo "skip $slug — younger than ${RETENTION_DAYS}d ($created)"
+                continue
+              fi
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "dry-run: would reap $slug (status=$status, created=$created)"
+                continue
+              fi
+              echo "reap $slug (status=$status, created=$created)"
+              # Decommission request (idempotent while pending) → approval id.
+              APPROVAL=$(curl -sf -X DELETE "$API/tenants/$slug" -H "$AUTH" \
+                -H 'Content-Type: application/json' \
+                -d "{\"force\":true,\"reason\":\"janitor reap (org leaked by tenant spec, older than ${RETENTION_DAYS}d)\"}" \
+                | jq -r '.approvalId // ""') || {
+                  echo "  decommission request failed for $slug" >&2; FAILED=1; continue; }
+              [ -n "$APPROVAL" ] || { echo "  no approvalId for $slug" >&2; FAILED=1; continue; }
+              # Platform-admin lifecycle approval → teardown runs on decide.
+              curl -sf -X POST "$API/tenants/$slug/approvals/$APPROVAL/decide" -H "$AUTH" \
+                -H 'Content-Type: application/json' \
+                -d '{"approve":true,"reason":"janitor reap"}' >/dev/null || {
+                  echo "  approval $APPROVAL failed for $slug" >&2; FAILED=1; continue; }
+              # Poll until the org disappears (async teardown).
+              i=0
+              while [ $i -lt 30 ]; do
+                code=$(curl -s -o /dev/null -w '%{http_code}' "$API/tenants/$slug" -H "$AUTH" || true)
+                [ "$code" = "404" ] && break
+                i=$((i+1)); sleep 10
+              done
+              if [ "$code" = "404" ]; then
+                echo "  reaped $slug"
+                REAPED=$((REAPED+1))
+              else
+                echo "  $slug still present after 5m (last HTTP $code)" >&2
+                FAILED=1
+              fi
+            done
+
+          echo "== janitor done"
+          # The per-org loop runs in a pipeline subshell, so its counters do
+          # not propagate — re-derive the result: nothing matching the
+          # leftover pattern older than the cutoff may remain. (Active runs
+          # are younger than any sane retention window — the 3h workflow cap
+          # — so their orgs never trip this check.)
+          LEFT=$(curl -sf "$API/tenants" -H "$AUTH" \
+            | jq -r --argjson cut "$CUTOFF" '.tenants[]
+                | select(.slug | test("^e2e-[0-9a-f-]{36}-"))
+                | select((.createdAt | fromdateiso8601) <= $cut)
+                | .slug' || true)
+          if [ "$DRY_RUN" != "true" ] && [ -n "$LEFT" ]; then
+            echo "orgs still present after reap: $LEFT" >&2
+            exit 1
+          fi
+          [ -n "$LEFT" ] && echo "dry-run leftover matches: $LEFT" || echo "no reapable orgs remain"

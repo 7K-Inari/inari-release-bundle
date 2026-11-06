@@ -1,0 +1,65 @@
+# PostSync smoke hook (plan C7): after every sync of the inari-e2e-server
+# Application — including every env-prep candidate flip — prove the stack is
+# alive via the chainsaw smoke set (scripts/e2e/chainsaw/bootstrap, label
+# e2e.inari.io/set=smoke). A failed hook marks the app Degraded, which fails
+# env-prep's Healthy wait fast. Sync-health signal only: taxonomy §3's
+# Ginkgo/Playwright smoke sets run via mode=smoke workflow submissions
+# (coordinator Q9), and per-run candidate correctness comes from the DAG's
+# chainsaw-verify leg at charts-ref — this hook pins main (steady-state
+# definitions for steady-state syncs).
+#
+# Not the kyverno/chainsaw image: the tests' script steps shell out to
+# kubectl, which the scratch image lacks — alpine/k8s has both (binary
+# downloaded pinned + sha256-verified, mirroring scripts/e2e/chainsaw/README).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: inari-e2e-chainsaw-smoke
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: inari-e2e-workflows
+    spec:
+      serviceAccountName: e2e-chainsaw-hook
+      restartPolicy: Never
+      initContainers:
+        - name: clone
+          image: alpine/git:2.45.2
+          args: [clone, --depth, "1", --branch, main, https://github.com/7K-Inari/inari-release-bundle.git, /work]
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      containers:
+        - name: chainsaw
+          image: alpine/k8s:1.35.10
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              CHAINSAW_VERSION=0.2.13
+              CHAINSAW_SHA256=6c8d4cdccacbea7100a8354893b3176d874eecfe70c930fbe0496b7967d61ca4
+              curl -sfL -o /tmp/chainsaw.tgz "https://github.com/kyverno/chainsaw/releases/download/v${CHAINSAW_VERSION}/chainsaw_linux_amd64.tar.gz"
+              echo "$CHAINSAW_SHA256  /tmp/chainsaw.tgz" | sha256sum -c -
+              tar -xzf /tmp/chainsaw.tgz -C /tmp chainsaw
+              mkdir -p /tmp/report
+              /tmp/chainsaw test \
+                --config /work/scripts/e2e/chainsaw/.chainsaw.yaml \
+                --test-dir /work/scripts/e2e/chainsaw/bootstrap \
+                --values /work/scripts/e2e/chainsaw/values/expected.yaml \
+                --namespace inari-e2e \
+                --selector e2e.inari.io/set=smoke \
+                --report-path /tmp/report
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: work
+          emptyDir: {}

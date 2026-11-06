@@ -1,0 +1,30 @@
+# Toolbox pod — the Go stack suite's ONLY HTTP transport (every curl runs
+# via `kubectl exec` into this pod, exactly like the kind-era
+# provision.go startToolbox; the suite's KC/API clients hardcode the
+# service-DNS names this namespace serves). The seed step ensures it too
+# (idempotent) and publishes its name as the `toolbox` key of the
+# e2e-handoff ConfigMap. A bare Pod (not a Deployment) keeps the name stable
+# — handoffs reference `e2e-toolbox`, not a random pod hash.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: e2e-toolbox
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/name: e2e-toolbox
+    app.kubernetes.io/part-of: inari-e2e
+spec:
+  securityContext:
+    runAsUser: 1000
+  containers:
+    - name: toolbox
+      image: curlimages/curl:8.10.1
+      command: ["sleep", "infinity"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+  restartPolicy: Always

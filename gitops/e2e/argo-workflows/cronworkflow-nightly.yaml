@@ -1,0 +1,52 @@
+# Nightly full-surface run (plan C2; replaces the stack leg of the retired
+# GHA e2e-nightly.yaml). Full surface INCLUSIVE of quarantined tests
+# (Ginkgo p0||p1||p2, Playwright @p0|@p1|@p2), unsigned edge images
+# (cosign off — tracks component mains deliberately, INARI_OUTBOX
+# postmortem), env-wide HA flip (coordinator Q1: the nightly is the only
+# scheduled run exercising the disruption specs; the release gate stays
+# fast/non-HA). Serialize against everything else via the template's
+# semaphore; Forbid here is the second layer.
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: e2e-nightly
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+spec:
+  # 03:17 UTC daily — same slot as the retired GHA nightly.
+  schedules: ["17 3 * * *"]
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 10
+  workflowSpec:
+    workflowTemplateRef:
+      name: e2e-stack
+    workflowMetadata:
+      labels:
+        e2e.inari.io/mode: nightly
+    arguments:
+      parameters:
+        - name: mode
+          value: nightly
+        - name: ha
+          value: "true"
+        - name: charts-ref
+          value: main
+        - name: server-image
+          value: edge
+        - name: console-image
+          value: edge
+        - name: agent-image
+          value: edge
+        - name: server-src-ref
+          value: main
+        - name: cosign-verify
+          value: "false"
+        - name: include-quarantined
+          value: "true"
+        - name: retention-days
+          value: "7"
+        - name: reportportal-launch
+          value: ""

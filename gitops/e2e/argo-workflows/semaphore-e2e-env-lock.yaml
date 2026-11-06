@@ -1,0 +1,15 @@
+# Semaphore backing store: ONE permit per key — serializes every e2e-stack
+# run (release/edge/nightly/weekly/smoke) against the single persistent env.
+# The role-lifecycle spec mutates the e2e-member persona and env-prep flips
+# the deployed artifact set; parallel runs would collide (plan §5.6, C11).
+# The controller writes lock holder records into the key's value; the
+# supporting RBAC is in rbac.yaml (e2e-semaphore-write).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-env-lock
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+data:
+  workflows: ""

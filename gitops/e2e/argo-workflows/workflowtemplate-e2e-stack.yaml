@@ -1,0 +1,1061 @@
+# WorkflowTemplate e2e-stack — THE one parameter-driven e2e workflow
+# (architecture plan C1, parameter contract §3.1, DAG §5). Replaces the
+# kind-era .github/workflows/e2e-stack.yaml orchestration: no kind, no image
+# tars, no NodePort hacks — the persistent e2e environment (gitops/e2e/env)
+# is re-converged to the run's candidate artifact set per run (hard rule 5:
+# the release gate tests exactly the submitted charts/images, never
+# "whatever happens to be deployed").
+#
+# Documented deviations from the plan/contract (coordinator rulings
+# 2026-11-05/06):
+# - Q3: agent-image="build" is unsupported on the Argo path (no in-cluster
+#   image builds); the agent repo publishes a moving "edge" image instead.
+# - Q5: HA is an ENV-WIDE flip (env-prep scales NATS to 3 nodes + server to
+#   2 replicas + redis cache) — one serialized env cannot run HA and non-HA
+#   legs in parallel, so the plan §5 "HA legs via withParam" sketch becomes a
+#   single ginkgo leg with E2E_HA=1.
+# - Q9: PostSync smoke is chainsaw-only (gitops/e2e/chainsaw-hooks/);
+#   Ginkgo/Playwright smoke sets run via mode=smoke submissions.
+# - W6 seam: the Harbor scan gate inserts between cosign-verify and env-prep
+#   (when: mode == release) — this DAG leaves that slot deliberately.
+#
+# Semaphore: one permit (ConfigMap e2e-env-lock, see semaphore-e2e-env-lock.yaml)
+# serializes ALL modes against the single env (plan §5.6). onExit uploads every
+# suite's JUnit unconditionally — aborted/failed runs still report (hard rule
+# 8/10); the ReportPortal importer block is W4's (seam in the exit handler).
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: e2e-stack
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+spec:
+  entrypoint: main
+  serviceAccountName: e2e-runner
+  # Whole-run cap: nightly HA worst case (env-prep 15m + seed 10m +
+  # agent-ensure 10m + ginkgo HA ~50m + playwright shards ~40m, partially
+  # parallel) fits in 3h with margin.
+  activeDeadlineSeconds: 10800
+  onExit: exit-handler
+  arguments:
+    parameters:
+      # Release contract (plan §3.1) — thin GHA wrappers pass -p only.
+      - name: mode
+        value: edge
+        enum: ["release", "edge", "nightly", "weekly", "smoke"]
+      - name: ha
+        value: "false"
+        enum: ["true", "false"]
+      - name: charts-ref
+        # Bundle repo ref under test: branch, tag, or PR head SHA (release
+        # PRs submit their head SHA — the candidate charts come from it).
+        value: main
+      - name: server-image
+        # Unprefixed ghcr tag (1.8.0 | edge), pulled via Harbor ghcr-proxy.
+        value: edge
+      - name: console-image
+        value: edge
+      - name: agent-image
+        value: edge
+      - name: server-src-ref
+        # inari-server ref for the api-schema driver checkout + the HA
+        # migrations dir (hard rules 8/9).
+        value: main
+      - name: cosign-verify
+        value: "false"
+        enum: ["true", "false"]
+      - name: include-quarantined
+        value: "false"
+        enum: ["true", "false"]
+      - name: retention-days
+        value: "7"
+      - name: reportportal-launch
+        # Empty → resolve computes "<mode>-<workflow uid>".
+        value: ""
+  templates:
+    # ------------------------------------------------------------------ DAG
+    - name: main
+      synchronization:
+        semaphores:
+          - configMapKeyRef:
+              name: e2e-env-lock
+              key: workflows
+      dag:
+        tasks:
+          - name: resolve
+            template: resolve
+          - name: cosign-verify
+            template: cosign-verify
+            depends: resolve
+            when: "{{workflow.parameters.cosign-verify}} == true"
+          - name: env-prep
+            template: env-prep
+            depends: cosign-verify.Succeeded || cosign-verify.Skipped
+          - name: seed
+            template: seed
+            depends: env-prep
+          # Chainsaw cluster-state assertions run right after convergence,
+          # parallel with the seed (plan §5). Never gates the legs.
+          - name: chainsaw-verify
+            template: chainsaw-verify
+            depends: env-prep
+            when: "{{workflow.parameters.mode}} != weekly"
+          # Agent ensure (D13): the Ginkgo cluster/agent phases need a
+          # connected agent; registration tokens are dynamic, so this is a
+          # workflow step, never GitOps.
+          - name: agent-ensure
+            template: agent-ensure
+            depends: seed
+          # Suite legs: full signal per run — no leg depends on another leg,
+          # so a failed sibling never blocks the others; the workflow phase
+          # still ends Failed (the gate stays correct).
+          - name: ginkgo
+            template: ginkgo
+            depends: agent-ensure
+            when: "{{workflow.parameters.mode}} != weekly"
+          - name: playwright
+            template: playwright
+            depends: seed
+            when: "{{workflow.parameters.mode}} != weekly"
+            arguments:
+              parameters:
+                - name: shard
+                  value: "{{item.shard}}"
+                - name: shard-safe
+                  value: "{{item.safe}}"
+            withParam: '[{"shard":"1/2","safe":"1-2"},{"shard":"2/2","safe":"2-2"}]'
+          # Gate-only today (plan §5.4); its ReportPortal launch carries p0.
+          - name: apischema
+            template: apischema
+            depends: seed
+            when: "{{workflow.parameters.mode}} == release"
+
+    # -------------------------------------------------------------- resolve
+    # Validates the parameter contract (release ⇒ cosign ON, quarantined
+    # excluded, image tag ↔ git tag consistency), writes the run-metadata
+    # ConfigMap, computes the ReportPortal launch name.
+    - name: resolve
+      activeDeadlineSeconds: 300
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        env:
+          - name: MODE
+            value: "{{workflow.parameters.mode}}"
+          - name: COSIGN
+            value: "{{workflow.parameters.cosign-verify}}"
+          - name: QUAR
+            value: "{{workflow.parameters.include-quarantined}}"
+          - name: SERVER_IMAGE
+            value: "{{workflow.parameters.server-image}}"
+          - name: SERVER_SRC_REF
+            value: "{{workflow.parameters.server-src-ref}}"
+          - name: RP_LAUNCH_PARAM
+            value: "{{workflow.parameters.reportportal-launch}}"
+        source: |
+          set -eu
+          echo "mode=$MODE ha={{workflow.parameters.ha}} charts-ref={{workflow.parameters.charts-ref}}"
+          echo "images: server=$SERVER_IMAGE console={{workflow.parameters.console-image}} agent={{workflow.parameters.agent-image}}"
+          echo "server-src-ref=$SERVER_SRC_REF cosign=$COSIGN include-quarantined=$QUAR"
+
+          if [ "$MODE" = "release" ]; then
+            # Hard rule 5: the release gate tests exactly the candidate set.
+            [ "$COSIGN" = "true" ] || { echo "release mode requires cosign-verify=true" >&2; exit 1; }
+            [ "$QUAR" = "false" ] || { echo "release mode never runs quarantined tests" >&2; exit 1; }
+            echo "$SERVER_IMAGE" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              || { echo "release mode needs a version-tagged server image (got $SERVER_IMAGE)" >&2; exit 1; }
+            # ghcr tags are unprefixed, git tags v-prefixed (release-e2e.yaml convention).
+            [ "$SERVER_SRC_REF" = "v$SERVER_IMAGE" ] \
+              || { echo "release mode: server-src-ref must be v$SERVER_IMAGE (got $SERVER_SRC_REF)" >&2; exit 1; }
+          fi
+
+          RUN_ID="{{workflow.uid}}"
+          RP_LAUNCH="$RP_LAUNCH_PARAM"
+          [ -n "$RP_LAUNCH" ] || RP_LAUNCH="$MODE-$RUN_ID"
+          echo -n "$RP_LAUNCH" > /tmp/rp-launch.txt
+
+          # Run metadata for later inspection/janitor correlation (plan §5.1).
+          kubectl -n inari-e2e create configmap "e2e-run-$(echo "$RUN_ID" | cut -c1-8)" \
+            --from-literal=mode="$MODE" \
+            --from-literal=run-id="$RUN_ID" \
+            --from-literal=charts-ref="{{workflow.parameters.charts-ref}}" \
+            --from-literal=server-image="$SERVER_IMAGE" \
+            --from-literal=console-image="{{workflow.parameters.console-image}}" \
+            --from-literal=agent-image="{{workflow.parameters.agent-image}}" \
+            --from-literal=server-src-ref="$SERVER_SRC_REF" \
+            --from-literal=reportportal-launch="$RP_LAUNCH"
+          echo "run metadata written; rp-launch=$RP_LAUNCH"
+      outputs:
+        parameters:
+          - name: rp-launch
+            valueFrom:
+              path: /tmp/rp-launch.txt
+
+    # --------------------------------------------------------- cosign-verify
+    # Release-only (when-gated). Verifies the three candidate images on
+    # ghcr.io (signatures live there, not in the Harbor proxy-cache), keyless
+    # against the component repos' GitHub Actions identity — ported from the
+    # retired e2e-stack.yaml verify step.
+    - name: cosign-verify
+      activeDeadlineSeconds: 600
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        env:
+          - name: SERVER_IMAGE
+            value: "{{workflow.parameters.server-image}}"
+          - name: CONSOLE_IMAGE
+            value: "{{workflow.parameters.console-image}}"
+          - name: AGENT_IMAGE
+            value: "{{workflow.parameters.agent-image}}"
+        source: |
+          set -eu
+          COSIGN_VERSION=v3.1.4
+          COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+          curl -sfL -o /tmp/cosign "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "$COSIGN_SHA256  /tmp/cosign" | sha256sum -c -
+          chmod +x /tmp/cosign
+
+          mkdir -p /artifacts/out
+          verify() { # image-ref, source-repo
+            echo "== cosign verify $1 (identity $2)"
+            /tmp/cosign verify "$1" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity-regexp "https://github.com/7K-Inari/$2/" \
+              2>&1 | tee -a /artifacts/out/verify.log
+          }
+          verify "ghcr.io/7k-inari/inari-server:$SERVER_IMAGE" inari-server
+          verify "ghcr.io/7k-inari/inari-ui-bundle:$CONSOLE_IMAGE" inari-ui
+          verify "ghcr.io/7k-inari/inari-agent:$AGENT_IMAGE" inari-agent
+      outputs:
+        artifacts:
+          - name: cosign-log
+            path: /artifacts/out/verify.log
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/cosign/verify.log
+
+    # -------------------------------------------------------------- env-prep
+    # Replaces kind bring-up: points the e2e env's per-component ArgoCD apps
+    # at the run's candidate charts (targetRevision=charts-ref) and image tags
+    # (helm valuesObject), then waits Healthy+Synced. The env pointer app
+    # ignores exactly these fields (ignoreDifferences in 7k-app-of-apps), so
+    # the patches persist for the run's duration; the next run re-converges
+    # the env to ITS artifact set. Platform apps (env-extras, platform-config,
+    # openfga, git-service) are health-checked, never mutated (plan §5.3).
+    #
+    # KNOWN LIMITATION (coordinator directive): a Release PR changing
+    # charts/inari-platform gates against the merged platform chart; its
+    # changes converge post-merge and are exercised by the nightly.
+    #
+    # HA flip (ha=true): NATS 3-node + R=3 streams, server 2 replicas + redis
+    # cache + scaffold knobs (ported from suite/provision.go). valuesObject is
+    # REPLACED wholesale per run, so a non-HA run deterministically resets
+    # HA-only keys back to the file baseline.
+    #
+    # KEEP IN SYNC: the HA extraEnv list embeds the baseline extraEnv from
+    # gitops/e2e/env/inari-server.yaml (valuesObject arrays replace, they do
+    # not merge) — bump both sides together.
+    - name: env-prep
+      activeDeadlineSeconds: 1500
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        env:
+          - name: HA
+            value: "{{workflow.parameters.ha}}"
+          - name: CHARTS_REF
+            value: "{{workflow.parameters.charts-ref}}"
+          - name: SERVER_IMAGE
+            value: "{{workflow.parameters.server-image}}"
+          - name: CONSOLE_IMAGE
+            value: "{{workflow.parameters.console-image}}"
+        source: |
+          set -eu
+          command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
+          mkdir -p /artifacts/out
+
+          if [ "$HA" = "true" ]; then
+            SERVER_VALUES=$(jq -nc --arg tag "$SERVER_IMAGE" '{
+              replicaCount: 2,
+              image: {tag: $tag},
+              cache: {backend: "redis"},
+              redis: {enabled: true, image: {registry: "docker.io", repository: "bitnamilegacy/redis", tag: "8.2.1"}},
+              nats: {streamReplicas: 3},
+              extraEnv: [
+                {name: "INARI_AGENT_GATEWAY_ADDRESS", value: "https://inari-e2e-gw.7kgroup.org"},
+                {name: "INARI_AGENT_IMAGE_REPO", value: "harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent"},
+                {name: "INARI_GIT_PROVIDER", value: "local"},
+                {name: "INARI_GIT_LOCAL_ROOT", value: "/var/lib/inari/git"},
+                {name: "INARI_LOG_FORMAT", value: "json"},
+                {name: "INARI_SCAFFOLD_TEMPLATE_DIR", value: "/templates"},
+                {name: "INARI_SCAFFOLD_GIT_ORG", value: "e2e-platform"},
+                {name: "INARI_SCAFFOLD_RECONCILE_INTERVAL", value: "5s"}
+              ]
+            }')
+          else
+            SERVER_VALUES=$(jq -nc --arg tag "$SERVER_IMAGE" '{image: {tag: $tag}}')
+          fi
+          CONSOLE_VALUES=$(jq -nc --arg tag "$CONSOLE_IMAGE" '{bundle: {tag: $tag}}')
+
+          echo "== patching inari-e2e-server (charts-ref=$CHARTS_REF, image=$SERVER_IMAGE, ha=$HA)"
+          kubectl -n argocd patch application inari-e2e-server --type=json -p '[
+            {"op":"replace","path":"/spec/sources/0/targetRevision","value":"'"$CHARTS_REF"'"},
+            {"op":"add","path":"/spec/sources/0/helm/valuesObject","value":'"$SERVER_VALUES"'}
+          ]'
+
+          echo "== patching inari-e2e-console (charts-ref=$CHARTS_REF, bundle=$CONSOLE_IMAGE)"
+          kubectl -n argocd patch application inari-e2e-console --type=json -p '[
+            {"op":"replace","path":"/spec/source/targetRevision","value":"'"$CHARTS_REF"'"},
+            {"op":"add","path":"/spec/source/helm/valuesObject","value":'"$CONSOLE_VALUES"'}
+          ]'
+
+          if [ "$HA" = "true" ]; then
+            echo "== patching inari-e2e-nats (3-node JetStream)"
+            kubectl -n argocd patch application inari-e2e-nats --type=json -p '[
+              {"op":"add","path":"/spec/source/helm/valuesObject","value":{"config":{"cluster":{"enabled":true,"replicas":3}}}}
+            ]'
+          else
+            # Deterministic reset after a HA run (valuesObject replaces, so
+            # removing it restores the file baseline single-node config).
+            if kubectl -n argocd get application inari-e2e-nats -o jsonpath='{.spec.source.helm.valuesObject}' 2>/dev/null | grep -q .; then
+              kubectl -n argocd patch application inari-e2e-nats --type=json -p '[
+                {"op":"remove","path":"/spec/source/helm/valuesObject"}
+              ]'
+            fi
+          fi
+
+          wait_app() { # app — Healthy+Synced, 10s interval, 15m budget
+            i=0
+            while [ $i -lt 90 ]; do
+              status=$(kubectl -n argocd get application "$1" -o jsonpath='{.status.health.status}/{.status.sync.status}' 2>/dev/null || echo "Unknown/Unknown")
+              echo "  $1: $status"
+              [ "$status" = "Healthy/Synced" ] && return 0
+              i=$((i+1)); sleep 10
+            done
+            echo "  $1 never became Healthy/Synced" >&2
+            return 1
+          }
+
+          echo "== waiting for candidate apps"
+          wait_app inari-e2e-server
+          wait_app inari-e2e-console
+          [ "$HA" = "true" ] && wait_app inari-e2e-nats
+
+          echo "== platform apps health check (never mutated)"
+          for app in inari-e2e-env-extras inari-e2e-platform-config inari-e2e-openfga inari-e2e-git-service; do
+            health=$(kubectl -n argocd get application "$app" -o jsonpath='{.status.health.status}' 2>/dev/null || echo Missing)
+            echo "  $app: $health"
+            [ "$health" = "Healthy" ] || { echo "$app is $health — env is not healthy enough to test" >&2; exit 1; }
+          done
+
+          # Post-convergence probe: 401 proves route + server + auth
+          # middleware (no public health endpoint is routed — gitops/e2e
+          # README verification convention).
+          echo "== post-convergence probe"
+          code=$(curl -s -o /dev/null -w '%{http_code}' --retry 12 --retry-delay 10 --retry-all-errors \
+            "https://inari-e2e.7kgroup.org/api/v1/tenants" || true)
+          echo "  /api/v1/tenants -> HTTP $code"
+          [ "$code" = "401" ] || { echo "post-convergence probe failed (want 401, got $code)" >&2; exit 1; }
+
+          jq -nc --arg ref "$CHARTS_REF" --arg server "$SERVER_IMAGE" --arg console "$CONSOLE_IMAGE" --arg ha "$HA" \
+            '{chartsRef: $ref, serverImage: $server, consoleImage: $console, ha: ($ha == "true")}' > /artifacts/out/env-prep.json
+          echo "== env-prep complete"
+      outputs:
+        artifacts:
+          - name: env-prep-summary
+            path: /artifacts/out/env-prep.json
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/env-prep/env-prep.json
+
+    # ------------------------------------------------------------------ seed
+    # Persona + handoff seed (W3a contract — scripts/e2e/seed, Go). Idempotent;
+    # re-adds the inari-ui redirect whitelist (the realm re-import on every
+    # candidate deploy wipes it — hard rule 4); writes the e2e-handoff
+    # ConfigMap (namespace, tenant, kc_uid, org_kc_id, cluster_id, org_id,
+    # toolbox); fails the run fast on membership-API misbehavior (P0 signal).
+    - name: seed
+      activeDeadlineSeconds: 600
+      podSpecPatch: '{"serviceAccountName":"e2e-seed"}'
+      volumes:
+        - name: work
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      script:
+        image: golang:1.26.3-bookworm
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          - name: E2E_OPERATOR_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: operator-password}
+          - name: E2E_EDITOR_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: editor-password}
+          - name: E2E_VIEWER_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: viewer-password}
+          - name: E2E_MEMBER_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: member-password}
+          - name: SEED_KC_ADMIN_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef: {name: inari-keycloak-admin, key: client-secret}
+        source: |
+          set -eu
+          cd /work
+          go run ./scripts/e2e/seed
+        volumeMounts:
+          - name: work
+            mountPath: /work
+
+    # ---------------------------------------------------------- agent-ensure
+    # Installs/upgrades the e2e agent (release inari-agent-e2e) onto the
+    # platform cluster as the registered e2e-self cluster's workload agent.
+    # Idempotent: helm upgrade --install + a fresh TTL'd registration token
+    # per run (burned on first connect). The OIDC client secret is delivered
+    # by ESO from the existing vault-internal ClusterSecretStore — the control
+    # plane wrote it during the seed's registration exchange.
+    #
+    # GATED on the inari-agent chart release carrying discovery.name +
+    # namespaceCreate (PR #88): until then the OCI chart's strict values
+    # schema rejects those --set keys and this step fails fast.
+    - name: agent-ensure
+      activeDeadlineSeconds: 900
+      podSpecPatch: '{"serviceAccountName":"e2e-agent-ensure"}'
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          - name: AGENT_IMAGE
+            value: "{{workflow.parameters.agent-image}}"
+        source: |
+          set -eu
+          command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
+
+          echo "== reading handoff ConfigMap"
+          CM=$(kubectl -n inari-e2e get configmap e2e-handoff -o json)
+          CLUSTER_ID=$(echo "$CM" | jq -r '.data.cluster_id // ""')
+          ORG_ID=$(echo "$CM" | jq -r '.data.org_id // ""')
+          [ -n "$CLUSTER_ID" ] && [ -n "$ORG_ID" ] \
+            || { echo "e2e-handoff ConfigMap missing cluster_id/org_id — the seed step must publish them first" >&2; exit 1; }
+          echo "  cluster_id=$CLUSTER_ID org_id=$ORG_ID"
+
+          echo "== issuing registration token (dev-admin direct grant)"
+          TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+            -d grant_type=password -d client_id=inari-server \
+            -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
+            -d "scope=openid organization:*" | jq -r '.access_token // ""')
+          [ -n "$TOKEN" ] || { echo "could not obtain a user token" >&2; exit 1; }
+          REG_TOKEN=$(curl -sf -X POST \
+            "https://$E2E_BASE_DOMAIN/api/v1/tenants/$E2E_TENANT_SLUG/clusters/$CLUSTER_ID/tokens" \
+            -H "Authorization: Bearer $TOKEN" | jq -r '.token // ""')
+          [ -n "$REG_TOKEN" ] || { echo "could not issue a registration token" >&2; exit 1; }
+
+          # Chart==component versioning (release.yml seds both from the tag);
+          # edge tracks the latest RELEASED chart with the edge image.
+          VERSION_ARGS=""
+          if [ "$AGENT_IMAGE" != "edge" ]; then
+            VERSION_ARGS="--version $AGENT_IMAGE"
+          fi
+
+          # controlPlane: in-cluster h2c — the live agent precedent (the istio
+          # gateway's H2 bidi path to the public gw hostname is broken; the
+          # public hostname is for external clusters).
+          echo "== helm upgrade --install inari-agent-e2e (image $AGENT_IMAGE)"
+          helm upgrade --install inari-agent-e2e oci://ghcr.io/7k-inari/charts/inari-agent \
+            --namespace inari-e2e $VERSION_ARGS \
+            --set namespace=inari-e2e-agent \
+            --set namespaceCreate=false \
+            --set discovery.name=inari-agent-e2e-discovery \
+            --set image.repository=harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent \
+            --set image.tag="$AGENT_IMAGE" \
+            --set image.pullPolicy=IfNotPresent \
+            --set config.tenantID="$ORG_ID" \
+            --set config.controlPlane=http://inari-server.inari-e2e.svc:8080 \
+            --set config.registrationToken="$REG_TOKEN" \
+            --set config.clusterLabels=e2e=true \
+            --set config.helmNamespaces=inari-e2e-agent \
+            --set kubectlTunnel.enabled=false \
+            --set oidcSecret.create=true \
+            --set oidcSecret.secretStore=vault-internal \
+            --set oidcSecret.secretStoreKind=ClusterSecretStore \
+            --set "oidcSecret.remotePath=inari/clusters/${CLUSTER_ID#cluster:}/oidc-client-secret" \
+            --wait --timeout 300s
+          echo "== agent installed; the Ginkgo cluster phase asserts the connected-agent chain"
+
+    # -------------------------------------------------------- chainsaw-verify
+    # Declarative cluster-state assertions (PR #108). release/smoke: the smoke
+    # set; edge/nightly: the whole bootstrap dir (all smoke+p0). The dr/ set
+    # never runs here — it asserts restored content and fails on a fresh env
+    # by design.
+    - name: chainsaw-verify
+      activeDeadlineSeconds: 1800
+      volumes:
+        - name: work
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      script:
+        # Not the kyverno/chainsaw image: the tests' script steps shell out to
+        # kubectl, which the scratch image lacks — alpine/k8s has both.
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        env:
+          - name: MODE
+            value: "{{workflow.parameters.mode}}"
+        source: |
+          set -eu
+          CHAINSAW_VERSION=0.2.13
+          CHAINSAW_SHA256=6c8d4cdccacbea7100a8354893b3176d874eecfe70c930fbe0496b7967d61ca4
+          curl -sfL -o /tmp/chainsaw.tgz "https://github.com/kyverno/chainsaw/releases/download/v${CHAINSAW_VERSION}/chainsaw_linux_amd64.tar.gz"
+          echo "$CHAINSAW_SHA256  /tmp/chainsaw.tgz" | sha256sum -c -
+          tar -xzf /tmp/chainsaw.tgz -C /tmp chainsaw
+
+          SELECTOR=""
+          case "$MODE" in
+            release|smoke) SELECTOR="--selector e2e.inari.io/set=smoke";;
+          esac
+
+          mkdir -p /artifacts/out
+          /tmp/chainsaw test \
+            --config /work/scripts/e2e/chainsaw/.chainsaw.yaml \
+            --test-dir /work/scripts/e2e/chainsaw/bootstrap \
+            --values /work/scripts/e2e/chainsaw/values/expected.yaml \
+            --namespace inari-e2e \
+            --report-path /artifacts/out \
+            $SELECTOR
+        volumeMounts:
+          - name: work
+            mountPath: /work
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chainsaw/junit.xml
+
+    # ---------------------------------------------------------------- ginkgo
+    # Go stack suite (Ginkgo v2) in attach mode against the persistent env.
+    # Label filters per stage (docs/e2e/test-taxonomy.md §3). ha=true: E2E_HA=1
+    # + the inari-server checkout supplies E2E_MIGRATIONS_DIR (hard rule 9).
+    - name: ginkgo
+      activeDeadlineSeconds: 4500
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: srv
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+        - name: clone-server
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /srv && cd /srv && git remote add origin https://github.com/7K-Inari/inari-server.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.server-src-ref}}"
+          volumeMounts:
+            - name: srv
+              mountPath: /srv
+      script:
+        image: golang:1.26.3-bookworm
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_RUN_ID
+            value: "{{workflow.uid}}"
+          - name: E2E_MODE
+            value: "{{workflow.parameters.mode}}"
+          - name: E2E_HA
+            value: "{{workflow.parameters.ha}}"
+          - name: E2E_MIGRATIONS_DIR
+            value: /srv/internal/db/migrations
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+        source: |
+          set -eu
+          curl -sfL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
+
+          case "$E2E_MODE" in
+            release|edge) FILTER="(p0||smoke)&&!quarantine";;
+            nightly)      FILTER="p0||p1||p2";;
+            smoke)        FILTER="smoke";;
+            *) echo "no ginkgo selection for mode $E2E_MODE" >&2; exit 1;;
+          esac
+          # The Ginkgo flag takes its value space-separated when passed via
+          # -args (a --flag=value form is also accepted; keep = to be safe).
+          TIMEOUT=40m
+          [ "{{workflow.parameters.ha}}" = "true" ] && TIMEOUT=50m
+
+          cd /work/scripts/e2e/stack
+          mkdir -p /artifacts/out
+          go test -tags=e2e -count=1 -timeout "$TIMEOUT" . \
+            -args "--ginkgo.label-filter=$FILTER" \
+                  "--ginkgo.junit-report=/artifacts/out/junit.xml"
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: srv
+            mountPath: /srv
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/ginkgo/junit.xml
+
+    # ------------------------------------------------------------ playwright
+    # UI suite, sharded (withParam over two shards — keep the exit-handler's
+    # playwright junit inputs in sync). env.ts consumes the contract vars
+    # (W3a re-parameterization); persona passwords come from the personas
+    # secret, never from parameters.
+    - name: playwright
+      activeDeadlineSeconds: 3600
+      inputs:
+        parameters:
+          - name: shard
+          - name: shard-safe
+      volumes:
+        - name: work
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      script:
+        image: mcr.microsoft.com/playwright:v1.64.1-noble
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_RUN_ID
+            value: "{{workflow.uid}}"
+          - name: E2E_MODE
+            value: "{{workflow.parameters.mode}}"
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          - name: E2E_OPERATOR_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: operator-password}
+          - name: E2E_EDITOR_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: editor-password}
+          - name: E2E_VIEWER_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: viewer-password}
+          - name: E2E_MEMBER_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: member-password}
+        source: |
+          set -eu
+          # set -- keeps the grep expressions quoted (the | would otherwise
+          # be a shell pipe).
+          case "$E2E_MODE" in
+            release|edge) set -- --grep "@p0|@smoke" --grep-invert @quarantine;;
+            nightly)      set -- --grep "@p0|@p1|@p2";;
+            smoke)        set -- --grep "@smoke";;
+            *) echo "no playwright selection for mode $E2E_MODE" >&2; exit 1;;
+          esac
+
+          cd /work/scripts/e2e/ui
+          npm ci --no-audit --no-fund
+          mkdir -p /artifacts/out /artifacts/report
+
+          # A red suite exits nonzero here — the wait container still uploads
+          # the JUnit + report artifacts below (Argo collects outputs on
+          # failure), so no exit-code masking needed.
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME="test-results/junit-{{inputs.parameters.shard-safe}}.xml" \
+            npx playwright test --config playwright.config.ci.ts \
+              "$@" --shard={{inputs.parameters.shard}}
+
+          # Artifact declarations need static paths: normalize the junit name.
+          cp "test-results/junit-{{inputs.parameters.shard-safe}}.xml" /artifacts/out/junit.xml
+          [ -d playwright-report ] && cp -r playwright-report/. /artifacts/report/ || true
+        volumeMounts:
+          - name: work
+            mountPath: /work
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/playwright/junit-{{inputs.parameters.shard-safe}}.xml
+          - name: report
+            path: /artifacts/report
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/playwright-report-{{inputs.parameters.shard-safe}}
+
+    # -------------------------------------------------------------- apischema
+    # API schema conformance (hard rule 8): the driver imports inari-server
+    # modules, so it runs INSIDE an inari-server checkout at server-src-ref
+    # with dist/openapi.yaml generated in-step. Release-mode only (today's
+    # gate-only semantics).
+    - name: apischema
+      activeDeadlineSeconds: 1800
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: srv
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+        - name: clone-server
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /srv && cd /srv && git remote add origin https://github.com/7K-Inari/inari-server.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.server-src-ref}}"
+          volumeMounts:
+            - name: srv
+              mountPath: /srv
+      script:
+        image: golang:1.26.3-bookworm
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+        source: |
+          set -eu
+          mkdir -p /srv/e2e /artifacts/out
+          cp /work/scripts/e2e/api/api_schema_e2e_test.go /srv/e2e/
+          cd /srv
+          go run ./cmd/export-openapi dist/openapi.yaml
+          go install gotest.tools/gotestsum@v1.13.0
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          # Driver env names are its own contract (scripts/e2e/api); map from
+          # the shared contract here.
+          E2E_BASE_URL="https://$E2E_BASE_DOMAIN" \
+          E2E_KEYCLOAK_URL="$E2E_KC_URL" \
+          E2E_USERNAME="dev-admin" \
+          E2E_PASSWORD="$E2E_PASSWORD" \
+          E2E_ORG="$E2E_TENANT_SLUG" \
+            gotestsum --junitfile /artifacts/out/junit.xml -- \
+              -tags=e2e ./e2e/ -run TestAPISchemaConformance -count=1
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: srv
+            mountPath: /srv
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/apischema/junit.xml
+
+    # ----------------------------------------------------- exit-handler (W4)
+    # Unconditional result collection (hard rule 8/10): every suite's JUnit
+    # lands here even when the run failed or was aborted (optional inputs
+    # tolerate absence). Always exits 0 — reporting never masks the result.
+    #
+    # W4 SEAM: replace the marked block with the ReportPortal import client
+    # (launch = reportportal-launch or "<mode>-<uid>"; attributes: mode,
+    # E2E_RUN_ID, image tags, charts-ref; endpoint https://reportportal.int
+    # .7kgroup.org; creds from a future ESO secret `reportportal-importer`).
+    - name: exit-handler
+      activeDeadlineSeconds: 900
+      inputs:
+        artifacts:
+          - name: ginkgo-junit
+            optional: true
+            path: /junit/ginkgo-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/ginkgo/junit.xml
+          - name: chainsaw-junit
+            optional: true
+            path: /junit/chainsaw-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chainsaw/junit.xml
+          - name: apischema-junit
+            optional: true
+            path: /junit/apischema-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/apischema/junit.xml
+          # Keep in sync with the playwright task's withParam shard list.
+          - name: playwright-junit-1-2
+            optional: true
+            path: /junit/playwright-junit-1-2.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/playwright/junit-1-2.xml
+          - name: playwright-junit-2-2
+            optional: true
+            path: /junit/playwright-junit-2-2.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/playwright/junit-2-2.xml
+      script:
+        image: alpine:3.22
+        command: [sh]
+        source: |
+          set -u
+          LAUNCH="{{workflow.parameters.reportportal-launch}}"
+          [ -n "$LAUNCH" ] || LAUNCH="{{workflow.parameters.mode}}-{{workflow.uid}}"
+          echo "run: {{workflow.parameters.mode}} / {{workflow.uid}} (status {{workflow.status}})"
+          echo "launch: $LAUNCH"
+          echo "attributes: mode={{workflow.parameters.mode}} charts-ref={{workflow.parameters.charts-ref}} server-image={{workflow.parameters.server-image}} console-image={{workflow.parameters.console-image}} agent-image={{workflow.parameters.agent-image}}"
+
+          mkdir -p /artifacts/out
+          {
+            echo "run_id={{workflow.uid}}"
+            echo "launch=$LAUNCH"
+            echo "mode={{workflow.parameters.mode}}"
+            echo "status={{workflow.status}}"
+          } > /artifacts/out/manifest.txt
+
+          echo "== collected JUnit"
+          for f in /junit/*.xml; do
+            if [ -f "$f" ]; then
+              echo "  $f ($(grep -c '<testcase' "$f" 2>/dev/null || echo 0) testcases)"
+              echo "junit=$(basename "$f")" >> /artifacts/out/manifest.txt
+            fi
+          done
+
+          # --- W4 SEAM: ReportPortal import ------------------------------
+          # if [ -n "$RP_TOKEN" ]; then
+          #   for f in /junit/*.xml; do
+          #     curl -sf -X POST "$RP_ENDPOINT/api/v1/$RP_PROJECT/launch/import" ...
+          #   done
+          # fi
+          # -----------------------------------------------------------------
+          echo "== exit-handler done"
+      outputs:
+        artifacts:
+          - name: manifest
+            path: /artifacts/out/manifest.txt
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/manifest.txt
