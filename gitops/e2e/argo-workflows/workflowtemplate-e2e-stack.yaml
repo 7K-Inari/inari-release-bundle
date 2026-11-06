@@ -672,10 +672,17 @@ spec:
           # initial LIST against a real cluster climbs ~1.3MB/s past the
           # chart's 128Mi default at ~75s — cgroup SIGKILL (reported as exit
           # 137 / reason Error, no OOMKilled marker). 128Mi/512Mi override.
-          # --wait --timeout 600s: cold start is ~5.5min (live-verified: KC
-          # client provision + Vault write + ESO sync + the agent's in-process
-          # 2m ESO poll + a crash-restart cycle); 300s timed out while the
-          # agent went on to connect.
+          # No helm --wait: helm's kstatus-based waiter NEVER observes the
+          # rollout under this SA — it burns the whole timeout and then
+          # reports "Deployment ... not ready. status: Unknown" even when the
+          # Deployment's Available condition has been True for minutes
+          # (live-verified twice: round 10 @300s, round 13 @600s — pod Ready
+          # 3m13s into a 600s wait, helm still timed out). kubectl rollout
+          # status uses a plain get/list/watch the Role provably allows.
+          # 600s budget: cold start is ~5.5min (live-verified: KC client
+          # provision + Vault write + ESO sync + the agent's in-process 2m
+          # ESO poll + a crash-restart cycle); round 13's full chain took
+          # 3m13s.
           # Values go through a FILE, never a backslash-continued --set list:
           # a comment line severing the continuation silently dropped every
           # trailing flag TWICE (2026-11-06 — once losing --wait/--timeout,
@@ -712,8 +719,8 @@ spec:
           echo "== helm upgrade --install inari-agent-e2e (image $AGENT_TAG, chart ${VERSION_ARGS:-latest})"
           helm upgrade --install inari-agent-e2e oci://ghcr.io/7k-inari/charts/inari-agent \
             --namespace inari-e2e $VERSION_ARGS \
-            -f /tmp/agent-values.yaml \
-            --wait --timeout 600s
+            -f /tmp/agent-values.yaml
+          kubectl rollout status deployment/inari-agent -n inari-e2e-agent --timeout=600s
           echo "== agent installed; the Ginkgo cluster phase asserts the connected-agent chain"
 
     # -------------------------------------------------------- chainsaw-verify
