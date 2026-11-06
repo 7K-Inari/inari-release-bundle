@@ -341,7 +341,8 @@ spec:
                 {name: "INARI_AGENT_IMAGE_REPO", value: "harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent"},
                 {name: "INARI_GIT_PROVIDER", value: "local"},
                 {name: "INARI_GIT_LOCAL_ROOT", value: "/var/lib/inari/git"},
-                {name: "INARI_LOG_FORMAT", value: "json"}
+                {name: "INARI_LOG_FORMAT", value: "json"},
+                {name: "INARI_ESO_SECRET_NAMESPACE", value: "inari-e2e-agent"}
               ],
               extraVolumes: [{name: "git-root", persistentVolumeClaim: {claimName: "inari-e2e-git"}}],
               extraVolumeMounts: [{name: "git-root", mountPath: "/var/lib/inari/git"}],
