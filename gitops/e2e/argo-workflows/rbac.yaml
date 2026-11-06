@@ -467,6 +467,147 @@ subjects:
     name: e2e-chainsaw-hook
     namespace: inari-e2e
 ---
+# e2e-runner reads the agent's ESO-projected OIDC client secret (the Ginkgo
+# cluster phase, stack/suite/cluster.go AssertESOAgentClientSecret). The
+# namespace comes from the handoff's agent_namespace (inari-e2e-agent here);
+# the secret VALUE stays pinned by name. kubectl wait needs list/watch
+# (resourceNames cannot restrict those verbs — RBAC semantics); metadata
+# exposure of ExternalSecret names in this dedicated namespace is accepted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-runner-agent-read
+  namespace: inari-e2e-agent
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    resourceNames: ["inari-agent-oidc-client"]
+    verbs: ["get"]
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["inari-agent-oidc-client"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-runner-agent-read
+  namespace: inari-e2e-agent
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-runner-agent-read
+subjects:
+  - kind: ServiceAccount
+    name: e2e-runner
+    namespace: inari-e2e
+---
+# The Ginkgo RBAC phase emulates the tenant-local ArgoCD (GAP
+# rbac-e2e-argocd): it applies the materialized baseline/rbac/ bundle and
+# prunes stale bindings (stack/suite/rbac.go SyncRBAC). Mutations are
+# name-pinned to the enumerable tenant-e2e-org-* set (4 roles + the
+# team×role binding matrix; tenant slug is the fixed E2E_TENANT_SLUG);
+# create and list cannot be resourceNames-restricted (RBAC semantics) and
+# stay unpinned — same accepted blast radius as the e2e-agent-ensure posture
+# above: short-lived workflow pods, e2e-only SA, token never leaves the
+# cluster.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-runner-tenant-rbac
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["create", "list"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames:
+      - tenant-e2e-org-admin
+      - tenant-e2e-org-operator
+      - tenant-e2e-org-editor
+      - tenant-e2e-org-viewer
+    verbs: ["get", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings"]
+    resourceNames:
+      # team×role matrix for the seed personas' teams (baseline + any flip
+      # the mapping-flip spec performs).
+      - tenant-e2e-org-admins-admin
+      - tenant-e2e-org-admins-operator
+      - tenant-e2e-org-admins-editor
+      - tenant-e2e-org-admins-viewer
+      - tenant-e2e-org-operators-admin
+      - tenant-e2e-org-operators-operator
+      - tenant-e2e-org-operators-editor
+      - tenant-e2e-org-operators-viewer
+      - tenant-e2e-org-editors-admin
+      - tenant-e2e-org-editors-operator
+      - tenant-e2e-org-editors-editor
+      - tenant-e2e-org-editors-viewer
+      - tenant-e2e-org-viewers-admin
+      - tenant-e2e-org-viewers-operator
+      - tenant-e2e-org-viewers-editor
+      - tenant-e2e-org-viewers-viewer
+    verbs: ["get", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-runner-tenant-rbac
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: e2e-runner-tenant-rbac
+subjects:
+  - kind: ServiceAccount
+    name: e2e-runner
+    namespace: inari-e2e
+---
+# kubectl auth can-i --as/--as-group (kube.AuthCanI) requires impersonate.
+# Pinned to exactly the RBAC-phase probe identity: the rbac-viewer persona
+# and its viewers team group.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-runner-impersonate-rbac-probe
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  - apiGroups: [""]
+    resources: ["users"]
+    resourceNames: ["oidc:rbac-viewer"]
+    verbs: ["impersonate"]
+  - apiGroups: [""]
+    resources: ["groups"]
+    resourceNames: ["/tenant-e2e-org/viewers"]
+    verbs: ["impersonate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-runner-impersonate-rbac-probe
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: e2e-runner-impersonate-rbac-probe
+subjects:
+  - kind: ServiceAccount
+    name: e2e-runner
+    namespace: inari-e2e
+---
 # e2e-submitter — GHA thin-wrapper identity (argo-server client authMode).
 # Namespace-scoped: submit + read workflows in inari-e2e, nothing else.
 apiVersion: v1
