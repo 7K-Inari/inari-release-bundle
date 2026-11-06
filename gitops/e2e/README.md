@@ -123,7 +123,7 @@ lives in 7k-app-of-apps (W1).
 | File | Contents |
 |---|---|
 | `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release) + chainsaw-verify; onExit collects every JUnit (ReportPortal importer = W4) |
-| `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-<runId>-*` orgs older than retention-days (contract invariant 6), skipping active runs; every 6h |
+| `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-*` orgs older than retention-days (contract invariant 6), skipping `e2e-org` + active runs; every 6h. Two identities: requests as dev-admin, approves as **e2e-ops** (lifecycle approvals are never self-decidable) |
 | `cronworkflow-nightly.yaml` | 03:17 UTC full surface incl. quarantined, edge images, env-wide HA flip |
 | `cronworkflow-weekly.yaml`, `cronworkflow-nightly-reset.yaml` | **Suspended placeholders** (phase 2: load/chaos legs; restore-from-backup needs CNPG barman wiring in env-extras first) |
 | `semaphore-e2e-env-lock.yaml` | One permit — serializes every run against the single env |
