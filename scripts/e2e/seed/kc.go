@@ -347,6 +347,27 @@ func (c *KC) AddUserToGroup(adminToken, userID, groupID string) error {
 	return err
 }
 
+// GroupByPath returns the id of the group at the given full path
+// (e.g. tenant-e2e-org/viewers), or "" when absent — a missing group 404s,
+// which the org-sync-lag poll treats as keep-polling, not an error.
+func (c *KC) GroupByPath(adminToken, path string) (string, error) {
+	status, decoded, err := c.api(adminToken, "GET", "/group-by-path/"+path, nil)
+	if err != nil {
+		if status == 404 {
+			return "", nil
+		}
+		return "", err
+	}
+	g, err := decodeSlice[Group]([]any{decoded})
+	if err != nil {
+		return "", err
+	}
+	if len(g) == 0 {
+		return "", nil
+	}
+	return g[0].ID, nil
+}
+
 // JoinOrganization adds a user to a KC organization. KC 26.3 removed
 // PUT .../members/{userId} (405): membership is POST .../members with the
 // user ID as a JSON string body (201); a duplicate add answers 409 — that

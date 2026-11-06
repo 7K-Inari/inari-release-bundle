@@ -227,3 +227,38 @@ func ExampleStatusError_Error() {
 	fmt.Println((&StatusError{Status: 409, Body: `{"title":"conflict"}`}).Error())
 	// Output: 409: {"title":"conflict"}
 }
+
+func TestKCGroupByPath(t *testing.T) {
+	m := newMux(t)
+	m.handle("GET", "/admin/realms/inari/group-by-path/tenant-e2e-org/viewers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"id": "grp-42"})
+	})
+	srv := httptest.NewServer(http.HandlerFunc(m.serveHTTP))
+	defer srv.Close()
+
+	id, err := NewKC(srv.URL, "inari").GroupByPath("tok", "tenant-e2e-org/viewers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "grp-42" {
+		t.Fatalf("id = %q", id)
+	}
+}
+
+func TestKCGroupByPathAbsent(t *testing.T) {
+	// A missing group 404s — that is "", nil (org-sync lag polls on it).
+	m := newMux(t)
+	m.handle("GET", "/admin/realms/inari/group-by-path/tenant-nope/viewers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 404, map[string]string{"error": "Group not found"})
+	})
+	srv := httptest.NewServer(http.HandlerFunc(m.serveHTTP))
+	defer srv.Close()
+
+	id, err := NewKC(srv.URL, "inari").GroupByPath("tok", "tenant-nope/viewers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "" {
+		t.Fatalf("id = %q, want empty for a missing group", id)
+	}
+}

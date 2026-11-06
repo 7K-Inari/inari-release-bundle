@@ -314,6 +314,35 @@ func run() error {
 		return err
 	}
 
+	// --- C2: rbac-viewer probe identity (kind parity: suite/seed.go) ------
+	// The RBAC phase's authorizer probe (kubectl auth can-i as
+	// oidc:rbac-viewer in /tenant-<slug>/viewers) needs a real KC user
+	// carrying the viewers team group in its groups claim. Not a UI persona,
+	// no org join, no role assignment — group membership only. The team
+	// group is created by the server's org sync, so it lags tenant creation
+	// — poll for it.
+	viewerID, err := ensureUser(kc, at, "rbac-viewer", envOr("E2E_RBAC_VIEWER_PASSWORD", "rbac-viewer"), "RBAC", "Viewer")
+	if err != nil {
+		return fmt.Errorf("ensuring rbac-viewer: %w", err)
+	}
+	var viewersGrp string
+	if err := poll(90*time.Second, 5*time.Second, func() error {
+		id, err := kc.GroupByPath(at, "tenant-"+cfg.TenantSlug+"/viewers")
+		if err != nil {
+			return err
+		}
+		if id == "" {
+			return errors.New("transient: group not synced yet")
+		}
+		viewersGrp = id
+		return nil
+	}); err != nil {
+		return fmt.Errorf("Keycloak group tenant-%s/viewers (org sync): %w", cfg.TenantSlug, err)
+	}
+	if err := kc.AddUserToGroup(at, viewerID, viewersGrp); err != nil {
+		return fmt.Errorf("joining rbac-viewer to the viewers team group: %w", err)
+	}
+
 	// --- B3 + B4: default git-config and the git write-path proof ----------
 	// The default repo follows the server's own convention for the local
 	// provider (bare <slug>-inari-state — INARI_GIT_STATE_REPO_ORG is empty):

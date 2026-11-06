@@ -69,6 +69,7 @@ no suite, and must never be used as a test identity.
 | `E2E_USER` / `E2E_PASSWORD` | no | `dev-admin` / `dev-admin` | the dev-admin persona |
 | `E2E_{OPERATOR,EDITOR,VIEWER,MEMBER}_PASSWORD` | no | = username | persona passwords (mounted from `inari-e2e-personas`) |
 | `E2E_OPS_USER` / `E2E_OPS_PASSWORD` | no | `e2e-ops` / `e2e-ops` | non-persona platform-ops identity (janitor approve step; secret key `ops-password`) |
+| `E2E_RBAC_VIEWER_PASSWORD` | no | `rbac-viewer` | password of the `rbac-viewer` probe identity (Ginkgo RBAC phase's `kubectl auth can-i` subject; KC user + `/tenant-<slug>/viewers` group membership only — no org join, no role assignment; mirrors the suite's `kc.PersonaPassword` resolution) |
 | `SEED_KC_ADMIN_CLIENT_SECRET` | no | read from secret `inari-keycloak-admin` | the `inari-platform-admin` client secret |
 | `E2E_HANDOFF_CONFIGMAP` | CM mode | — | `namespace/name` of the handoff ConfigMap; unset = local mode |
 | `E2E_TOOLBOX_NAME` | no | `e2e-toolbox` | toolbox pod name |
