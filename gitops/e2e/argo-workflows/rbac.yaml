@@ -402,12 +402,16 @@ rules:
   # and lives in short-lived workflow pods.
   # list (live-verified): helm's existing-resource conflict check LISTs the
   # affected types before create ("failed to list ... ClusterRole").
+  # list+watch (live-verified): helm's existing-resource conflict check
+  # LISTs the affected types before create, and --wait's readiness
+  # informers WATCH them ("cannot watch resource clusterrolebindings").
+  # Read-only, cluster-wide RBAC metadata.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
-    verbs: ["create", "list", "escalate", "bind"]
+    verbs: ["create", "list", "watch", "escalate", "bind"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterrolebindings"]
-    verbs: ["create", "list"]
+    verbs: ["create", "list", "watch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles", "clusterrolebindings"]
     resourceNames: ["inari-agent-e2e-discovery"]
