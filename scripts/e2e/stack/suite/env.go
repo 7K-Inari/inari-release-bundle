@@ -53,6 +53,12 @@ type Handoff struct {
 	OrgID         string `json:"org_id"`     // cluster orgId (agent tenant id)
 	GitHostDir    string `json:"git_host_dir"`
 	AgentChartDir string `json:"agent_chart_dir"`
+	// AgentNamespace is where the e2e agent chart (and its ESO-projected
+	// OIDC client secret) lives: inari-system on kind, inari-e2e-agent on
+	// the live env (INARI_ESO_SECRET_NAMESPACE). Published by the seed as
+	// the agent_namespace ConfigMap key; optional on the reader side —
+	// normalizeHandoff defaults it to inari-system.
+	AgentNamespace string `json:"agent_namespace"`
 }
 
 // Env carries the handoff plus ready clients and the HA selection.
@@ -60,9 +66,13 @@ type Env struct {
 	Handoff
 	HA            bool
 	MigrationsDir string // E2E_MIGRATIONS_DIR (HA(c) migration count)
-	KC            *kc.Client
-	API           *inariapi.Client
-	FGA           *fga.Client
+	// GitURL is the in-cluster git service base (E2E_GIT_URL, e.g.
+	// git://git-service.inari-e2e.svc:9418) — the live-env replacement for
+	// the kind hostPath git root. Empty on the kind path.
+	GitURL string
+	KC     *kc.Client
+	API    *inariapi.Client
+	FGA    *fga.Client
 }
 
 // Load resolves the suite environment, in priority order:
@@ -127,15 +137,16 @@ func loadHandoffConfigMap(t TB, ref string) *Env {
 		t.Fatalf("parsing handoff ConfigMap %s: %v", ref, err)
 	}
 	h := Handoff{
-		Namespace:     cm.Data["namespace"],
-		Toolbox:       cm.Data["toolbox"],
-		Tenant:        cm.Data["tenant"],
-		KCUID:         cm.Data["kc_uid"],
-		OrgKCID:       cm.Data["org_kc_id"],
-		ClusterID:     cm.Data["cluster_id"],
-		OrgID:         cm.Data["org_id"],
-		GitHostDir:    cm.Data["git_host_dir"],
-		AgentChartDir: cm.Data["agent_chart_dir"],
+		Namespace:      cm.Data["namespace"],
+		Toolbox:        cm.Data["toolbox"],
+		Tenant:         cm.Data["tenant"],
+		KCUID:          cm.Data["kc_uid"],
+		OrgKCID:        cm.Data["org_kc_id"],
+		ClusterID:      cm.Data["cluster_id"],
+		OrgID:          cm.Data["org_id"],
+		GitHostDir:     cm.Data["git_host_dir"],
+		AgentChartDir:  cm.Data["agent_chart_dir"],
+		AgentNamespace: cm.Data["agent_namespace"],
 	}
 	requireHandoffFields(t, "handoff ConfigMap "+ref, h, false)
 	e := newEnv(h)
@@ -165,12 +176,25 @@ func requireHandoffFields(t TB, source string, h Handoff, kindFields bool) {
 	}
 }
 
+// normalizeHandoff applies the reader-side defaults: agent_namespace is
+// optional in the handoff contract (absent in kind file handoffs and in
+// ConfigMaps written before the seed published it) and defaults to the
+// kind-era agent namespace.
+func normalizeHandoff(h Handoff) Handoff {
+	if h.AgentNamespace == "" {
+		h.AgentNamespace = "inari-system"
+	}
+	return h
+}
+
 // newEnv builds the Env (clients + HA selection) around a handoff.
 func newEnv(h Handoff) *Env {
+	h = normalizeHandoff(h)
 	e := &Env{
 		Handoff:       h,
 		HA:            os.Getenv("E2E_HA") == "1",
 		MigrationsDir: migrationsDir(),
+		GitURL:        strings.TrimRight(os.Getenv("E2E_GIT_URL"), "/"),
 	}
 	e.KC = &kc.Client{NS: h.Namespace, Toolbox: h.Toolbox}
 	e.FGA = &fga.Client{NS: h.Namespace, Toolbox: h.Toolbox}
