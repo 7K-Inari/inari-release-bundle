@@ -18,7 +18,9 @@ spec:
     path: charts/inari-console
     helm:
       releaseName: inari-console
-      values: |
+      # valuesObject, NOT values — ArgoCD never merges the two (see the
+      # server app). env-prep patches bundle.tag per run.
+      valuesObject:
         bundle:
           repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-ui-bundle
           # Steady state tracks inari-ui main ("edge") — same rationale as
@@ -45,6 +47,7 @@ spec:
     namespace: inari-e2e
   syncPolicy:
     automated:
+      prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true

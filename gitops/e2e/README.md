@@ -133,11 +133,16 @@ lives in 7k-app-of-apps (W1).
 | `../chainsaw-hooks/smoke-job.yaml` | PostSync chainsaw smoke Job, attached to the inari-e2e-server app as a second source — every candidate flip is smoke-gated. **Deviation (Q9):** only chainsaw runs as a PostSync hook; the taxonomy §3 Ginkgo/Playwright smoke sets run via `mode=smoke` submissions |
 
 Env-prep mutates the child Applications (`inari-e2e-server` /
-`inari-e2e-console` / HA-only `inari-e2e-nats`) by JSON patch —
-`targetRevision` + `helm.valuesObject`. The env pointer app carries
-`ignoreDifferences` for exactly those fields, so the patches persist for
-the run's duration and each run re-converges the env to its own artifact
-set (hard rule 5). Platform apps are health-checked, never mutated.
+`inari-e2e-console` / `inari-e2e-nats`) by JSON patch —
+`targetRevision` + `helm.valuesObject`. **ArgoCD never merges
+`helm.values` with `helm.valuesObject`** (`ValuesYAML()` returns one XOR
+the other, argo-cd v3.3.8 values.go), so the env files carry their
+baselines as `valuesObject` and every env-prep patch writes the COMPLETE
+desired object (baseline + per-run flip), never a delta. The env pointer
+app carries `ignoreDifferences` for exactly those fields, so the patches
+persist for the run's duration and each run re-converges the env to its
+own artifact set (hard rule 5). Platform apps are health-checked, never
+mutated.
 
 Manual run: `argo submit --from workflowtemplate/e2e-stack -n inari-e2e -p
 mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token).
