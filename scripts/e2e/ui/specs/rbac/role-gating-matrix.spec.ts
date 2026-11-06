@@ -1,6 +1,6 @@
 // @p1 @rbac — per-persona RBAC role gating matrix (P1-1).
 //
-// For each of the four role personas (seed/seed-personas.mjs, one per
+// For each of the four role personas (scripts/e2e/seed, one per
 // ADR-0013 built-in role) the spec drives the console with that persona's
 // storageState and asserts the visible/enabled control set matches its
 // exact permission bundle from inari-server migration 0029_roles.sql:

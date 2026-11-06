@@ -7,10 +7,9 @@
   "scripts": {
     "test": "playwright test",
     "test:ci": "playwright test --config playwright.config.ci.ts",
-    "test:seed": "node --test \"seed/**/*.test.mjs\"",
     "test:flakes": "node --test report-flakes.test.mjs quarantine-issues.test.mjs",
     "lint": "tsc --noEmit",
-    "test:helpers": "node --test --experimental-strip-types helpers/poll.test.ts"
+    "test:helpers": "node --test --experimental-strip-types helpers/poll.test.ts helpers/env.test.ts helpers/git.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

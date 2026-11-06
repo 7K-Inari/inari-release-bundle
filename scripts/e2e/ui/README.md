@@ -1,15 +1,18 @@
 # scripts/e2e/ui — console UI e2e (Playwright Test)
 
-Browser-level e2e for the Inari console, run by `release-e2e.yaml` on **both**
-HA matrix legs after golden-path and the api-schema suite. Replaces the
-former `scripts/e2e/ui-smoke.mjs` raw-Playwright script.
+Browser-level e2e for the Inari console. Runs against the persistent e2e
+environment (`https://inari-e2e.7kgroup.org` — console + API single origin,
+API at `/api/v1`) as a leg of the Argo `e2e-stack` WorkflowTemplate, after
+the seed step (`scripts/e2e/seed`). Replaces the former
+`scripts/e2e/ui-smoke.mjs` raw-Playwright script.
 
 ## Layout
 
 ```
 scripts/e2e/ui/
 ├── playwright.config.ts        # local defaults (list reporter, no retries)
-├── playwright.config.ci.ts     # CI: retries 2, workers 1, screenshot/video/trace on failure, JUnit + HTML + JSON
+├── playwright.config.ci.ts     # CI: retries 2, workers 1, screenshot/video/trace on failure,
+│                               #   JUnit + HTML + JSON (+ ReportPortal when RP_* envs are set)
 ├── report-flakes.mjs           # post-processes the JSON report: logs + writes test-results/flake-report.json
 ├── report-flakes.test.mjs      # unit tests (node --test) — fixture with flaky/failed/passed cases
 ├── quarantine-issues.mjs       # NIGHTLY ONLY: files/dedupes `e2e-flake` issues for tests flaky
@@ -19,16 +22,16 @@ scripts/e2e/ui/
 │   ├── auth.ts                 # persona registry (5 personas) + KC two-step login helper
 │   ├── auth.setup.ts           # setup project: saves .auth/<persona>.json for every persona
 │   └── org.ts                  # unique-name factories: e2e-<runId>-<seq>[-<kind>]
-├── seed/
-│   ├── seed-personas.mjs       # IDEMPOTENT persona seed (KC users + org join + role memberships
-│   │                           #   via the inari-server API + inari-ui redirect whitelist)
-│   └── seed-personas.test.mjs  # unit tests for the seed's decision logic (node --test)
 ├── helpers/
-│   ├── env.ts                  # env contract (UI_BASE, KC_HOST, KC_URL, TENANT_NAME, ...)
+│   ├── env.ts                  # THE env contract (single process.env reader — see below)
+│   ├── env.test.ts             # contract tests: live/legacy resolution, E2E_SEEDED fail-fast
 │   ├── poll.ts                 # poll(fn, { timeout, interval }) — see the polling RULE below
+│   ├── poll.test.ts            # poll contract tests (node --test)
+│   ├── git.ts                  # git ls-remote probe for the git-daemon precondition
+│   ├── git.test.ts             # unit tests (local bare repos; no daemon needed)
 │   └── api.ts                  # thin inari-server REST client (direct-grant token; reads +
-│   │                           #   DELETE for spec-owned cleanup only + raw() for
-│   │                           #   negative-path assertions — see rule 5 below)
+│                               #   DELETE for spec-owned cleanup only + raw() for
+│                               #   negative-path assertions — see rule 5 below)
 ├── pages/
 │   ├── login.page.ts           # KC 26 two-step form (username → submit → password)
 │   ├── app-shell.page.ts       # boot gate, tenant cards, sidebar nav, tenant switcher,
@@ -46,9 +49,9 @@ scripts/e2e/ui/
     │   ├── org-profile.spec.ts # @p1 @settings — display-name write path: save → reload →
     │   │                       #   persisted → audit event via the API; restores the shared
     │   │                       #   org's original name at the end (spec independence)
-    │   └── git-config.spec.ts  # @p1 @settings — state-repo write path through the local git
-    │                           #   provider (INARI_GIT_PROVIDER=local, hostPath root from
-    │                           #   golden-path.sh); restores the original config at the end
+    │   └── git-config.spec.ts  # @p1 @settings — state-repo write path; git-daemon
+    │                           #   precondition via E2E_GIT_URL (in-cluster git service);
+    │                           #   restores the original config at the end
     └── rbac/
         ├── role-lifecycle.spec.ts # @p0 @rbac — custom role CRUD, team→role mapping,
         │                          #   propagation to e2e-member's /me/permissions,
@@ -73,8 +76,9 @@ Both tenant specs **intentionally do not delete** the orgs they create
 (DELETE `/api/v1/tenants/{org}` is approval-gated and asynchronous — there
 is no clean synchronous delete). Each spec creates its own org
 (`uniqueName("onb")` / `uniqueName("sw")`); the switching spec is
-self-contained and never depends on the onboarding spec's leftovers. CI
-runs on a fresh cluster per workflow run, so leftovers are harmless.
+self-contained and never depends on the onboarding spec's leftovers. On the
+persistent env the janitor CronWorkflow reaps the `e2e-<runId>-*`
+leftovers — this is why `E2E_RUN_ID` is part of the env contract.
 
 The role-lifecycle spec's propagation step polls `GET /me/permissions` with
 `e2e-member`'s token for up to **120s** (5s interval) — that budget covers
@@ -82,45 +86,77 @@ the OrgTeamSync interval plus the `/me/permissions` cache TTL and dominates
 the spec's ~90s expected runtime; the describe sets a 180s test timeout so
 the project default (60s) can't kill the poll.
 
-## Running locally
+## Running against the live e2e environment
 
-Requires a running golden-path stack (`cd scripts/e2e/stack && KEEP_CLUSTER=true go test -tags=e2e -count=1 -timeout 40m ./...`).
+The suite's target is the persistent e2e environment; a seeded env is the
+only prerequisite (the seed step — `scripts/e2e/seed` — must have run since
+the last env-prep; on the workflow this is guaranteed by step ordering).
 
 ```sh
-kubectl -n inari port-forward svc/inari-console 18080:80 &
-kubectl -n inari port-forward svc/inari-server 18090:8080 &
-kubectl -n inari port-forward svc/keycloak-service 18091:8080 &
-node scripts/e2e/ui/seed/seed-personas.mjs   # idempotent; safe to re-run
-node scripts/e2e/lib/ui-proxy.mjs &          # merges console + API onto :8080
-helm upgrade inari-console charts/inari-console --namespace inari \
-  --reuse-values --set keycloakUrl=http://127.0.0.1:18091   # see constraints below
-
 cd scripts/e2e/ui
-npm ci
+npm ci --include=dev
 npx playwright install --with-deps chromium
-npx playwright test                          # local config
-npx playwright test --config playwright.config.ci.ts --grep @p0 --grep-invert @quarantine
+
+export E2E_BASE_DOMAIN=inari-e2e.7kgroup.org
+export E2E_KC_URL=https://auth-e2e.7kgroup.org
+export E2E_SEEDED=true                    # fail-fast guard (contract invariant 4)
+export E2E_RUN_ID=local-$(date +%s)       # feeds uniqueName(); the janitor's reap prefix
+export E2E_GIT_URL=git://git-service.inari-e2e.svc:9418   # only reachable in-cluster
+# Persona passwords come from the Vault-backed inari-e2e-personas secret:
+export E2E_PASSWORD=… E2E_OPERATOR_PASSWORD=… E2E_EDITOR_PASSWORD=… \
+       E2E_VIEWER_PASSWORD=… E2E_MEMBER_PASSWORD=…
+
+npx playwright test                                                 # local config
+npx playwright test --config playwright.config.ci.ts --grep "@p0|@smoke" --grep-invert @quarantine
 ```
 
-Env knobs (same names/defaults as the old script): `UI_BASE`
-(default `http://127.0.0.1:8080`), `KC_HOST` (`127.0.0.1:18091`), `KC_URL`
-(non-browser token/API calls, default `http://$KC_HOST`), `E2E_USER` /
-`E2E_PASSWORD` (`dev-admin`), `TENANT_NAME` (`E2E Org`), `API_BASE`
-(default `$UI_BASE`).
+`E2E_GIT_URL` is a cluster-internal address (`git://…svc:9418`) — from a
+workstation either skip the git-config spec (`--grep-invert @settings`,
+which also drops org-profile) or run the suite from a pod in `inari-e2e`.
+
+### Env contract (helpers/env.ts — the ONLY process.env reader in the suite)
+
+Two modes, selected by `E2E_BASE_DOMAIN`:
+
+| Export | Live mode (`E2E_BASE_DOMAIN` set) | Legacy mode (kind local loop) |
+|---|---|---|
+| `UI_BASE` | `https://$E2E_BASE_DOMAIN` | `$UI_BASE` (default `http://127.0.0.1:8080`) |
+| `KC_URL` / `KC_HOST` | `$E2E_KC_URL` (required) / derived host | `$KC_URL` / `$KC_HOST` (`127.0.0.1:18091`) |
+| `API_BASE` | `$API_BASE` override, else `https://$E2E_BASE_DOMAIN/api/v1` | `$API_BASE` (default `$UI_BASE`) |
+| `TENANT_NAME` / `TENANT_SLUG` | `$E2E_TENANT_NAME` (`E2E Org`) / `$E2E_TENANT_SLUG` (`e2e-org`) | `$TENANT_NAME` / `$TENANT` |
+| `GIT_URL` | `$E2E_GIT_URL` ("" skips the git-daemon precondition) | "" |
+| `RUN_ID` | `$E2E_RUN_ID` → `$GITHUB_RUN_ID` → random hex | same |
+| persona passwords | `$E2E_PASSWORD`, `$E2E_{OPERATOR,EDITOR,VIEWER,MEMBER}_PASSWORD` | defaults = username |
+
+Live mode **fails fast at import when `E2E_SEEDED` is not `"true"`** — a run
+against an unseeded env is a setup bug, not a test failure
+(environment-contract invariant 4). Legacy mode skips the check (the kind
+bring-up and the seed are one local flow).
+
+### Kind local loop (legacy mode)
+
+Requires a running golden-path stack (`cd scripts/e2e/stack && go test
+-tags=e2e -count=1 -timeout 40m ./...`) plus port-forwards for the console
+(18080), server (18090), and Keycloak (18091); the Go seed's local mode
+(`go run ../seed` with `E2E_KC_URL=http://127.0.0.1:18091` and the legacy
+`API_URL`/`UI_ORIGIN` defaults) replaces the retired `seed-personas.mjs`.
+Without `E2E_BASE_DOMAIN` the suite resolves exactly the pre-migration
+defaults — single origin in kind required the (deleted) ui-proxy, so point
+`UI_BASE` at whatever single-origin shim your loop uses.
 
 ## Personas
 
-Seeded by `seed/seed-personas.mjs` (run as a workflow step between stack
-bring-up and the Playwright run; idempotent — safe to re-run against a kept
-cluster). One per ADR-0013 built-in role, plus the role-less member:
+Seeded by the Go seed step (`scripts/e2e/seed`) — run as a workflow step
+between env-prep and the suite legs; idempotent, safe to re-run. One per
+ADR-0013 built-in role, plus the role-less member:
 
 | User | Password | Role | Purpose | Mutation policy |
 |---|---|---|---|---|
-| `dev-admin` | `dev-admin` | `admin` (platform-admins, E2E Org creator) | default `chromium` project identity; seeded by the golden-path stack suite (`suite/seed.go`) | never touched by specs |
-| `e2e-operator` | `e2e-operator` | `operator` (Platform Engineer) | operator-scope RBAC coverage | **specs must never change the assignment** |
-| `e2e-editor` | `e2e-editor` | `editor` (Developer) | developer-scope RBAC coverage | **specs must never change the assignment** |
-| `e2e-viewer` | `e2e-viewer` | `viewer` | read-only RBAC surface | **specs must never change the assignment** |
-| `e2e-member` | `e2e-member` | *(none)* | org member with no role/team — propagation target for the role-lifecycle spec | owned by the role-lifecycle spec, which **must restore it to role-less** (afterEach/afterAll) |
+| `dev-admin` | `$E2E_PASSWORD` (Vault `inari-e2e/personas` on the live env; `dev-admin` locally) | `admin` (platform-admins, E2E Org creator) | default `chromium` project identity | never touched by specs |
+| `e2e-operator` | `$E2E_OPERATOR_PASSWORD` | `operator` (Platform Engineer) | operator-scope RBAC coverage | **specs must never change the assignment** |
+| `e2e-editor` | `$E2E_EDITOR_PASSWORD` | `editor` (Developer) | developer-scope RBAC coverage | **specs must never change the assignment** |
+| `e2e-viewer` | `$E2E_VIEWER_PASSWORD` | `viewer` | read-only RBAC surface | **specs must never change the assignment** |
+| `e2e-member` | `$E2E_MEMBER_PASSWORD` | *(none)* | org member with no role/team — propagation target for the role-lifecycle spec | owned by the role-lifecycle spec, which **must restore it to role-less** (afterEach/afterAll) |
 
 Role assignment goes through the real inari-server membership API
 (`PUT /api/v1/tenants/{org}/members/{subject}` with a built-in `roleId`) —
@@ -158,18 +194,23 @@ bug).
 
 ## Key constraints (learned the hard way — do not "fix")
 
-- **Browser-reachable `keycloakUrl`, service-DNS issuer.** The console
-  chart's `keycloakUrl` must be reachable *from the browser*, so the workflow
-  helm-upgrades it to the port-forward (`http://127.0.0.1:18091`). Issued
-  tokens keep the converged service-DNS issuer, which the server accepts —
-  do not try to align them.
-- **Single-origin topology is required.** The server sends no CORS headers
-  (never needed in production, where the gateway routes `/api/v1` and `/` on
-  one host). In kind, `../lib/ui-proxy.mjs` merges console + API onto
-  `:8080` to reproduce that topology for the browser; `UI_BASE` must point at
-  the proxy, not the console forward.
-- **inari-ui client redirect whitelist.** The realm re-import wipes the
-  `inari-ui` client's redirect URIs / web origins every run, so
-  `seed/seed-personas.mjs` re-adds `http://127.0.0.1:8080/*` before the
-  Playwright run. The seed owns this — do not re-add it to the workflow or
-  the suite.
+- **Single-origin topology is required.** The server sends no CORS headers;
+  the gateway routes `/api/v1` and `/` on one host. On the live env the real
+  ingress provides this — there is no ui-proxy anymore (deleted with the
+  kind era). In kind you must reproduce it yourself if you run the suite
+  there.
+- **One Keycloak URL.** On real ingress the browser-reachable URL IS the
+  API-reachable URL: Keycloak hostname v2 pins the issuer to the configured
+  hostname, so tokens minted through any endpoint carry the public `iss`
+  (verified on the e2e env). The kind-era `/etc/hosts` issuer aliasing is
+  gone; do not reintroduce a browser/API split.
+- **inari-ui client redirect whitelist.** The realm re-import can wipe the
+  `inari-ui` client's redirect URIs / web origins, so the seed
+  (`scripts/e2e/seed`) re-merges `https://$E2E_BASE_DOMAIN/*` after every
+  env-prep. The seed owns this — do not re-add it to the workflow or the
+  suite.
+- **The realm import suppresses built-in KC scopes.** Its explicit
+  `clientScopes` array makes Keycloak skip `basic`/`organization`/etc. —
+  the seed recreates and attaches them (GAP markers in
+  `scripts/e2e/seed/scopes.go`). If every login dies with `invalid_scope`,
+  the seed hasn't run (or the repair regressed).

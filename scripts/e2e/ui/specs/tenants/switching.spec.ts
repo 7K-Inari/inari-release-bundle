@@ -47,7 +47,7 @@ import { AppShellPage } from "../../pages/app-shell.page";
 const SLUG = uniqueName("sw");
 const DISPLAY_NAME = `E2E ${SLUG}`;
 
-/** Seeded role-less persona (seed/seed-personas.mjs) — member of e2e-org only. */
+/** Seeded role-less persona (scripts/e2e/seed) — member of e2e-org only. */
 const MEMBER_EMAIL = "e2e-member@inari.local";
 
 interface ListedTenants {

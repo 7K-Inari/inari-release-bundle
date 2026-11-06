@@ -3,7 +3,7 @@
 // Each persona logs in once per run through the REAL Keycloak 26 two-step UI
 // flow (username → submit → password) and saves its storageState to
 // .auth/<persona>.json; test projects reuse the file via `storageState` in
-// playwright.config.ts. Personas are provisioned by seed/seed-personas.mjs
+// playwright.config.ts. Personas are provisioned by the seed (scripts/e2e/seed)
 // (see the persona table + no-mutation rules in scripts/e2e/ui/README.md);
 // the chromium project still runs as dev-admin — waves owning persona-scoped
 // specs add matching projects.
