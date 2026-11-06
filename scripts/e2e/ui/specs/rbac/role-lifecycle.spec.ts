@@ -382,7 +382,6 @@ async function ensureMemberBinding(): Promise<void> {
     await gotoAccessTab(page, RolesTabPage.LABEL);
     const roles = new RolesTabPage(page);
 
-    page.once("dialog", (dialog) => void dialog.accept());
     // Wire-level: the 409 is the evidence (kind DOM updates stall at random;
     // the inline error render is covered by roles-tab.test.tsx "surfaces the
     // server 409 when deleting a team-bound role" and by the live run).

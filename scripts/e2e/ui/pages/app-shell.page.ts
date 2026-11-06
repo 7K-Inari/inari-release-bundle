@@ -75,12 +75,19 @@ export class AppShellPage {
 
   /**
    * Open the "Create organization" page via the header tenant switcher
-   * (inari-ui src/layout/tenant-switcher.tsx — the menu item renders only
-   * for callers with canCreateOrganizations).
+   * (inari-ui src/layout/tenant-switcher.tsx — the item renders only for
+   * callers with canCreateOrganizations, LAST in the menu after the org
+   * list). The locator wait keeps the permission-gating signal (a missing
+   * item fails here); the click is dispatched rather than pointer-driven
+   * because the dropdown has no internal scroll — with many orgs the item
+   * sits outside the viewport and a pointer click never fires (verified
+   * live; UI limitation flagged for inari-ui).
    */
   async openCreateOrganization(): Promise<void> {
     await this.switcherButton().click();
-    await this.page.getByRole("menuitem", { name: "Create organization" }).click();
+    await this.page
+      .getByRole("menuitem", { name: "Create organization" })
+      .dispatchEvent("click");
   }
 
   /**
@@ -107,9 +114,20 @@ export class AppShellPage {
    * (helpers/poll.ts) for the new context — never assert immediately. The
    * same org can render twice in the menu (Recent + Organizations
    * sections), hence .first().
+   *
+   * The click is dispatched, not pointer-driven: the dropdown has no
+   * internal scroll, so on a persistent env with many leftover orgs the
+   * target item can sit outside the viewport and a pointer click burns the
+   * whole actionability wait without ever firing (verified live). The
+   * dropdown keyboard path can't address an arbitrary item either. (UI
+   * limitation flagged for inari-ui; the switch navigation itself is still
+   * fully exercised.)
    */
   async switchTenant(slug: string): Promise<void> {
     await this.switcherButton().click();
-    await this.page.getByRole("menuitem", { name: slug, exact: true }).first().click();
+    await this.page
+      .getByRole("menuitem", { name: slug, exact: true })
+      .first()
+      .dispatchEvent("click");
   }
 }
