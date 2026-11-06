@@ -74,7 +74,10 @@ Secrets arrive via `secretKeyRef` env mounts — never workflow parameters
   handoff file — the seed never writes one.
 
 ```sh
-# local attach to the live env (kubeconfig context with CM/pod rights):
+# local attach to the live env (kubeconfig context with CM/pod rights).
+# NOTE: E2E_GIT_URL is a cluster-internal address — run the seed from a pod
+# in inari-e2e (or drop the variable to skip the git write-path proof) when
+# attaching from a workstation.
 E2E_KUBECONFIG=~/.kube/config \
 E2E_KC_URL=https://auth-e2e.7kgroup.org \
 E2E_BASE_DOMAIN=inari-e2e.7kgroup.org \
@@ -93,7 +96,8 @@ go run ./scripts/e2e/seed
   via `secretKeyRef` (`inari-e2e-personas` keys
   `{dev-admin,operator,editor,viewer,member}-password`;
   `inari-keycloak-admin` key `client-secret`).
-- **SA RBAC (ns inari-e2e):** `configmaps` get/create/patch (handoff),
+- **SA RBAC (ns inari-e2e):** `configmaps` get/create/update (handoff —
+  PUT with resourceVersion, deliberately no patch),
   `pods` get/create (toolbox), `secrets` get (admin-secret fallback only —
   not needed when the env mount is wired).
 - **Ordering:** env-prep → seed → suite legs. Suite legs get
