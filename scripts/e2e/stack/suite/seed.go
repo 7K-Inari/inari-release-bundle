@@ -10,6 +10,7 @@
 package suite
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -18,9 +19,16 @@ import (
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/poll"
 )
 
-// Literal seeding bodies (golden-path.sh parity).
+// Literal seeding bodies (golden-path.sh parity). The credential values are
+// injected from the resolved persona credentials (kc.DevAdminCredentials /
+// kc.PersonaPassword); with the kind-era defaults the rendered bodies stay
+// byte-identical to the script's.
 
-const devAdminCreate = `{"username":"dev-admin","enabled":true,"email":"dev-admin@inari.local","emailVerified":true,"firstName":"Dev","lastName":"Admin","credentials":[{"type":"password","value":"dev-admin","temporary":false}]}`
+// devAdminCreateJSON renders the dev-admin create body for the resolved
+// credentials (strconv.Quote emits a valid JSON string).
+func devAdminCreateJSON(username, password string) string {
+	return `{"username":` + strconv.Quote(username) + `,"enabled":true,"email":"dev-admin@inari.local","emailVerified":true,"firstName":"Dev","lastName":"Admin","credentials":[{"type":"password","value":` + strconv.Quote(password) + `,"temporary":false}]}`
+}
 const devAdminUpdate = `{"emailVerified":true,"firstName":"Dev","lastName":"Admin","requiredActions":[],"enabled":true}`
 
 const inariServerClientCreate = `{"clientId":"inari-server","enabled":true,"publicClient":true,"standardFlowEnabled":true,"directAccessGrantsEnabled":true,"redirectUris":["http://localhost/*"],"webOrigins":["+"],"defaultClientScopes":["openid","profile","email","organization"]}`
@@ -42,7 +50,11 @@ const organizationScope = `{"name":"organization","protocol":"openid-connect","a
 // GAP(kc-groups-mapper): the groups claim carries full group paths.
 const groupsMapper = `{"name":"groups","protocol":"openid-connect","protocolMapper":"oidc-group-membership-mapper","config":{"claim.name":"groups","full.path":"true","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}`
 
-const rbacViewerCreate = `{"username":"rbac-viewer","enabled":true,"emailVerified":true,"credentials":[{"type":"password","value":"rbac-viewer","temporary":false}]}`
+// rbacViewerCreateJSON renders the rbac-viewer create body for the resolved
+// persona password.
+func rbacViewerCreateJSON(password string) string {
+	return `{"username":"rbac-viewer","enabled":true,"emailVerified":true,"credentials":[{"type":"password","value":` + strconv.Quote(password) + `,"temporary":false}]}`
+}
 const rbacViewerUpdate = `{"email":"rbac-viewer@inari.local","emailVerified":true,"firstName":"RBAC","lastName":"Viewer","requiredActions":[],"enabled":true}`
 
 // seedResult carries the identities seeding establishes (handoff fields).
@@ -62,8 +74,12 @@ func seedKeycloakAndTenant(t TB, e *Env, c *ProvisionConfig) (seedResult, string
 	require.NoError(t, err)
 
 	// GAP(kc-realm): ensure dev user + public client with correct scopes.
+	// The seeded credentials are the ones UserToken resolves (env contract
+	// §1): E2E_USER/E2E_PASSWORD on the live env, username-as-password on
+	// the kind local loop.
 	logf("GAP(kc-realm): ensuring dev user + public client with correct scopes")
-	res.KCUID, err = e.KC.EnsureUser(at, "dev-admin", devAdminCreate, devAdminUpdate)
+	adminUser, adminPass := kc.DevAdminCredentials()
+	res.KCUID, err = e.KC.EnsureUser(at, adminUser, devAdminCreateJSON(adminUser, adminPass), devAdminUpdate)
 	require.NoError(t, err)
 	kcClient, err := e.KC.EnsureClient(at, "inari-server", inariServerClientCreate)
 	require.NoError(t, err)
@@ -169,7 +185,7 @@ func seedKeycloakAndTenant(t TB, e *Env, c *ProvisionConfig) (seedResult, string
 	// not write. The tenant-<slug>/viewers group is created by the server's
 	// org sync, so it may lag tenant creation — poll for it.
 	logf("ensuring the rbac-viewer Keycloak user + viewers team group membership")
-	viewerUID, err := e.KC.EnsureUser(at, "rbac-viewer", rbacViewerCreate, rbacViewerUpdate)
+	viewerUID, err := e.KC.EnsureUser(at, "rbac-viewer", rbacViewerCreateJSON(kc.PersonaPassword("rbac-viewer")), rbacViewerUpdate)
 	require.NoError(t, err)
 	var viewersGrp string
 	poll.Eventually(t, 90*time.Second, 5*time.Second, func() (bool, error) {

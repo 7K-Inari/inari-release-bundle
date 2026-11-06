@@ -90,7 +90,7 @@ func AssertBaselineRBACEffective(t TB, e *Env) {
 	// kubelogin-style check: the rbac-viewer user (seeded by the provisioner
 	// into the viewers team group; GAP(kc-groups-mapper) ensures the groups
 	// claim carries full group paths) must read but not write.
-	viewerTok, err := e.KC.PasswordToken("rbac-viewer", "rbac-viewer", "openid")
+	viewerTok, err := e.KC.PasswordToken("rbac-viewer", kc.PersonaPassword("rbac-viewer"), "openid")
 	require.NoError(t, err, "rbac-viewer token request failed")
 	claims, err := kc.Claims(viewerTok)
 	require.NoError(t, err)
