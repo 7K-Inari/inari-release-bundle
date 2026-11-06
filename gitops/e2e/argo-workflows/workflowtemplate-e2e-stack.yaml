@@ -666,6 +666,11 @@ spec:
           # controlPlane: in-cluster h2c — the live agent precedent (the istio
           # gateway's H2 bidi path to the public gw hostname is broken; the
           # public hostname is for external clusters).
+          # --wait --timeout 600s: cold start is ~5.5min (live-verified: KC
+          # client provision + Vault write + ESO sync + the agent's in-process
+          # 2m ESO poll + a crash-restart cycle); 300s timed out while the
+          # agent went on to connect. (Comments may NOT interrupt the
+          # backslash continuation — that broke the wait flags once already.)
           echo "== helm upgrade --install inari-agent-e2e (image $AGENT_TAG, chart ${VERSION_ARGS:-latest})"
           helm upgrade --install inari-agent-e2e oci://ghcr.io/7k-inari/charts/inari-agent \
             --namespace inari-e2e $VERSION_ARGS \
@@ -685,10 +690,6 @@ spec:
             --set oidcSecret.secretStore=vault-internal \
             --set oidcSecret.secretStoreKind=ClusterSecretStore \
             --set "oidcSecret.remotePath=inari/clusters/${CLUSTER_ID#cluster:}/oidc-client-secret" \
-            # Cold-start budget (live-verified): KC client provision + Vault
-            # write + ESO sync + the agent's in-process ESO poll (2m) + a
-            # crash-restart cycle ≈ 5.5min — 300s timed out while the agent
-            # went on to connect successfully.
             --wait --timeout 600s
           echo "== agent installed; the Ginkgo cluster phase asserts the connected-agent chain"
 
