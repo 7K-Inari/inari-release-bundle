@@ -156,7 +156,11 @@ own artifact set (hard rule 5). Platform apps are health-checked, never
 mutated.
 
 Manual run: `argo submit --from workflowtemplate/e2e-stack -n inari-e2e -p
-mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token). Every
+mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token). The
+token must be the FULL Authorization header — the argo CLI sends
+`ARGO_TOKEN` verbatim, so a bare JWT fails with "token not valid"; harvest
+with `printf 'Bearer %s' "$(kubectl -n inari-e2e get secret
+e2e-submitter-token -o jsonpath='{.data.token}' | base64 -d)"`. Every
 run — succeeded, failed, or aborted — lands in ReportPortal project
 `inari-e2e` as one launch (`https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all`);
 JUnit XMLs also persist in the Garage bucket at `e2e/<workflow-uid>/`.
