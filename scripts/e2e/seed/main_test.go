@@ -48,6 +48,36 @@ func TestPoll(t *testing.T) {
 	})
 }
 
+func TestLoadConfigOpsIdentity(t *testing.T) {
+	t.Setenv("E2E_KC_URL", "https://auth-e2e.example.com")
+
+	t.Run("kind-era defaults (username parity)", func(t *testing.T) {
+		// envOr treats "" as unset, so this pins the defaults regardless of
+		// the ambient environment.
+		t.Setenv("E2E_OPS_USER", "")
+		t.Setenv("E2E_OPS_PASSWORD", "")
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.OpsUser != "e2e-ops" || cfg.OpsPassword != "e2e-ops" {
+			t.Fatalf("ops defaults = %q/%q, want e2e-ops/e2e-ops", cfg.OpsUser, cfg.OpsPassword)
+		}
+	})
+
+	t.Run("contract variables override", func(t *testing.T) {
+		t.Setenv("E2E_OPS_USER", "ops-custom")
+		t.Setenv("E2E_OPS_PASSWORD", "s3cret-ops")
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.OpsUser != "ops-custom" || cfg.OpsPassword != "s3cret-ops" {
+			t.Fatalf("ops override = %q/%q", cfg.OpsUser, cfg.OpsPassword)
+		}
+	})
+}
+
 func TestJWTClaimsAndAud(t *testing.T) {
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"u-1","aud":["account","inari-server"]}`))
 	token := "x." + payload + ".y"
