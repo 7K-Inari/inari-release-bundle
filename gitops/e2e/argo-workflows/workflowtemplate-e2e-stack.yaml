@@ -399,34 +399,61 @@ spec:
             container: {merge: {resources: {requests: {cpu: "50m", memory: "128Mi"}}}}
           }')
 
-          echo "== patching inari-e2e-server (charts-ref=$CHARTS_REF, image=$SERVER_IMAGE, ha=$HA)"
-          kubectl -n argocd patch application inari-e2e-server --type=json -p '[
-            {"op":"replace","path":"/spec/sources/0/targetRevision","value":'"$CHARTS_REF_JSON"'},
-            {"op":"add","path":"/spec/sources/0/helm/valuesObject","value":'"$SERVER_VALUES"'}
-          ]'
+          # patch_app <app> <jsonPatchBase> <jqBase> <desiredValuesObject>:
+          # applies targetRevision + valuesObject ONLY when they differ from
+          # live, and records the pre-patch generation in $GEN_DIR for
+          # wait_app. No-op awareness matters: an identical re-patch does not
+          # bump .metadata.generation, so a generation wait on a no-op would
+          # hang forever (steady-state reruns hit exactly that).
+          GEN_DIR=/tmp/gens; mkdir -p "$GEN_DIR"
+          patch_app() {
+            app="$1"; pbase="$2"; jbase="$3"; desired="$4"
+            gen=$(kubectl -n argocd get application "$app" -o jsonpath='{.metadata.generation}')
+            cur=$(kubectl -n argocd get application "$app" -o json | jq -cS ".${jbase}.helm.valuesObject // {}")
+            ref=$(kubectl -n argocd get application "$app" -o json | jq -r ".${jbase}.targetRevision // \"\"")
+            des=$(echo "$desired" | jq -cS .)
+            if [ "$cur" = "$des" ] && [ "$ref" = "$CHARTS_REF" ]; then
+              echo "  $app already at the candidate set — no patch"
+              rm -f "$GEN_DIR/$app"
+              return
+            fi
+            kubectl -n argocd patch application "$app" --type=json -p '[
+              {"op":"replace","path":"'"$pbase"'/targetRevision","value":'"$CHARTS_REF_JSON"'},
+              {"op":"add","path":"'"$pbase"'/helm/valuesObject","value":'"$desired"'}
+            ]'
+            echo "$gen" > "$GEN_DIR/$app"
+          }
 
-          echo "== patching inari-e2e-console (charts-ref=$CHARTS_REF, bundle=$CONSOLE_IMAGE)"
-          kubectl -n argocd patch application inari-e2e-console --type=json -p '[
-            {"op":"replace","path":"/spec/source/targetRevision","value":'"$CHARTS_REF_JSON"'},
-            {"op":"add","path":"/spec/source/helm/valuesObject","value":'"$CONSOLE_VALUES"'}
-          ]'
-
-          echo "== patching inari-e2e-nats (ha=$HA)"
-          kubectl -n argocd patch application inari-e2e-nats --type=json -p '[
-            {"op":"add","path":"/spec/source/helm/valuesObject","value":'"$NATS_VALUES"'}
-          ]'
-
-          wait_app() { # app — Healthy+Synced, 10s interval, 15m budget
+          # wait_app <app> — Healthy+Synced, 10s interval, 15m budget. When a
+          # patch WAS applied, additionally require status.observedGeneration
+          # to pass the pre-patch generation first: the patch→poll race
+          # (live-verified 2026-11-06) is that health/sync status is STALE
+          # until the controller observes the new spec — without the
+          # generation gate env-prep greenlights runs whose rollout has not
+          # even started.
+          wait_app() {
+            app="$1"
+            gen=$(cat "$GEN_DIR/$app" 2>/dev/null || echo "")
             i=0
             while [ $i -lt 90 ]; do
-              status=$(kubectl -n argocd get application "$1" -o jsonpath='{.status.health.status}/{.status.sync.status}' 2>/dev/null || echo "Unknown/Unknown")
-              echo "  $1: $status"
-              [ "$status" = "Healthy/Synced" ] && return 0
+              out=$(kubectl -n argocd get application "$app" -o jsonpath='{.status.health.status}/{.status.sync.status}/{.status.observedGeneration}' 2>/dev/null || echo "Unknown/Unknown/0")
+              echo "  $app: $out"
+              h="${out%%/*}"; rest="${out#*/}"; sy="${rest%%/*}"; og="${rest#*/}"
+              if [ "$h/$sy" = "Healthy/Synced" ] && { [ -z "$gen" ] || [ "$og" -gt "$gen" ] 2>/dev/null; }; then return 0; fi
               i=$((i+1)); sleep 10
             done
-            echo "  $1 never became Healthy/Synced" >&2
+            echo "  $app never became Healthy/Synced" >&2
             return 1
           }
+
+          echo "== patching inari-e2e-server (charts-ref=$CHARTS_REF, image=$SERVER_IMAGE, ha=$HA)"
+          patch_app inari-e2e-server "/spec/sources/0" "spec.sources[0]" "$SERVER_VALUES"
+
+          echo "== patching inari-e2e-console (charts-ref=$CHARTS_REF, bundle=$CONSOLE_IMAGE)"
+          patch_app inari-e2e-console "/spec/source" "spec.source" "$CONSOLE_VALUES"
+
+          echo "== patching inari-e2e-nats (ha=$HA)"
+          patch_app inari-e2e-nats "/spec/source" "spec.source" "$NATS_VALUES"
 
           echo "== waiting for candidate apps"
           wait_app inari-e2e-server
