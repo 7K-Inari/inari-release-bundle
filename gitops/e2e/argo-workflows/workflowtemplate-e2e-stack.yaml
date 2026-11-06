@@ -560,6 +560,13 @@ spec:
           - name: E2E_MEMBER_PASSWORD
             valueFrom:
               secretKeyRef: {name: inari-e2e-personas, key: member-password}
+          # optional: the ops-password key lands only after the Vault property
+          # inari-e2e/personas.ops exists (#131 env-extras wiring) — until
+          # then the pod must still start and the seed falls back to its
+          # default, converging the identity on every run.
+          - name: E2E_OPS_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: ops-password, optional: true}
           - name: SEED_KC_ADMIN_CLIENT_SECRET
             valueFrom:
               secretKeyRef: {name: inari-keycloak-admin, key: client-secret}
