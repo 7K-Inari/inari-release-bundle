@@ -32,10 +32,13 @@ spec:
           replicaCount: 1
           image:
             repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-server
-            # Chart appVersion. Pinned explicitly so the proxy path is visible
-            # in review; env-prep overrides it with the candidate tag per run.
-            tag: "3.0.0"
-            pullPolicy: IfNotPresent
+            # Steady state tracks inari-server main ("edge"): the suites track
+            # the current API surface, and the nightly tests edge anyway —
+            # pinning the last release here left the env too old for them
+            # (roles/membership APIs postdate 3.0.0). env-prep overrides with
+            # the candidate tag per run; Always re-pulls the moving tag.
+            tag: "edge"
+            pullPolicy: Always
           # External NATS from inari-e2e-nats (wave 1 < 3), subchart off.
           nats:
             enabled: false

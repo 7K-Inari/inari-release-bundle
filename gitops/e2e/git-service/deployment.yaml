@@ -27,10 +27,14 @@ spec:
           # "'daemon' is not a git command" — verified live). Install the
           # matching subpackage at start, then exec the daemon. The apk
           # fetch needs one-time egress to the Alpine CDN per pod start.
+          # git daemon refuses repos owned by another uid ("dubious
+          # ownership" — go-git writes as the server's uid 65532): mark the
+          # tree safe before serving (verified live 2026-11-06).
           command: ["/bin/sh", "-c"]
           args:
             - >-
-              apk add --no-cache git-daemon >/dev/null
+              git config --global --add safe.directory '*'
+              && apk add --no-cache git-daemon >/dev/null
               && exec git daemon --export-all --reuseaddr
               --base-path=/srv/git /srv/git
           ports:

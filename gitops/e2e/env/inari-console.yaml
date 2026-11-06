@@ -21,7 +21,10 @@ spec:
       values: |
         bundle:
           repository: harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-ui-bundle
-          tag: "2.0.0"
+          # Steady state tracks inari-ui main ("edge") — same rationale as
+          # the server app: the suites track the current console. env-prep
+          # overrides per run; the oras init container pulls at pod start.
+          tag: "edge"
         gateway:
           name: internet-gateway
           namespace: istio
