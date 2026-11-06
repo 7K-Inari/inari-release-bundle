@@ -53,10 +53,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get", "list"]
-  # Run-metadata CM (resolve) + e2e-handoff CM reads (suites).
+  # Run-metadata CM (resolve creates; names are uid-unique, so no
+  # update/patch) + e2e-handoff CM reads (suites). Deliberately NO
+  # update/patch: that would let any step pod stomp the e2e-env-lock
+  # semaphore.
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    verbs: ["get", "list", "watch", "create"]
   # Persona + KC admin-client credentials (mounted as env, read by scripts).
   - apiGroups: [""]
     resources: ["secrets"]

@@ -173,7 +173,8 @@ spec:
           RUN_ID="{{workflow.uid}}"
           RP_LAUNCH="$RP_LAUNCH_PARAM"
           [ -n "$RP_LAUNCH" ] || RP_LAUNCH="$MODE-$RUN_ID"
-          echo -n "$RP_LAUNCH" > /tmp/rp-launch.txt
+          # The exit-handler recomputes this same value from the workflow
+          # parameters — it is the single source (no output wiring).
 
           # Run metadata for later inspection/janitor correlation (plan §5.1).
           kubectl -n inari-e2e create configmap "e2e-run-$(echo "$RUN_ID" | cut -c1-8)" \
@@ -186,11 +187,6 @@ spec:
             --from-literal=server-src-ref="$SERVER_SRC_REF" \
             --from-literal=reportportal-launch="$RP_LAUNCH"
           echo "run metadata written; rp-launch=$RP_LAUNCH"
-      outputs:
-        parameters:
-          - name: rp-launch
-            valueFrom:
-              path: /tmp/rp-launch.txt
 
     # --------------------------------------------------------- cosign-verify
     # Release-only (when-gated). Verifies the three candidate images on
@@ -218,6 +214,22 @@ spec:
           chmod +x /tmp/cosign
 
           mkdir -p /artifacts/out
+
+          # Tag-prefix convention split (registry-verified): inari-agent
+          # stable images are v-prefixed (v0.5.1), inari-server and
+          # inari-ui-bundle are unprefixed (1.8.0). agent.recommended carries
+          # the bare version, so normalize the AGENT tag defensively: prefix
+          # 'v' iff it is a bare X.Y.Z release tag. "edge" and per-commit
+          # edge builds (0.6.0-<sha>) stay unprefixed. The systemic fix
+          # (inari-server baseline.go / platform values vs inari-agent's
+          # image convention) is a separate cross-repo issue — the workflow
+          # must not fail on the registry's current reality.
+          AGENT_TAG="$AGENT_IMAGE"
+          case "$AGENT_TAG" in
+            v*) ;;
+            *) echo "$AGENT_TAG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' && AGENT_TAG="v$AGENT_TAG" || true;;
+          esac
+
           verify() { # image-ref, source-repo
             echo "== cosign verify $1 (identity $2)"
             /tmp/cosign verify "$1" \
@@ -227,7 +239,7 @@ spec:
           }
           verify "ghcr.io/7k-inari/inari-server:$SERVER_IMAGE" inari-server
           verify "ghcr.io/7k-inari/inari-ui-bundle:$CONSOLE_IMAGE" inari-ui
-          verify "ghcr.io/7k-inari/inari-agent:$AGENT_IMAGE" inari-agent
+          verify "ghcr.io/7k-inari/inari-agent:$AGENT_TAG" inari-agent
       outputs:
         artifacts:
           - name: cosign-log
@@ -519,8 +531,19 @@ spec:
           # the step header). Empty until inari-agent #89 merges and the edge
           # chart is verified; unset means "latest chart" so the step fails
           # loudly on the missing knobs rather than silently floating.
+          #
+          # Tag-prefix convention split (registry-verified): the agent CHART
+          # version is unprefixed (0.5.1) but the agent IMAGE tag is
+          # v-prefixed (v0.5.1) — normalize the image tag defensively (bare
+          # X.Y.Z only; "edge" and per-commit edge builds stay as-is). The
+          # systemic convention fix is a separate cross-repo issue.
           AGENT_CHART_VERSION_EDGE=""
           VERSION_ARGS=""
+          AGENT_TAG="$AGENT_IMAGE"
+          case "$AGENT_TAG" in
+            v*) ;;
+            *) echo "$AGENT_TAG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' && AGENT_TAG="v$AGENT_TAG" || true;;
+          esac
           if [ "$AGENT_IMAGE" != "edge" ]; then
             VERSION_ARGS="--version $AGENT_IMAGE"
           elif [ -n "$AGENT_CHART_VERSION_EDGE" ]; then
@@ -532,14 +555,14 @@ spec:
           # controlPlane: in-cluster h2c — the live agent precedent (the istio
           # gateway's H2 bidi path to the public gw hostname is broken; the
           # public hostname is for external clusters).
-          echo "== helm upgrade --install inari-agent-e2e (image $AGENT_IMAGE)"
+          echo "== helm upgrade --install inari-agent-e2e (image $AGENT_TAG, chart ${VERSION_ARGS:-latest})"
           helm upgrade --install inari-agent-e2e oci://ghcr.io/7k-inari/charts/inari-agent \
             --namespace inari-e2e $VERSION_ARGS \
             --set namespace=inari-e2e-agent \
             --set namespaceCreate=false \
             --set discovery.name=inari-agent-e2e-discovery \
             --set image.repository=harbor.7kgroup.org/ghcr-proxy/7k-inari/inari-agent \
-            --set image.tag="$AGENT_IMAGE" \
+            --set image.tag="$AGENT_TAG" \
             --set image.pullPolicy=IfNotPresent \
             --set config.tenantID="$ORG_ID" \
             --set config.controlPlane=http://inari-server.inari-e2e.svc:8080 \
