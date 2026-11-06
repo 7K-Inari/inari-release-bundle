@@ -511,13 +511,19 @@ subjects:
 ---
 # The Ginkgo RBAC phase emulates the tenant-local ArgoCD (GAP
 # rbac-e2e-argocd): it applies the materialized baseline/rbac/ bundle and
-# prunes stale bindings (stack/suite/rbac.go SyncRBAC). Mutations are
-# name-pinned to the enumerable tenant-e2e-org-* set (4 roles + the
-# team×role binding matrix; tenant slug is the fixed E2E_TENANT_SLUG);
-# create and list cannot be resourceNames-restricted (RBAC semantics) and
-# stay unpinned — same accepted blast radius as the e2e-agent-ensure posture
-# above: short-lived workflow pods, e2e-only SA, token never leaves the
-# cluster.
+# prunes stale bindings (stack/suite/rbac.go SyncRBAC). Cluster-wide grant,
+# NOT name-pinned — live-proven infeasible (e2e-stack-fl2g9, 2026-11-06):
+#   1. The materializer emits bindings for ALL of the tenant's teams
+#      (developers, org-admins, platform-team, …) and custom roles with
+#      UUID-derived names (tenant-e2e-org-e2e-<uuid>-1-role) — the name set
+#      is not enumerable, so resourceNames pinning cannot cover it.
+#   2. Creating the tenant roles trips RBAC escalation prevention
+#      (tenant-e2e-org-admin grants * on *), so the applier needs
+#      escalate+bind — which cannot be name-pinned for creates of dynamic
+#      names either.
+# Accepted blast radius, same posture as e2e-agent-ensure above: the SA
+# exists only in short-lived workflow pods and the token never leaves the
+# cluster. The impersonate grant below stays name-pinned.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -527,37 +533,7 @@ metadata:
 rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles", "clusterrolebindings"]
-    verbs: ["create", "list"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles"]
-    resourceNames:
-      - tenant-e2e-org-admin
-      - tenant-e2e-org-operator
-      - tenant-e2e-org-editor
-      - tenant-e2e-org-viewer
-    verbs: ["get", "update", "patch", "delete"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterrolebindings"]
-    resourceNames:
-      # team×role matrix for the seed personas' teams (baseline + any flip
-      # the mapping-flip spec performs).
-      - tenant-e2e-org-admins-admin
-      - tenant-e2e-org-admins-operator
-      - tenant-e2e-org-admins-editor
-      - tenant-e2e-org-admins-viewer
-      - tenant-e2e-org-operators-admin
-      - tenant-e2e-org-operators-operator
-      - tenant-e2e-org-operators-editor
-      - tenant-e2e-org-operators-viewer
-      - tenant-e2e-org-editors-admin
-      - tenant-e2e-org-editors-operator
-      - tenant-e2e-org-editors-editor
-      - tenant-e2e-org-editors-viewer
-      - tenant-e2e-org-viewers-admin
-      - tenant-e2e-org-viewers-operator
-      - tenant-e2e-org-viewers-editor
-      - tenant-e2e-org-viewers-viewer
-    verbs: ["get", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "escalate", "bind"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -16,7 +16,7 @@ var _ = Describe("Policy evaluate", Label(suite.LabelP0), Label(suite.LabelPolic
 	var policyID string
 
 	BeforeAll(func() {
-		policyID = suite.CreateDenyLatestPolicy(GinkgoT(), env)
+		policyID = suite.EnsureDenyLatestPolicy(GinkgoT(), env)
 	})
 
 	It("denies :latest and untagged images with the deny-latest-image rule", func() {

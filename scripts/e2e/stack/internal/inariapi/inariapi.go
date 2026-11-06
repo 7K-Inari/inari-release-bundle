@@ -237,6 +237,22 @@ func (c *Client) PutRBACMappings(team, roleID string) error {
 	})
 }
 
+// PolicySummary is the list view of a tenant policy (GET /policies).
+type PolicySummary struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+}
+
+// ListPolicies returns the tenant's policies.
+func (c *Client) ListPolicies() ([]PolicySummary, error) {
+	var resp struct {
+		Policies []PolicySummary `json:"policies"`
+	}
+	err := c.GetJSON("/tenants/"+c.Tenant+"/policies", &resp)
+	return resp.Policies, err
+}
+
 // CreatePolicy creates a policy and returns its id.
 func (c *Client) CreatePolicy(name, target, engine, source string) (string, error) {
 	var resp struct {
