@@ -459,9 +459,12 @@ spec:
     # by ESO from the existing vault-internal ClusterSecretStore — the control
     # plane wrote it during the seed's registration exchange.
     #
-    # GATED on the inari-agent chart release carrying discovery.name +
-    # namespaceCreate (PR #88): until then the OCI chart's strict values
-    # schema rejects those --set keys and this step fails fast.
+    # Chart source: the knobs this install relies on (discovery.name,
+    # namespaceCreate — inari-agent #88) reach oci://ghcr.io/7k-inari/charts
+    # via EDGE publishing (inari-agent #89) — no stable release needed.
+    # agent-image=edge pins the chart to AGENT_CHART_VERSION_EDGE below (a
+    # published edge chart, never a floating tag); move the pin to the next
+    # stable chart version once one carries the knobs.
     - name: agent-ensure
       activeDeadlineSeconds: 900
       podSpecPatch: '{"serviceAccountName":"e2e-agent-ensure"}'
@@ -503,10 +506,19 @@ spec:
           [ -n "$REG_TOKEN" ] || { echo "could not issue a registration token" >&2; exit 1; }
 
           # Chart==component versioning (release.yml seds both from the tag);
-          # edge tracks the latest RELEASED chart with the edge image.
+          # agent-image=edge pins the TEMPORARY edge chart carrying the
+          # discovery.name/namespaceCreate knobs (never a floating tag — see
+          # the step header). Empty until inari-agent #89 merges and the edge
+          # chart is verified; unset means "latest chart" so the step fails
+          # loudly on the missing knobs rather than silently floating.
+          AGENT_CHART_VERSION_EDGE=""
           VERSION_ARGS=""
           if [ "$AGENT_IMAGE" != "edge" ]; then
             VERSION_ARGS="--version $AGENT_IMAGE"
+          elif [ -n "$AGENT_CHART_VERSION_EDGE" ]; then
+            VERSION_ARGS="--version $AGENT_CHART_VERSION_EDGE"
+          else
+            echo "::warning:: edge chart pin unset — using the latest published chart (knobs may be missing until inari-agent #89 merges)"
           fi
 
           # controlPlane: in-cluster h2c — the live agent precedent (the istio
