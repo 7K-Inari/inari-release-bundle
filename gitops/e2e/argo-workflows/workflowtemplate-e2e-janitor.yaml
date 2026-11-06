@@ -91,7 +91,11 @@ spec:
                 echo "skip $slug — belongs to an active run"
                 continue
               fi
-              age=$(echo "$created" | jq -r 'fromdateiso8601' 2>/dev/null || echo 0)
+              # createdAt carries fractional seconds; jq's fromdateiso8601
+              # (strptime %Y-%m-%dT%H:%M:%SZ) rejects them — strip first.
+              # Live-verified 2026-11-06: without the strip, age=0 made the
+              # retention check a no-op and the cron reaped SAME-DAY orgs.
+              age=$(echo "$created" | jq -r 'sub("\\.[0-9]+Z$";"Z") | fromdateiso8601' 2>/dev/null || echo 0)
               if [ "$age" -gt "$CUTOFF" ]; then
                 echo "skip $slug — younger than ${RETENTION_DAYS}d ($created)"
                 continue
@@ -138,7 +142,7 @@ spec:
           LEFT=$(curl -sf "$API/tenants" -H "$AUTH" \
             | jq -r --argjson cut "$CUTOFF" '.tenants[]
                 | select((.slug | startswith("e2e-")) and .slug != "e2e-org")
-                | select((.createdAt | fromdateiso8601) <= $cut)
+                | select((.createdAt | sub("\\.[0-9]+Z$";"Z") | fromdateiso8601) <= $cut)
                 | .slug' || true)
           if [ "$DRY_RUN" != "true" ] && [ -n "$LEFT" ]; then
             echo "orgs still present after reap: $LEFT" >&2
