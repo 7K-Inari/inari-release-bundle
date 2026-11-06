@@ -1297,6 +1297,37 @@ spec:
             # Time unset and go-junit-report emits time=""). Strip the empty
             # attributes; real durations are untouched.
             sed -i 's/ time=""//g' /tmp/rp-in/*.xml
+            # Drop skipped testcases from the IMPORT copy: the plugin finishes
+            # suites with no status, and service-api then derives FAILED for
+            # any suite with a descendant not in {PASSED, INFO, WARN}
+            # (resolveStatus, 5.15.6 — A/B-verified live: a suite with one
+            # skipped child imports FAILED with or without skippedIsNotIssue).
+            # Label-filtered skips are most of the gate junit (36 of 38 ginkgo
+            # specs on a smoke run) and would mark every green run FAILED.
+            # The full junit, skips included, remains in S3.
+            # Implementation is compaction-proof: self-closing testcases are
+            # normalized first, then awk splits on the </testcase> terminator
+            # (RS), so single-line and pretty-printed files both work.
+            for f in /tmp/rp-in/*.xml; do
+              sed 's#\(<testcase [^>]*\)/>#\1></testcase>#g' "$f" > "$f.norm" \
+                && mv "$f.norm" "$f"
+              awk '
+                BEGIN { RS = "</testcase>"; ORS = "" }
+                {
+                  rest = $0; lastpos = 0; consumed = 0
+                  while (match(rest, /<testcase/)) {
+                    lastpos = consumed + RSTART
+                    rest = substr(rest, RSTART + 9)
+                    consumed = lastpos + 8
+                  }
+                  if (lastpos == 0) { printf "%s", $0; next }
+                  printf "%s", substr($0, 1, lastpos - 1)
+                  block = substr($0, lastpos)
+                  if (block ~ /<skipped/ || block ~ /status="skipped"/) next
+                  printf "%s</testcase>", block
+                }
+              ' "$f" > "$f.filtered" && mv "$f.filtered" "$f"
+            done
             if [ "{{workflow.status}}" = "Succeeded" ]; then
               echo '<?xml version="1.0" encoding="UTF-8"?><testsuite name="e2e.run" tests="1" failures="0"><testcase classname="e2e.run" name="workflow-outcome"/></testsuite>' \
                 > /tmp/rp-in/run-outcome.xml
