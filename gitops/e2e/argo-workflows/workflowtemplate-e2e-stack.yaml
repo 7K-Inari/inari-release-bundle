@@ -655,6 +655,14 @@ spec:
             echo "::warning:: edge chart pin unset — using the latest published chart (knobs may be missing until inari-agent #89 merges)"
           fi
 
+          # Stale persisted-registration hazard (live-verified 2026-11-06):
+          # the agent persists its registration (incl. the secret-delivery
+          # reference) in inari-agent-registration and LOADS it on restart,
+          # never re-registering — a run that registered against a broken
+          # control plane poisons every later run. agent-ensure issues a
+          # fresh token per run anyway, so force re-registration.
+          kubectl -n inari-e2e-agent delete configmap inari-agent-registration --ignore-not-found
+
           # controlPlane: in-cluster h2c — the live agent precedent (the istio
           # gateway's H2 bidi path to the public gw hostname is broken; the
           # public hostname is for external clusters).
