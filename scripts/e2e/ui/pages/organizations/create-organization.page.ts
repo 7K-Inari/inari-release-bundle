@@ -40,12 +40,12 @@ export class CreateOrganizationPage {
 
   /** Field-level slug error (client-side pattern check + server 409). */
   slugError(): Locator {
-    return this.page.locator("#org-slug ~ p.text-destructive");
+    return this.page.locator("form p.text-xs.u-danger");
   }
 
   /** Form-level error for non-409 submission failures. */
   submitError(): Locator {
-    return this.page.locator("form p.text-sm.text-destructive");
+    return this.page.locator("form p.text-sm.u-danger");
   }
 
   /** Fill the form and submit. Does not wait for navigation. */
