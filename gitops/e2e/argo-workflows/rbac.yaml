@@ -400,12 +400,14 @@ rules:
   # lets it REFERENCE them in bindings. Accepted blast radius (same Q11
   # posture as create): this SA exists only to install the e2e agent chart
   # and lives in short-lived workflow pods.
+  # list (live-verified): helm's existing-resource conflict check LISTs the
+  # affected types before create ("failed to list ... ClusterRole").
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
-    verbs: ["create", "escalate", "bind"]
+    verbs: ["create", "list", "escalate", "bind"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterrolebindings"]
-    verbs: ["create"]
+    verbs: ["create", "list"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles", "clusterrolebindings"]
     resourceNames: ["inari-agent-e2e-discovery"]

@@ -78,7 +78,6 @@ the same PR** that changes any of:
 | `agent.supportedRange` / `agent.recommended` | `charts/inari-platform/values.yaml` `agent.*` |
 | `postgresql.instances` | `charts/inari-platform/values.yaml` `postgresql.instances` / gitops `platform-config` values |
 | `keycloak.instances` | `charts/inari-platform/values.yaml` `keycloak.instances` |
-| `nats.replicas` | `gitops/platform/nats.yaml` `config.cluster.replicas` |
 | `openfga.replicas` | `gitops/platform/openfga.yaml` `replicaCount` |
 
 This coupling is deliberate: it enforces the declared-range honesty that
