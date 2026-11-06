@@ -29,6 +29,11 @@ name: release-e2e
 #   - repo secret ARGO_TOKEN: the e2e-submitter ServiceAccount token
 #     (Secret e2e-submitter-token in ns inari-e2e — created by
 #     gitops/e2e/argo-workflows/rbac.yaml). SET by the owner.
+#     The value must be the FULL Authorization header — the argo CLI sends
+#     ARGO_TOKEN VERBATIM (v4 cmd/argo/commands/client/conn.go
+#     GetAuthString); a bare JWT fails with "token not valid". Harvest:
+#       printf 'Bearer %s' "$(kubectl -n inari-e2e get secret \
+#         e2e-submitter-token -o jsonpath='{.data.token}' | base64 -d)"
 #   - the public argo-workflows route (argo-workflows.7kgroup.org)
 #     from 7k-app-of-apps#32. LIVE.
 #
