@@ -1732,13 +1732,14 @@ spec:
             # reflects suite artifacts only.
             mkdir -p /tmp/rp-in
             cp /junit/*.xml /tmp/rp-in/ 2>/dev/null || true
-            # The JUnit import plugin's duration parser is Long/Double-strict:
-            # an empty time attribute (time="") crashes the whole import with
-            # "Error while importing the file. 'empty String'" (live-verified
-            # 2026-11-06 — chainsaw's JUNIT-TEST report leaves the testsuite
-            # Time unset and go-junit-report emits time=""). Strip the empty
-            # attributes; real durations are untouched.
-            sed -i 's/ time=""//g' /tmp/rp-in/*.xml
+            # Guard the glob: a run that died before any suite wrote JUnit
+            # (e.g. an upgrade drill failing at the candidate env-prep) has
+            # an empty /tmp/rp-in until the run-outcome anchor lands below —
+            # without the guard sed/awk noisily fail on the literal pattern
+            # (live-verified 2026-11-07).
+            if [ -n "$(find /tmp/rp-in -name '*.xml' -print -quit 2>/dev/null)" ]; then
+              sed -i 's/ time=""//g' /tmp/rp-in/*.xml
+            fi
             # Drop skipped testcases from the IMPORT copy: the plugin finishes
             # suites with no status, and service-api then derives FAILED for
             # any suite with a descendant not in {PASSED, INFO, WARN}
@@ -1751,6 +1752,7 @@ spec:
             # normalized first, then awk splits on the </testcase> terminator
             # (RS), so single-line and pretty-printed files both work.
             for f in /tmp/rp-in/*.xml; do
+              [ -f "$f" ] || continue
               sed 's#\(<testcase [^>]*\)/>#\1></testcase>#g' "$f" > "$f.norm" \
                 && mv "$f.norm" "$f"
               awk '
