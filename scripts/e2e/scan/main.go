@@ -90,8 +90,12 @@ func run(getenv func(string) string, stdout io.Writer) int {
 	}
 
 	client := NewClient(
-		envOr(getenv, "HARBOR_API", "https://harbor.7kgroup.org/api/v2.0"),
-		envOr(getenv, "HARBOR_REGISTRY", "https://harbor.7kgroup.org"),
+		// In-cluster service DNS (exit-handler RP_ENDPOINT precedent): the
+		// release gate never depends on the public gateway/DNS/TLS path.
+		// Harbor core serves /api/v2.0, reverse-proxies /v2/, and hosts
+		// /service/token. Env overrides exist for out-of-cluster debugging.
+		envOr(getenv, "HARBOR_API", "http://harbor-core.harbor.svc.cluster.local/api/v2.0"),
+		envOr(getenv, "HARBOR_REGISTRY", "http://harbor-core.harbor.svc.cluster.local"),
 		envOr(getenv, "HARBOR_PROJECT", "ghcr-proxy"),
 		user, token,
 	)
