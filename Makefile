@@ -3,7 +3,7 @@ CHART_DIRS := $(wildcard charts/*)
 GITOPS_DIR := gitops
 BACKUP_DIR ?= ./backups
 
-.PHONY: dev-up dev-down backup restore dr-drill lint lint-gitops test package clean
+.PHONY: dev-up dev-down backup restore dr-drill lint lint-gitops ct-upgrade test package clean
 
 dev-up: ## Create the kind cluster and install the platform stack via gitops/
 	./scripts/bootstrap.sh
@@ -31,6 +31,9 @@ lint-gitops: ## Validate gitops/ manifests (kustomize builds of the in-repo over
 
 test: ## helm-unittest suite
 	helm unittest $(CHART_DIRS)
+
+ct-upgrade: ## ct install --upgrade: install each changed chart at main's revision, then upgrade to the working-tree revision (ct.yaml sets upgrade: true). Needs a kind cluster + ct v3
+	ct install --config ct.yaml
 
 validate-graphs: ## Validate inari-platform-graphs against pinned KRO/Crossplane/provider-keycloak CRD schemas
 	./scripts/validate-graphs.sh

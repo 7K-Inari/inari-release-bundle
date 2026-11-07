@@ -11,5 +11,15 @@ chart-repos:
 # Version bumps are owned by release-please; ct's increment check would
 # block annotation-only Chart.yaml changes and duplicate the Release PR.
 check-version-increment: false
+# Chart-level upgrade testing (W5): `ct install` first installs each changed
+# chart at its target-branch revision, then UPGRADES to the PR revision —
+# the chart-level complement of the Argo upgrade leg (mode=upgrade), catching
+# chart-only upgrade breakage (immutable field changes, hook reordering,
+# removed values). Honored by `ct install` only; `ct lint` ignores it.
+# Local: `make ct-upgrade` (needs a kind cluster). PR-gate execution is
+# deferred — the install-test job that would run it is `if: false` by
+# maintainer decision (2026-10-31, provider-keycloak health wedge); flipping
+# the gate on is tracked as a follow-up, see docs/e2e/test-taxonomy.md §3.
+upgrade: true
 helm-extra-args: --timeout 600s
 debug: true
