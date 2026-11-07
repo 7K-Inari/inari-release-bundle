@@ -44,7 +44,7 @@ spec:
           value: ($namespace)
         content: |
           set -eu
-          kubectl -n "$NAMESPACE" run inari-verify-realm --rm -i --restart=Never \
+          kubectl -n "$NAMESPACE" run inari-verify-realm-$$ --rm -i --restart=Never \
             --image=curlimages/curl:8.10.1 --quiet -- \
             -fsS --retry 30 --retry-delay 5 --retry-all-errors \
             http://keycloak-service:8080/realms/inari > /dev/null
