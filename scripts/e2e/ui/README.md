@@ -176,9 +176,9 @@ bug).
 3. **Tags.** Priority tags `@p0`/`@p1`/`@p2`, suite tags like `@smoke`, and
    `@quarantine` for known-flaky specs. The release gate greps `@p0` and
    inverts `@quarantine` (a quarantined test NEVER blocks a release); the
-   nightly (`e2e-nightly.yaml`) runs the full `@p0|@p1|@p2` set including
-   `@quarantine`. Flake → issue → quarantine lifecycle: see "Flakiness
-   containment" in `scripts/e2e/README.md`.
+   nightly (Argo CronWorkflow `e2e-nightly`) runs the full `@p0|@p1|@p2` set
+   including `@quarantine`. Flake → issue → quarantine lifecycle: see
+   "Flakiness containment" in `scripts/e2e/README.md`.
 4. **Personas are fixed, spec objects are unique.** Never mutate the role
    personas' assignments or `dev-admin` (see the table above); only
    `e2e-member`'s role may change, and only inside the role-lifecycle spec.

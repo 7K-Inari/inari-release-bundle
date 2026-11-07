@@ -171,6 +171,10 @@ Every suite leg writes JUnit XML to a shared artifact directory:
   synthetic JUnit (`image-scan: PASS, 0 critical, N high`).
 - Artifacts live in a Garage S3 bucket (the platform cluster convention);
   `retention-days` honored via bucket lifecycle.
+- Skipped testcases are dropped from the ReportPortal **import copy** and
+  never appear in RP (the JUnit plugin would otherwise derive FAILED for any
+  suite containing a skipped descendant); the full JUnit, skips included,
+  remains in the S3 artifact (PR #147).
 
 Labels must survive into JUnit: Ginkgo emits labels into the JUnit report
 natively; Playwright tags are part of the test title (already true today —

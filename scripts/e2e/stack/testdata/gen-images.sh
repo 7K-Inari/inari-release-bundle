@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Regenerates testdata/images.txt — the CI image cache manifest.
+# Regenerates testdata/images.txt — the local kind dev-loop image manifest
+# (formerly the kind-era CI image cache manifest; the GHA workflow that
+# consumed it as a cache key is retired).
 #
 # Images are extracted MECHANICALLY from the pinned charts/manifests (helm
 # template at the exact versions the suite installs) so a version bump can

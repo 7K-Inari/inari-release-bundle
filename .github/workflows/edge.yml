@@ -23,12 +23,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.gate.outputs.skip }}
+      docs_only: ${{ steps.gate.outputs.docs_only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Skip on release merges
         id: gate
+        env:
+          BEFORE: ${{ github.event.before }}
         # Same guard as release-please.yml: the release merge is covered by
         # the stable release.yaml run.
         run: |
@@ -45,6 +48,20 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+          # Docs/markdown-only merges can't affect the stack — they skip the
+          # edge e2e trigger (queued runs delayed a verification ~40min on
+          # 2026-11-06). Same fail-safe rule as release-e2e's gate detection:
+          # only skip when EVERY changed file is ignorable. Edge chart
+          # publishing still runs; only the Argo e2e submission is skipped.
+          docs_only=false
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if ! git diff --name-only "$BEFORE" "$GITHUB_SHA" \
+                | grep -qvE '^(docs/|.*\.md$|LICENSE$|\.gitignore$)'; then
+              docs_only=true
+              echo "docs-only change ($BEFORE..$GITHUB_SHA) — e2e-trigger will skip"
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 
   resolve:
     needs: gate
@@ -146,9 +163,10 @@ jobs:
     # W3b): gate label selection (p0||smoke)&&!quarantine against THIS merge's
     # charts + the moving edge component images, cosign off (unsigned edge
     # images). The Argo run is the signal; publishing above must not depend
-    # on it. Skips cleanly when the submitter token is not wired yet.
-    needs: [resolve, publish]
-    if: always() && needs.resolve.outputs.matrix != '' && needs.resolve.outputs.matrix != '[]' && needs.publish.result != 'failure'
+    # on it. Skips cleanly when the submitter token is not wired yet, and on
+    # docs-only merges (gate.docs_only — nothing to verify on the env).
+    needs: [gate, resolve, publish]
+    if: always() && needs.gate.outputs.docs_only != 'true' && needs.resolve.outputs.matrix != '' && needs.resolve.outputs.matrix != '[]' && needs.publish.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

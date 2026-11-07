@@ -47,6 +47,16 @@ those modules.**
 Derived (computed in the shared env modules, overridable only for local
 debugging): `API_BASE = https://$E2E_BASE_DOMAIN/api/v1`.
 
+> **kubectl impersonation gotcha (in-cluster runs):** `kubectl auth can-i`
+> with `--as`/`--as-group` does **not** use kubectl's in-cluster config
+> fallback — it dies on `localhost:8080` even though plain kubectl in the
+> same pod resolves the in-cluster endpoint fine. The stack suite therefore
+> renders an explicit `tokenFile` kubeconfig from the ServiceAccount files
+> for in-cluster runs (`scripts/e2e/stack/internal/kube`, PR #151). Any
+> future spec or step using impersonated kubectl must go through that wrapper
+> (or render an equivalent kubeconfig) — a bare `kubectl auth can-i --as=…`
+> in a workflow pod will fail.
+
 ### 1.1 Injection model
 
 ```mermaid
