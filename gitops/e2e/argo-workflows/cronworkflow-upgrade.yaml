@@ -1,0 +1,77 @@
+# Daily upgrade-path run (W5; plan §10 "upgrade-path" phase-2 extension,
+# taxonomy §3 upgrade stage row): deploys the PREVIOUS stable artifact set,
+# writes the pre-upgrade fixture, upgrades to the candidate (edge), and
+# re-runs the GATE selection (Ginkgo (p0||smoke)&&!quarantine, Playwright
+# --grep "@p0|@smoke" --grep-invert @quarantine) against state written by the
+# old version. This is the net for the DB-migration breakage class
+# (cf. migration-0029).
+#
+# SUSPENDED on purpose — two-part activation criterion:
+#   1. The first POST-sunset stable inari-server release ships. Until then
+#      resolve-previous auto-resolves the previous server image to 3.0.0,
+#      which predates the roles/membership APIs AND the operator sunset
+#      (platform.inari.io CRDs are gone) — the previous stack would not
+#      survive the fixture step for compat reasons, not upgrade reasons.
+#   2. Unsuspend, then ~2 WEEKS OF STABLE RUNS before the release-gating
+#      flip (a second `argo submit` leg in release-e2e.yaml — a deliberate
+#      follow-up, NOT part of the W5 change). Non-gating until then.
+# Manual runs (any time, incl. before unsuspension — pin a post-sunset edge
+# baseline explicitly):
+#   argo submit --from workflowtemplate/e2e-stack -n inari-e2e \
+#     -p mode=upgrade \
+#     -p upgrade-from-server-image=4.0.0-<sha> -p server-src-ref=<sha> ...
+# Broken-migration drill: add -p upgrade-drill-pause-minutes=10 and see the upgrade
+# leg section of gitops/e2e/README.md.
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: e2e-upgrade
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+spec:
+  suspend: true
+  # 05:47 UTC daily — after the 03:17 nightly (HA, ~2h worst case); the
+  # template's semaphore serializes any overlap, Forbid here is the second
+  # layer. Well clear of the Sunday 01:17 nightly-reset window.
+  schedules: ["47 5 * * *"]
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 10
+  workflowSpec:
+    workflowTemplateRef:
+      name: e2e-stack
+    workflowMetadata:
+      labels:
+        e2e.inari.io/mode: upgrade
+    arguments:
+      parameters:
+        - name: mode
+          value: upgrade
+        - name: ha
+          value: "false"
+        - name: charts-ref
+          value: main
+        - name: server-image
+          value: edge
+        - name: console-image
+          value: edge
+        - name: agent-image
+          value: edge
+        - name: server-src-ref
+          value: main
+        - name: cosign-verify
+          value: "false"
+        - name: include-quarantined
+          value: "false"
+        - name: retention-days
+          value: "7"
+        - name: reportportal-launch
+          value: ""
+        - name: upgrade-from-server-image
+          value: auto
+        - name: upgrade-from-console-image
+          value: auto
+        - name: upgrade-drill-pause-minutes
+          value: "0"

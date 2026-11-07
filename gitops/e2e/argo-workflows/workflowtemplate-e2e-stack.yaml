@@ -18,6 +18,28 @@
 #   Ginkgo/Playwright smoke sets run via mode=smoke submissions.
 # - W6 seam: the Harbor scan gate inserts between cosign-verify and env-prep
 #   (when: mode == release) — this DAG leaves that slot deliberately.
+# - W5 (upgrade leg, plan §10): mode=upgrade prepends a previous-stable phase
+#   — resolve-previous (latest stable chart release git tags + ghcr stable
+#   image tags) → env-prep-previous → upgrade-fixture (pre-upgrade data) →
+#   [upgrade-drill-pause] → the normal candidate env-prep → seed → suites
+#   re-run the GATE selection (taxonomy §3 upgrade stage row) →
+#   upgrade-assert proves the fixture survived. The taxonomy label "upgrade"
+#   is realized as this mode/stage, not per-spec labels (coordinator ruling
+#   2026-11-06 #1). Non-gating; the release-gating flip (a second submit in
+#   release-e2e.yaml) is a deliberate follow-up after ~2 weeks stable.
+#   Caveats:
+#   * No stable inari-server CHART release exists yet (edge OCI tags only) —
+#     resolve-previous falls back to the candidate chart ref for the server
+#     until the first inari-server-vX.Y.Z tag lands; the latest stable server
+#     IMAGE (3.0.0) predates the roles/membership APIs + the operator sunset,
+#     so the CronWorkflow ships suspended until the first post-sunset stable.
+#   * The agent is NOT downgraded (old agent charts lack the
+#     discovery.name/namespaceCreate knobs, inari-agent #88) — agent-ensure
+#     always installs the candidate.
+#   * Migration semantics (goose v3, empirically verified against v3.29.0):
+#     an old binary treats a NEWER database as a no-op (Up() ignores applied
+#     versions absent from its FS), and failed migrations roll back
+#     transactionally — no dirty-flag poisoning of the shared env.
 #
 # Semaphore: one permit (ConfigMap e2e-env-lock, see semaphore-e2e-env-lock.yaml)
 # serializes ALL modes against the single env (plan §5.6). onExit imports every
@@ -43,7 +65,7 @@ spec:
       # Release contract (plan §3.1) — thin GHA wrappers pass -p only.
       - name: mode
         value: edge
-        enum: ["release", "edge", "nightly", "weekly", "smoke"]
+        enum: ["release", "edge", "nightly", "weekly", "smoke", "upgrade"]
       - name: ha
         value: "false"
         enum: ["true", "false"]
@@ -73,6 +95,23 @@ spec:
       - name: reportportal-launch
         # Empty → resolve computes "<mode>-<workflow uid>".
         value: ""
+      # --- upgrade mode only (W5) -------------------------------------------
+      - name: upgrade-from-server-image
+        # "auto" = resolve-previous picks the latest stable (chart release
+        # appVersion, or the latest stable ghcr image while no stable server
+        # chart exists). An explicit tag pins the previous baseline —
+        # acceptance drills and debugging.
+        value: auto
+      - name: upgrade-from-console-image
+        value: auto
+      - name: upgrade-drill-pause-minutes
+        # "0" = no pause. Any other integer suspends the run that many
+        # minutes between upgrade-fixture and the candidate env-prep — a
+        # deterministic sabotage window for the broken-migration drill
+        # (gitops/e2e/README.md §upgrade leg). Numeric on purpose: the `when`
+        # evaluator compares substituted tokens, and a duration token like
+        # "15m" risks a parse error next to the proven bare-word pattern.
+        value: "0"
   templates:
     # ------------------------------------------------------------------ DAG
     - name: main
@@ -89,9 +128,65 @@ spec:
             template: cosign-verify
             depends: resolve
             when: "{{workflow.parameters.cosign-verify}} == true"
+          # --- upgrade mode only (W5): previous-stable phase ----------------
+          # Deploy the previous stable artifact set, write the pre-upgrade
+          # fixture, then fall through to the normal candidate env-prep.
+          # when-skipped tasks surface as .Skipped in depends (cosign-verify
+          # precedent), so non-upgrade modes walk straight through.
+          - name: resolve-previous
+            template: resolve-previous
+            depends: resolve
+            when: "{{workflow.parameters.mode}} == upgrade"
+          - name: env-prep-previous
+            template: env-prep
+            depends: resolve-previous
+            when: "{{workflow.parameters.mode}} == upgrade"
+            arguments:
+              parameters:
+                - name: stage
+                  value: previous
+                - name: server-ref
+                  value: "{{tasks.resolve-previous.outputs.parameters.prev-server-ref}}"
+                - name: console-ref
+                  value: "{{tasks.resolve-previous.outputs.parameters.prev-console-ref}}"
+                - name: server-image
+                  value: "{{tasks.resolve-previous.outputs.parameters.prev-server-image}}"
+                - name: console-image
+                  value: "{{tasks.resolve-previous.outputs.parameters.prev-console-image}}"
+                # The old stack deploys non-HA: it only needs to work; the HA
+                # flip belongs to the candidate phase.
+                - name: ha
+                  value: "false"
+          - name: upgrade-fixture
+            template: upgrade-fixture
+            depends: env-prep-previous
+            when: "{{workflow.parameters.mode}} == upgrade"
+          # Drill aid: optional suspend between the fixture and the candidate
+          # env-prep (param upgrade-drill-pause-minutes, "0" by default).
+          - name: upgrade-drill-pause
+            template: upgrade-drill-pause
+            depends: upgrade-fixture
+            when: "{{workflow.parameters.mode}} == upgrade && {{workflow.parameters.upgrade-drill-pause-minutes}} != 0"
+          # upgrade-fixture is listed explicitly (not just transitively via
+          # upgrade-drill-pause): with the pause off, the pause node is
+          # when-skipped and the fixture must still gate the candidate deploy.
           - name: env-prep
             template: env-prep
-            depends: cosign-verify.Succeeded || cosign-verify.Skipped
+            depends: (cosign-verify.Succeeded || cosign-verify.Skipped) && (upgrade-fixture.Succeeded || upgrade-fixture.Skipped) && (upgrade-drill-pause.Succeeded || upgrade-drill-pause.Skipped)
+            arguments:
+              parameters:
+                - name: stage
+                  value: candidate
+                - name: server-ref
+                  value: "{{workflow.parameters.charts-ref}}"
+                - name: console-ref
+                  value: "{{workflow.parameters.charts-ref}}"
+                - name: server-image
+                  value: "{{workflow.parameters.server-image}}"
+                - name: console-image
+                  value: "{{workflow.parameters.console-image}}"
+                - name: ha
+                  value: "{{workflow.parameters.ha}}"
           - name: seed
             template: seed
             depends: env-prep
@@ -130,6 +225,12 @@ spec:
             template: apischema
             depends: seed
             when: "{{workflow.parameters.mode}} == release"
+          # Upgrade mode only (W5): proves the pre-upgrade fixture tenant
+          # survived the upgrade; emits the leg's synthetic JUnit.
+          - name: upgrade-assert
+            template: upgrade-assert
+            depends: seed
+            when: "{{workflow.parameters.mode}} == upgrade"
 
     # -------------------------------------------------------------- resolve
     # Validates the parameter contract (release ⇒ cosign ON, quarantined
@@ -153,6 +254,10 @@ spec:
             value: "{{workflow.parameters.server-src-ref}}"
           - name: RP_LAUNCH_PARAM
             value: "{{workflow.parameters.reportportal-launch}}"
+          - name: UPGRADE_FROM_SERVER
+            value: "{{workflow.parameters.upgrade-from-server-image}}"
+          - name: UPGRADE_FROM_CONSOLE
+            value: "{{workflow.parameters.upgrade-from-console-image}}"
         source: |
           set -eu
           echo "mode=$MODE ha={{workflow.parameters.ha}} charts-ref={{workflow.parameters.charts-ref}}"
@@ -170,6 +275,13 @@ spec:
               || { echo "release mode: server-src-ref must be v$SERVER_IMAGE (got $SERVER_SRC_REF)" >&2; exit 1; }
           fi
 
+          if [ "$MODE" = "upgrade" ]; then
+            # The upgrade leg re-runs the GATE selection on the upgraded
+            # stack (taxonomy §3) — quarantined tests never join it.
+            [ "$QUAR" = "false" ] || { echo "upgrade mode never runs quarantined tests" >&2; exit 1; }
+            echo "upgrade leg: previous baseline server=$UPGRADE_FROM_SERVER console=$UPGRADE_FROM_CONSOLE drill-pause={{workflow.parameters.upgrade-drill-pause-minutes}}m"
+          fi
+
           RUN_ID="{{workflow.uid}}"
           RP_LAUNCH="$RP_LAUNCH_PARAM"
           [ -n "$RP_LAUNCH" ] || RP_LAUNCH="$MODE-$RUN_ID"
@@ -185,8 +297,117 @@ spec:
             --from-literal=console-image="{{workflow.parameters.console-image}}" \
             --from-literal=agent-image="{{workflow.parameters.agent-image}}" \
             --from-literal=server-src-ref="$SERVER_SRC_REF" \
+            --from-literal=upgrade-from-server-image="$UPGRADE_FROM_SERVER" \
+            --from-literal=upgrade-from-console-image="$UPGRADE_FROM_CONSOLE" \
             --from-literal=reportportal-launch="$RP_LAUNCH"
           echo "run metadata written; rp-launch=$RP_LAUNCH"
+
+    # ------------------------------------------------------- resolve-previous
+    # Upgrade mode only: resolves the PREVIOUS stable artifact set.
+    #   chart ref  = latest stable release git tag (<chart>-vX.Y.Z; the chart
+    #                content at that tag is byte-identical to the published
+    #                OCI artifact, and git sources keep the env pointer's
+    #                ignoreDifferences untouched). Strict semver only — the
+    #                per-commit edge tags (<chart>-vX.Y.Z-<sha>) never match.
+    #   image tag  = appVersion of the chart at that tag (normalized: server/
+    #                console ghcr image tags are unprefixed).
+    # FALLBACK (inari-server today): no stable chart release exists yet —
+    # the chart ref falls back to charts-ref and the image to the latest
+    # stable ghcr tag. upgrade-from-*-image != auto overrides the image.
+    # No k8s writes (e2e-runner is configmaps get/list/watch+create only).
+    - name: resolve-previous
+      activeDeadlineSeconds: 300
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        env:
+          - name: CHARTS_REF
+            value: "{{workflow.parameters.charts-ref}}"
+          - name: FROM_SERVER
+            value: "{{workflow.parameters.upgrade-from-server-image}}"
+          - name: FROM_CONSOLE
+            value: "{{workflow.parameters.upgrade-from-console-image}}"
+        source: |
+          set -eu
+          command -v git >/dev/null 2>&1 || apk add --no-cache git >/dev/null
+          command -v jq >/dev/null 2>&1 || apk add --no-cache jq curl >/dev/null
+
+          REPO=https://github.com/7K-Inari/inari-release-bundle.git
+
+          # Latest strict-semver release tag for a chart ("" when none).
+          latest_chart_tag() {
+            git ls-remote --tags "$REPO" "$1-v[0-9]*" \
+              | grep -oE "refs/tags/$1-v[0-9]+\.[0-9]+\.[0-9]+$" \
+              | sed 's#refs/tags/##' | sort -V | tail -1 || true
+          }
+
+          # Latest strict-semver image tag on ghcr (public packages,
+          # anonymous token flow; n=1000 — the unpaginated list truncates at
+          # exactly 100, live-verified). $1 = repo path, $2 = tag prefix
+          # ("" for server/console, "v" for agent).
+          latest_image_tag() {
+            tok=$(curl -s "https://ghcr.io/token?scope=repository:$1:pull" | jq -r .token)
+            curl -sf -H "Authorization: Bearer $tok" "https://ghcr.io/v2/$1/tags/list?n=1000" \
+              | jq -r '.tags[]' | grep -E "^$2[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -1
+          }
+
+          # appVersion of charts/$2 at git tag $1 ("" on failure).
+          app_version_at() {
+            curl -sf "https://raw.githubusercontent.com/7K-Inari/inari-release-bundle/$1/charts/$2/Chart.yaml" \
+              | awk '/^appVersion:/ {gsub(/"/, "", $2); print $2}' || true
+          }
+
+          SRV_TAG=$(latest_chart_tag inari-server)
+          if [ -n "$SRV_TAG" ]; then
+            PREV_SERVER_REF="$SRV_TAG"
+            PREV_SERVER_IMAGE=$(app_version_at "$SRV_TAG" inari-server)
+          else
+            PREV_SERVER_REF="$CHARTS_REF"
+            PREV_SERVER_IMAGE=$(latest_image_tag 7k-inari/inari-server "")
+            echo "NOTE: no stable inari-server chart release yet — chart falls back to charts-ref ($CHARTS_REF)"
+          fi
+          # ghcr server/console image tags are unprefixed (registry-verified).
+          PREV_SERVER_IMAGE="${PREV_SERVER_IMAGE#v}"
+
+          CON_TAG=$(latest_chart_tag inari-console)
+          if [ -n "$CON_TAG" ]; then
+            PREV_CONSOLE_REF="$CON_TAG"
+            PREV_CONSOLE_IMAGE=$(app_version_at "$CON_TAG" inari-console)
+          else
+            PREV_CONSOLE_REF="$CHARTS_REF"
+            PREV_CONSOLE_IMAGE=$(latest_image_tag 7k-inari/inari-ui-bundle "")
+            echo "NOTE: no stable inari-console chart release yet — chart falls back to charts-ref ($CHARTS_REF)"
+          fi
+          PREV_CONSOLE_IMAGE="${PREV_CONSOLE_IMAGE#v}"
+
+          # Explicit pins win over auto-resolution (acceptance drills).
+          [ "$FROM_SERVER" = "auto" ] || PREV_SERVER_IMAGE="$FROM_SERVER"
+          [ "$FROM_CONSOLE" = "auto" ] || PREV_CONSOLE_IMAGE="$FROM_CONSOLE"
+
+          [ -n "$PREV_SERVER_REF" ] && [ -n "$PREV_SERVER_IMAGE" ] \
+            && [ -n "$PREV_CONSOLE_REF" ] && [ -n "$PREV_CONSOLE_IMAGE" ] \
+            || { echo "previous-stable resolution failed (empty value)" >&2; exit 1; }
+
+          echo "previous server:  chart ref $PREV_SERVER_REF, image $PREV_SERVER_IMAGE"
+          echo "previous console: chart ref $PREV_CONSOLE_REF, image $PREV_CONSOLE_IMAGE"
+          printf %s "$PREV_SERVER_REF" > /tmp/prev-server-ref
+          printf %s "$PREV_CONSOLE_REF" > /tmp/prev-console-ref
+          printf %s "$PREV_SERVER_IMAGE" > /tmp/prev-server-image
+          printf %s "$PREV_CONSOLE_IMAGE" > /tmp/prev-console-image
+      outputs:
+        parameters:
+          - name: prev-server-ref
+            valueFrom:
+              path: /tmp/prev-server-ref
+          - name: prev-console-ref
+            valueFrom:
+              path: /tmp/prev-console-ref
+          - name: prev-server-image
+            valueFrom:
+              path: /tmp/prev-server-image
+          - name: prev-console-image
+            valueFrom:
+              path: /tmp/prev-console-image
 
     # --------------------------------------------------------- cosign-verify
     # Release-only (when-gated). Verifies the three candidate images on
@@ -281,29 +502,44 @@ spec:
     # KEEP IN SYNC: the valuesObject bodies below embed the baselines from
     # gitops/e2e/env/inari-server.yaml (valuesObject arrays replace, they do
     # not merge) — bump both sides together.
+    #
+    # Invoked TWICE per upgrade-mode run (W5): stage=previous with the
+    # resolve-previous refs/images, then stage=candidate with the workflow's
+    # own. Other modes invoke it once (stage=candidate).
     - name: env-prep
       activeDeadlineSeconds: 1500
+      inputs:
+        parameters:
+          - name: stage        # candidate | previous (log lines + artifact key)
+          - name: server-ref   # git ref for the inari-server chart source
+          - name: console-ref  # git ref for the inari-console chart source
+          - name: server-image
+          - name: console-image
+          - name: ha
       script:
         image: alpine/k8s:1.35.10
         command: [sh]
         env:
+          - name: STAGE
+            value: "{{inputs.parameters.stage}}"
           - name: HA
-            value: "{{workflow.parameters.ha}}"
-          - name: CHARTS_REF
-            value: "{{workflow.parameters.charts-ref}}"
+            value: "{{inputs.parameters.ha}}"
+          - name: SERVER_REF
+            value: "{{inputs.parameters.server-ref}}"
+          - name: CONSOLE_REF
+            value: "{{inputs.parameters.console-ref}}"
           - name: SERVER_IMAGE
-            value: "{{workflow.parameters.server-image}}"
+            value: "{{inputs.parameters.server-image}}"
           - name: CONSOLE_IMAGE
-            value: "{{workflow.parameters.console-image}}"
+            value: "{{inputs.parameters.console-image}}"
         source: |
           set -eu
           command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
           mkdir -p /artifacts/out
 
-          # JSON-encode the git ref before embedding it in the JSON patches
-          # (raw shell interpolation would break/mangle the patch on a ref
-          # containing a quote or backslash).
-          CHARTS_REF_JSON=$(jq -nc --arg v "$CHARTS_REF" '$v')
+          # Git refs are JSON-encoded inside patch_app before they are
+          # embedded in the JSON patch (raw shell interpolation would
+          # break/mangle the patch on a ref containing a quote).
 
           # KEEP IN SYNC with gitops/e2e/env/*.yaml: the patches carry the
           # COMPLETE desired valuesObject — ArgoCD's ValuesYAML() returns
@@ -408,6 +644,7 @@ spec:
           # charts-ref breaks the render (live-verified 2026-11-06) and the
           # env pointer's ignoreDifferences deliberately covers only
           # valuesObject for nats, so the bad revision self-healed back.
+          # rev is JSON-encoded before embedding (quote-safe).
           GEN_DIR=/tmp/gens; mkdir -p "$GEN_DIR"
           patch_app() {
             app="$1"; pbase="$2"; jbase="$3"; desired="$4"; rev="$5"
@@ -416,7 +653,7 @@ spec:
             des=$(echo "$desired" | jq -cS .)
             if [ "$rev" = "-" ]; then
               if [ "$cur" = "$des" ]; then
-                echo "  $app values already at the candidate set — no patch"
+                echo "  $app values already at the $STAGE set — no patch"
                 rm -f "$GEN_DIR/$app"
                 return
               fi
@@ -426,12 +663,13 @@ spec:
             else
               ref=$(kubectl -n argocd get application "$app" -o json | jq -r ".${jbase}.targetRevision // \"\"")
               if [ "$cur" = "$des" ] && [ "$ref" = "$rev" ]; then
-                echo "  $app already at the candidate set — no patch"
+                echo "  $app already at the $STAGE set — no patch"
                 rm -f "$GEN_DIR/$app"
                 return
               fi
+              rev_json=$(jq -nc --arg v "$rev" '$v')
               kubectl -n argocd patch application "$app" --type=json -p '[
-                {"op":"replace","path":"'"$pbase"'/targetRevision","value":"'"$rev"'"},
+                {"op":"replace","path":"'"$pbase"'/targetRevision","value":'"$rev_json"'},
                 {"op":"add","path":"'"$pbase"'/helm/valuesObject","value":'"$desired"'}
               ]'
             fi
@@ -460,11 +698,11 @@ spec:
             return 1
           }
 
-          echo "== patching inari-e2e-server (charts-ref=$CHARTS_REF, image=$SERVER_IMAGE, ha=$HA)"
-          patch_app inari-e2e-server "/spec/sources/0" "spec.sources[0]" "$SERVER_VALUES" "$CHARTS_REF"
+          echo "== [$STAGE] patching inari-e2e-server (ref=$SERVER_REF, image=$SERVER_IMAGE, ha=$HA)"
+          patch_app inari-e2e-server "/spec/sources/0" "spec.sources[0]" "$SERVER_VALUES" "$SERVER_REF"
 
-          echo "== patching inari-e2e-console (charts-ref=$CHARTS_REF, bundle=$CONSOLE_IMAGE)"
-          patch_app inari-e2e-console "/spec/source" "spec.source" "$CONSOLE_VALUES" "$CHARTS_REF"
+          echo "== [$STAGE] patching inari-e2e-console (ref=$CONSOLE_REF, bundle=$CONSOLE_IMAGE)"
+          patch_app inari-e2e-console "/spec/source" "spec.source" "$CONSOLE_VALUES" "$CONSOLE_REF"
 
           echo "== patching inari-e2e-nats (ha=$HA)"
           patch_app inari-e2e-nats "/spec/source" "spec.source" "$NATS_VALUES" "-"
@@ -490,9 +728,10 @@ spec:
           echo "  /api/v1/tenants -> HTTP $code"
           [ "$code" = "401" ] || { echo "post-convergence probe failed (want 401, got $code)" >&2; exit 1; }
 
-          jq -nc --arg ref "$CHARTS_REF" --arg server "$SERVER_IMAGE" --arg console "$CONSOLE_IMAGE" --arg ha "$HA" \
-            '{chartsRef: $ref, serverImage: $server, consoleImage: $console, ha: ($ha == "true")}' > /artifacts/out/env-prep.json
-          echo "== env-prep complete"
+          jq -nc --arg stage "$STAGE" --arg serverRef "$SERVER_REF" --arg consoleRef "$CONSOLE_REF" \
+            --arg server "$SERVER_IMAGE" --arg console "$CONSOLE_IMAGE" --arg ha "$HA" \
+            '{stage: $stage, serverRef: $serverRef, consoleRef: $consoleRef, serverImage: $server, consoleImage: $console, ha: ($ha == "true")}' > /artifacts/out/env-prep.json
+          echo "== env-prep ($STAGE) complete"
       outputs:
         artifacts:
           - name: env-prep-summary
@@ -510,7 +749,188 @@ spec:
               secretKeySecret:
                 name: argo-workflows-s3-credentials
                 key: ACCESS_SECRET_KEY
-              key: e2e/{{workflow.uid}}/env-prep/env-prep.json
+              # stage-templated: upgrade mode invokes env-prep twice per run.
+              key: e2e/{{workflow.uid}}/env-prep-{{inputs.parameters.stage}}/env-prep.json
+
+    # -------------------------------------------------------- upgrade-fixture
+    # Upgrade mode only (W5): creates the pre-upgrade fixture ON THE OLD
+    # STACK — a tenant org written by the previous version whose survival the
+    # upgrade-assert step checks after the candidate deploy (the
+    # migration-0029 class: a candidate migration breaking on pre-existing
+    # data). Slug e2e-<uid>-upgrade → the janitor reaps it like any suite org
+    # (environment-contract invariant 6).
+    #
+    # The full Go seed is deliberately NOT run on the old stack: the latest
+    # stable server (3.0.0) predates the roles/membership APIs the seed
+    # exercises, so a seed there would fail for API-drift reasons, not
+    # upgrade reasons.
+    - name: upgrade-fixture
+      activeDeadlineSeconds: 300
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          - name: FIXTURE_SLUG
+            value: e2e-{{workflow.uid}}-upgrade
+          - name: FIXTURE_NAME
+            value: E2E Upgrade Fixture {{workflow.uid}}
+        source: |
+          set -eu
+          command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
+
+          echo "== direct-grant token ($E2E_USER)"
+          TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+            -d grant_type=password -d client_id=inari-server \
+            -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
+            -d "scope=openid organization:*" | jq -r '.access_token // ""')
+          [ -n "$TOKEN" ] || { echo "could not obtain a user token" >&2; exit 1; }
+
+          echo "== creating fixture tenant $FIXTURE_SLUG on the previous stack"
+          CODE=$(curl -s -o /tmp/fixture-resp.json -w '%{http_code}' -X POST \
+            "https://$E2E_BASE_DOMAIN/api/v1/tenants" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg slug "$FIXTURE_SLUG" --arg name "$FIXTURE_NAME" '{slug: $slug, displayName: $name}')")
+          case "$CODE" in
+            2*) echo "  created (HTTP $CODE)";;
+            *)
+              # Duplicate slugs are a 500 today (inari-server backlog:
+              # duplicate-slug 500 vs 409). A rerun of a crashed upgrade run
+              # must be idempotent — accept "already present" either way.
+              echo "  POST returned HTTP $CODE — checking for a pre-existing fixture"
+              curl -sf -H "Authorization: Bearer $TOKEN" "https://$E2E_BASE_DOMAIN/api/v1/tenants" \
+                | jq -e --arg slug "$FIXTURE_SLUG" '.tenants[] | select(.slug == $slug)' >/dev/null \
+                || { echo "  fixture absent and creation failed:" >&2; cat /tmp/fixture-resp.json >&2; exit 1; }
+              echo "  already present — idempotent no-op";;
+          esac
+
+          # Poll after the mutation (contract invariant 2): the read-back
+          # races the membership/list materialization — a token issued BEFORE
+          # the create does not see the new org at all (live-verified
+          # 2026-11-07: HTTP 200 on POST, immediate GET missed it, a fresh
+          # token minutes later saw it). Re-issue the token per attempt.
+          echo "== asserting the fixture is readable on the previous stack (poll)"
+          i=0
+          while [ $i -lt 24 ]; do
+            TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+              -d grant_type=password -d client_id=inari-server \
+              -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
+              -d "scope=openid organization:*" | jq -r '.access_token // ""') || TOKEN=""
+            if [ -n "$TOKEN" ] && curl -sf -H "Authorization: Bearer $TOKEN" \
+                "https://$E2E_BASE_DOMAIN/api/v1/tenants/$FIXTURE_SLUG" \
+                | jq -e --arg slug "$FIXTURE_SLUG" --arg name "$FIXTURE_NAME" \
+                    '.organization | select(.slug == $slug and .displayName == $name)' >/dev/null; then
+              break
+            fi
+            i=$((i+1)); sleep 5
+          done
+          [ $i -lt 24 ] || { echo "fixture tenant not readable after creation (2m poll)" >&2; exit 1; }
+          echo "== fixture tenant $FIXTURE_SLUG present on the previous stack (attempt $((i+1)))"
+
+    # ----------------------------------------------------- upgrade-drill-pause
+    # Drill aid (W5): when upgrade-drill-pause-minutes != 0, suspends the run
+    # for that many minutes between the fixture and the candidate env-prep —
+    # the deterministic window in which the broken-migration drill sabotages
+    # DB state (gitops/e2e/README.md §upgrade leg). Auto-resumes. The node is
+    # when-gated on != 0, so the "0m" duration never actually evaluates.
+    - name: upgrade-drill-pause
+      suspend:
+        duration: "{{workflow.parameters.upgrade-drill-pause-minutes}}m"
+
+    # --------------------------------------------------------- upgrade-assert
+    # Upgrade mode only (W5), after the candidate seed: proves the
+    # pre-upgrade fixture tenant survived the upgrade (read-only) and emits
+    # the leg's synthetic JUnit — the leg's crisp ReportPortal signal even
+    # when the suites are filtered to a small set.
+    - name: upgrade-assert
+      activeDeadlineSeconds: 300
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          - name: FIXTURE_SLUG
+            value: e2e-{{workflow.uid}}-upgrade
+          - name: FIXTURE_NAME
+            value: E2E Upgrade Fixture {{workflow.uid}}
+        source: |
+          set -eu
+          command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null
+          mkdir -p /artifacts/out
+
+          # printf, not a heredoc: the XML declaration must sit at byte 0
+          # (leading whitespace before <?xml is invalid) and an indented
+          # heredoc terminator would not terminate.
+          write_junit() { # $1 = pass | fail:<message>  (messages are fixed
+                          # ASCII strings — no XML-escaping needed)
+            if [ "$1" = "pass" ]; then
+              printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?><testsuite name="upgrade" tests="2" failures="0"><testcase classname="upgrade" name="deploy-previous-stable"/><testcase classname="upgrade" name="fixture-survives-upgrade"/></testsuite>' \
+                > /artifacts/out/junit.xml
+            else
+              msg=${1#fail:}
+              printf '%s\n' "<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuite name=\"upgrade\" tests=\"2\" failures=\"1\"><testcase classname=\"upgrade\" name=\"deploy-previous-stable\"/><testcase classname=\"upgrade\" name=\"fixture-survives-upgrade\"><failure message=\"$msg\">$msg</failure></testcase></testsuite>" \
+                > /artifacts/out/junit.xml
+            fi
+          }
+
+          echo "== asserting fixture tenant $FIXTURE_SLUG survived the upgrade (poll)"
+          i=0
+          FOUND=""
+          while [ $i -lt 12 ]; do
+            # Fresh token per attempt (the post-create read-back race is
+            # token-scope staleness — see upgrade-fixture).
+            TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+              -d grant_type=password -d client_id=inari-server \
+              -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
+              -d "scope=openid organization:*" | jq -r '.access_token // ""') || TOKEN=""
+            if [ -n "$TOKEN" ] && curl -sf -H "Authorization: Bearer $TOKEN" \
+                "https://$E2E_BASE_DOMAIN/api/v1/tenants/$FIXTURE_SLUG" \
+                | jq -e --arg slug "$FIXTURE_SLUG" --arg name "$FIXTURE_NAME" \
+                    '.organization | select(.slug == $slug and .displayName == $name)' >/dev/null; then
+              FOUND=1; break
+            fi
+            i=$((i+1)); sleep 10
+          done
+          if [ -n "$FOUND" ]; then
+            write_junit pass
+            echo "== fixture survived the upgrade (attempt $((i+1)))"
+          else
+            write_junit "fail:fixture tenant $FIXTURE_SLUG missing or altered after the upgrade"
+            cat /artifacts/out/junit.xml
+            exit 1
+          fi
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/upgrade/junit.xml
 
     # ------------------------------------------------------------------ seed
     # Persona + handoff seed (W3a contract — scripts/e2e/seed, Go). Idempotent;
@@ -871,7 +1291,9 @@ spec:
           chmod +x /usr/local/bin/kubectl
 
           case "$E2E_MODE" in
-            release|edge) FILTER="(p0||smoke)&&!quarantine";;
+            # upgrade re-runs the GATE selection on the upgraded stack
+            # (taxonomy §3 upgrade stage row).
+            release|edge|upgrade) FILTER="(p0||smoke)&&!quarantine";;
             nightly)      FILTER="p0||p1||p2"
                           [ "$INCLUDE_QUARANTINED" = "true" ] || FILTER="($FILTER)&&!quarantine";;
             smoke)        FILTER="smoke";;
@@ -972,7 +1394,9 @@ spec:
           # set -- keeps the grep expressions quoted (the | would otherwise
           # be a shell pipe).
           case "$E2E_MODE" in
-            release|edge) set -- --grep "@p0|@smoke" --grep-invert @quarantine;;
+            # upgrade re-runs the GATE selection on the upgraded stack
+            # (taxonomy §3 upgrade stage row).
+            release|edge|upgrade) set -- --grep "@p0|@smoke" --grep-invert @quarantine;;
             nightly)      if [ "$INCLUDE_QUARANTINED" = "true" ]; then
                             set -- --grep "@p0|@p1|@p2"
                           else
@@ -1188,6 +1612,24 @@ spec:
                 name: argo-workflows-s3-credentials
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/apischema/junit.xml
+          # Upgrade mode only (W5): the upgrade leg's synthetic JUnit.
+          - name: upgrade-junit
+            optional: true
+            path: /junit/upgrade-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/upgrade/junit.xml
           # Keep in sync with the playwright task's withParam shard list.
           - name: playwright-junit-1-2
             optional: true
@@ -1290,13 +1732,14 @@ spec:
             # reflects suite artifacts only.
             mkdir -p /tmp/rp-in
             cp /junit/*.xml /tmp/rp-in/ 2>/dev/null || true
-            # The JUnit import plugin's duration parser is Long/Double-strict:
-            # an empty time attribute (time="") crashes the whole import with
-            # "Error while importing the file. 'empty String'" (live-verified
-            # 2026-11-06 — chainsaw's JUNIT-TEST report leaves the testsuite
-            # Time unset and go-junit-report emits time=""). Strip the empty
-            # attributes; real durations are untouched.
-            sed -i 's/ time=""//g' /tmp/rp-in/*.xml
+            # Guard the glob: a run that died before any suite wrote JUnit
+            # (e.g. an upgrade drill failing at the candidate env-prep) has
+            # an empty /tmp/rp-in until the run-outcome anchor lands below —
+            # without the guard sed/awk noisily fail on the literal pattern
+            # (live-verified 2026-11-07).
+            if [ -n "$(find /tmp/rp-in -name '*.xml' -print -quit 2>/dev/null)" ]; then
+              sed -i 's/ time=""//g' /tmp/rp-in/*.xml
+            fi
             # Drop skipped testcases from the IMPORT copy: the plugin finishes
             # suites with no status, and service-api then derives FAILED for
             # any suite with a descendant not in {PASSED, INFO, WARN}
@@ -1309,6 +1752,7 @@ spec:
             # normalized first, then awk splits on the </testcase> terminator
             # (RS), so single-line and pretty-printed files both work.
             for f in /tmp/rp-in/*.xml; do
+              [ -f "$f" ] || continue
               sed 's#\(<testcase [^>]*\)/>#\1></testcase>#g' "$f" > "$f.norm" \
                 && mv "$f.norm" "$f"
               awk '

@@ -134,7 +134,8 @@ lives in 7k-app-of-apps (W1).
 
 | File | Contents |
 |---|---|
-| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release) + chainsaw-verify; onExit imports every suite's JUnit into ReportPortal as ONE launch per run (name = `reportportal-launch`, attributes mode/run-id/image tags/charts-ref/status; a synthesized run-outcome testsuite anchors aborted runs — hard rule 8/10) |
+| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) → [upgrade mode: resolve-previous → env-prep-previous → upgrade-fixture → drill-pause] → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release, upgrade-assert on upgrade) + chainsaw-verify; onExit imports every suite's JUnit into ReportPortal as ONE launch per run (name = `reportportal-launch`, attributes mode/run-id/image tags/charts-ref/status; a synthesized run-outcome testsuite anchors aborted runs — hard rule 8/10) |
+| `cronworkflow-upgrade.yaml` | **Suspended** daily (05:47 UTC) `mode=upgrade` run — the upgrade-path leg (W5). Unsuspension criterion in the file header: first post-sunset stable inari-server release, then ~2 weeks stable before any release-gating flip |
 | `reportportal-importer-secret.yaml` | ESO ExternalSecret syncing the ReportPortal API key (Vault `inari-e2e/reportportal`) for the onExit importer; optional reference — runs skip the import with a warning until the owner provisions it |
 | `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-*` orgs older than retention-days (contract invariant 6), skipping `e2e-org` + active runs; every 6h. Two identities: requests as dev-admin, approves as **e2e-ops** (lifecycle approvals are never self-decidable) |
 | `cronworkflow-nightly.yaml` | 03:17 UTC full surface incl. quarantined, edge images, env-wide HA flip |
@@ -166,6 +167,93 @@ e2e-submitter-token -o jsonpath='{.data.token}' | base64 -d)"`. Every
 run — succeeded, failed, or aborted — lands in ReportPortal project
 `inari-e2e` as one launch (`https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all`);
 JUnit XMLs also persist in the Garage bucket at `e2e/<workflow-uid>/`.
+
+### Upgrade leg (`mode=upgrade`, W5)
+
+The highest-value phase-2 extension (plan §10): catches the DB-migration
+breakage class (cf. migration-0029 — a candidate migration breaking on data
+written by the previous version). One run:
+
+1. `resolve-previous` resolves the previous stable artifact set: latest
+   stable release git tag per chart (`inari-server-vX.Y.Z` /
+   `inari-console-vX.Y.Z` — byte-identical to the published OCI charts;
+   strict semver only, edge `-<sha>` tags never match) + that tag's
+   `appVersion` as the image. **Fallback while no stable inari-server chart
+   release exists:** the server chart falls back to `charts-ref` and the
+   image to the latest stable ghcr tag. `upgrade-from-server-image` /
+   `upgrade-from-console-image` parameters pin the baseline explicitly
+   (drills, debugging).
+2. `env-prep-previous` deploys that set (non-HA), same patch/wait/probe
+   machinery as the candidate env-prep.
+3. `upgrade-fixture` creates a tenant org **written by the old version**
+   (`e2e-<uid>-upgrade` — reaped by the janitor like any suite org). The
+   full Go seed does NOT run on the old stack: the latest stable server
+   (3.0.0) predates the roles/membership APIs it exercises.
+4. Candidate `env-prep` → `seed` → `agent-ensure` → the suite legs re-run
+   the **gate selection** (taxonomy §3) against the upgraded stack.
+5. `upgrade-assert` proves the fixture tenant survived (read-only) and emits
+   the leg's synthetic JUnit (`upgrade` testsuite → the run's ReportPortal
+   launch; `e2e/<uid>/upgrade/junit.xml` in S3).
+
+Migration semantics that make this safe on a shared env (goose v3,
+empirically verified against v3.29.0): an old binary treats a **newer**
+database as a no-op (`Up()` ignores applied versions absent from its
+filesystem), and failed migrations roll back transactionally — there is no
+golang-migrate-style dirty flag, so a broken-migration run does not poison
+the env. All 39 migrations run in transactions (no `NO TRANSACTION`).
+
+**Non-gating**: nothing submits `mode=upgrade` from a gate. The
+`e2e-upgrade` CronWorkflow ships **suspended**; unsuspend it once the first
+*post-sunset* stable inari-server release ships (the pre-sunset 3.0.0
+baseline cannot serve the fixture: no roles/membership APIs, and the
+operator CRDs it provisioned through are gone). The release-gating flip —
+a second `argo submit --wait` with `mode=upgrade` in `release-e2e.yaml` —
+is a deliberate follow-up after ~2 weeks of stable runs.
+
+**Broken-migration drill** (acceptance + future drills). Two rules first:
+
+- **The previous and candidate images must differ.** Same-image "upgrades"
+  produce no rollout, so goose never re-runs and a sabotage would go
+  undetected. Any two post-sunset edge tags work (e.g. previous
+  `4.0.0-282b7a5`, candidate `4.0.0-fc36dbf`); published-image pairs
+  straddling a real migration boundary only exist once a new migration
+  lands on inari-server main (the legs then exercise it for real).
+- Schedule drills clear of the 03:17Z nightly window.
+
+Submit with a deterministic sabotage window:
+
+```
+argo submit --from workflowtemplate/e2e-stack -n inari-e2e -p mode=upgrade \
+  -p upgrade-from-server-image=<prev> -p upgrade-from-console-image=<prev> \
+  -p server-image=<candidate> -p server-src-ref=<sha> \
+  -p upgrade-drill-pause-minutes=15
+```
+
+During the pause, sabotage the candidate's migration re-run — e.g. force
+migration `0039` to re-execute against a pre-claimed index name (adjust the
+version/object to the current max migration):
+
+```
+primary=$(kubectl -n inari-e2e get pod -l cnpg.io/cluster=postgresql,cnpg.io/instanceRole=primary -o jsonpath='{.items[0].metadata.name}')
+kubectl -n inari-e2e exec "$primary" -c postgres -- psql -U postgres -d inari -c "
+  DROP INDEX tenant_git_repos_repo_provider_key;
+  DELETE FROM goose_db_version WHERE version_id = 39;
+  CREATE INDEX tenant_git_repos_repo_provider_key ON tenant_git_repos (repo);"
+```
+
+The candidate server then crashloops on migration 0039 (`relation ...
+already exists`) → the app never goes Healthy → `env-prep` fails the run;
+the ReportPortal launch lands FAILED with the run-outcome anchor. Expected
+failure signature in the server logs:
+`db: migrate: ... partial migration error (type:sql,version:39)`.
+
+**Benign variant** (proves migrations *execute* on the upgrade path and
+succeed): same procedure minus the decoy `CREATE INDEX` — the candidate
+re-applies 0039 cleanly and the leg goes green.
+
+**Recovery** (no poisoned state — goose rolled the failed migration back):
+drop the decoy (`DROP INDEX tenant_git_repos_repo_provider_key;`) and let
+the next run re-converge; the candidate re-applies 0039 cleanly.
 
 ## Ownership / boundaries
 
