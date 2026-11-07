@@ -4,11 +4,13 @@ package suite
 
 import (
 	"strings"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/inariapi"
+	"7k-inari/inari-release-bundle/scripts/e2e/stack/internal/poll"
 )
 
 // denyLatestRego is the deny-latest-image policy (target=request, Rego) from
@@ -57,11 +59,17 @@ func findPolicyIDByName(policies []inariapi.PolicySummary, name string) string {
 // e2e env outlives any single run, so an existing deny-latest-image policy is
 // converged (source + enabled) and reused instead of failing the BeforeAll.
 // Kind provisioning starts from an empty DB, so the create path is unchanged
-// there.
+// there. The list is polled briefly: BeforeAll hard-fails the whole phase on
+// a transient toolbox-exec blip (observed live: a 502 from the apiserver→
+// kubelet exec proxy, e2e-stack-mvhhf), and a read is idempotent.
 func EnsureDenyLatestPolicy(t TB, e *Env) string {
 	t.Helper()
-	policies, err := e.API.ListPolicies()
-	require.NoError(t, err, "listing policies")
+	var policies []inariapi.PolicySummary
+	poll.Eventually(t, 30*time.Second, 5*time.Second, func() (bool, error) {
+		var err error
+		policies, err = e.API.ListPolicies()
+		return err == nil, nil
+	}, "listing policies (toolbox exec)")
 	if id := findPolicyIDByName(policies, "deny-latest-image"); id != "" {
 		require.NoError(t, e.API.SetPolicyEnabled(id, denyLatestRego, true),
 			"converging the existing deny-latest-image policy")
