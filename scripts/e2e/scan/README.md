@@ -9,21 +9,31 @@ The release-mode image vulnerability gate of the `e2e-stack` WorkflowTemplate
 For each candidate image (`SERVER_IMAGE` / `CONSOLE_IMAGE` / `AGENT_IMAGE` in
 the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
 
-1. **Prime** the proxy cache with a manifest-only pull (a proxy-cache
-   artifact exists only after a pull). Harbor's core service reverse-proxies
-   `/v2/` and hosts `/service/token`: the driver fetches a registry token
-   (robot basic auth) and pulls the manifest with it.
-2. **Trigger** the scan explicitly (`POST
-   /api/v2.0/projects/<p>/repositories/<r>/artifacts/<tag>/scan`) — a prior
-   scan is never trusted; scan-on-push latency races the poll otherwise.
-3. **Poll** `GET .../artifacts/<tag>?with_scan_overview=true` until
-   `scan_status=Success` (async; `Error`/`Stopped` get one retrigger).
-4. **Archive** the full `additions/vulnerabilities` report per image
+1. **Resolve** the tag through the proxy to its scannable digests. Multi-arch
+   indexes are scanned **per platform sub-manifest** (attestations skipped —
+   they carry no packages): Harbor's proxy registers pushed sub-manifests
+   promptly, while index/tag registration is asynchronous (waits on all
+   children, up to ~7 min, trims or drops on timeout — verified against
+   Harbor v2.15.4 source and live) — far too racy for a gate. The CVE content
+   of an index is the union of its platform manifests, so per-digest scanning
+   is the same signal with deterministic timing. Harbor's core service
+   reverse-proxies `/v2/` and hosts `/service/token`: the driver fetches a
+   registry token (robot basic auth) and pulls manifests with it.
+2. **Register** each digest's artifact: pull the sub-manifest by digest
+   through the proxy (kicks Harbor's background push), kick its blobs with
+   1-byte range GETs (shortens the server-side dependency wait), poll the
+   artifact API until registered.
+3. **Trigger** the scan explicitly (`POST
+   .../artifacts/<digest>/scan`) and poll `?with_scan_overview=true` until
+   `scan_status=Success` — asynchronous; a prior scan is never trusted
+   (scan-on-push latency races). `Error`/`Stopped` gets exactly one
+   retrigger. Platforms scan concurrently per image.
+4. **Archive** the full `additions/vulnerabilities` report per platform
    (`REPORTS_DIR`, uploaded to S3 at `e2e/<uid>/scan/reports/`).
-5. **Fail** when the Critical count exceeds `SCAN_CRITICAL_THRESHOLD`
-   (default 0) and always write the synthetic **`security` JUnit**
-   (`OUT_DIR/junit.xml`) — including configuration errors, so a failed gate
-   still lands in the run's ReportPortal launch.
+5. **Fail** when the aggregate Critical count exceeds
+   `SCAN_CRITICAL_THRESHOLD` (default 0) and always write the synthetic
+   **`security` JUnit** (`OUT_DIR/junit.xml`) — including configuration
+   errors, so a failed gate still lands in the run's ReportPortal launch.
 
 ## Configuration (env)
 

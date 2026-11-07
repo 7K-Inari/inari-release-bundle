@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,23 +19,49 @@ type imageSpec struct {
 	Tag  string
 }
 
-// ImageResult is the outcome for one image. Err marks an infrastructure /
-// configuration failure (distinct from a threshold breach, which is a clean
-// scan with too many Criticals).
-type ImageResult struct {
-	Name     string
-	Repo     string
-	Tag      string
+// PlatformResult is the scan outcome for one digest of an image (one per
+// platform sub-manifest; exactly one for single-manifest images).
+type PlatformResult struct {
+	Platform string // "linux/amd64"; "" for single-manifest images
+	Digest   string
 	Critical int
 	High     int
 	Scanned  bool // reached scan_status=Success
 	Err      error
 }
 
+// ImageResult is the outcome for one image. Err marks an image-level
+// infrastructure/configuration failure (tag resolution); per-platform
+// failures live in Platforms. Critical/High aggregate the platforms.
+type ImageResult struct {
+	Name      string
+	Repo      string
+	Tag       string
+	Platforms []PlatformResult
+	Critical  int
+	High      int
+	Scanned   bool // every platform reached scan_status=Success
+	Err       error
+}
+
+// Breached reports whether the result fails the gate: infrastructure error
+// at any level, or the aggregate Critical count exceeding the threshold.
+func (r ImageResult) Breached(threshold int) bool {
+	if r.Err != nil {
+		return true
+	}
+	for _, p := range r.Platforms {
+		if p.Err != nil {
+			return true
+		}
+	}
+	return r.Critical > threshold
+}
+
 // Options tunes the scan loop (tests shrink these to milliseconds).
 type Options struct {
 	PollInterval time.Duration
-	ScanTimeout  time.Duration // per image
+	ScanTimeout  time.Duration // per image (resolve + register + scan)
 }
 
 var bareSemver = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
@@ -71,9 +98,14 @@ func imagesFromEnv(getenv func(string) string) (images []imageSpec, missing []st
 	return images, missing
 }
 
-// reportFileName is the S3-side artifact name for the full report.
-func reportFileName(im imageSpec) string {
-	return fmt.Sprintf("%s-%s-vulnerabilities.json", im.Name, im.Tag)
+// reportFileName is the S3-side artifact name for one platform's full report.
+func reportFileName(im imageSpec, p PlatformResult) string {
+	stem := p.Platform
+	if stem == "" {
+		stem = "image"
+	}
+	return fmt.Sprintf("%s-%s-%s-vulnerabilities.json",
+		im.Name, im.Tag, strings.ReplaceAll(stem, "/", "-"))
 }
 
 // counts returns (critical, high). Harbor's overview summary is the primary
@@ -98,34 +130,81 @@ func counts(ov scanOverview, rep *vulnReport) (critical, high int) {
 	return critical, high
 }
 
-// ScanImage runs the full per-image flow: prime the proxy cache, trigger the
-// scan, poll to Success, archive the full report, count severities.
-func ScanImage(ctx context.Context, c *Client, opts Options, im imageSpec, reportsDir string) ImageResult {
-	res := ImageResult{Name: im.Name, Repo: im.Repo, Tag: im.Tag}
-	ctx, cancel := context.WithTimeout(ctx, opts.ScanTimeout)
-	defer cancel()
+// scanPlatform runs the per-digest flow: register the artifact in the proxy
+// cache, trigger the scan, poll to Success, archive the report, count.
+func scanPlatform(ctx context.Context, c *Client, opts Options, regToken string, im imageSpec, tgt scanTarget, reportsDir string, logf func(string, ...any)) PlatformResult {
+	res := PlatformResult{Platform: tgt.Platform, Digest: tgt.Digest}
+	label := tgt.Platform
+	if label == "" {
+		label = "image"
+	}
 
-	if err := c.PrimeManifest(ctx, im.Repo, im.Tag); err != nil {
-		res.Err = fmt.Errorf("prime proxy cache: %w", err)
+	if err := c.PrimeTarget(ctx, regToken, im.Repo, tgt, opts.PollInterval); err != nil {
+		res.Err = err
 		return res
 	}
-	ov, err := c.scanAndWait(ctx, im.Repo, im.Tag, opts.PollInterval)
+	logf("  %s: artifact %s registered", label, tgt.Digest[:19])
+
+	ov, err := c.scanAndWait(ctx, im.Repo, tgt.Digest, opts.PollInterval)
 	if err != nil {
 		res.Err = err
 		return res
 	}
 	res.Scanned = true
 
-	body, err := c.GetVulnerabilityReport(ctx, im.Repo, im.Tag)
+	body, err := c.GetVulnerabilityReport(ctx, im.Repo, tgt.Digest)
 	if err != nil {
 		res.Err = fmt.Errorf("fetch vulnerability report: %w", err)
 		return res
 	}
-	path := filepath.Join(reportsDir, reportFileName(im))
+	path := filepath.Join(reportsDir, reportFileName(im, res))
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		res.Err = fmt.Errorf("archive vulnerability report: %w", err)
 		return res
 	}
 	res.Critical, res.High = counts(ov, parseReport(body))
+	logf("  %s: %d critical, %d high", label, res.Critical, res.High)
+	return res
+}
+
+// ScanImage runs the full per-image flow: resolve the tag to its scannable
+// digests (per-platform for indexes), then scan them concurrently and
+// aggregate.
+func ScanImage(ctx context.Context, c *Client, opts Options, im imageSpec, reportsDir string, logf func(string, ...any)) ImageResult {
+	res := ImageResult{Name: im.Name, Repo: im.Repo, Tag: im.Tag}
+	ctx, cancel := context.WithTimeout(ctx, opts.ScanTimeout)
+	defer cancel()
+
+	regToken, err := c.registryToken(ctx, im.Repo)
+	if err != nil {
+		res.Err = fmt.Errorf("registry token: %w", err)
+		return res
+	}
+	targets, err := c.ResolveTargets(ctx, regToken, im.Repo, im.Tag)
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	logf("  resolved %s:%s → %d scannable digest(s)", im.Repo, im.Tag, len(targets))
+
+	res.Platforms = make([]PlatformResult, len(targets))
+	var wg sync.WaitGroup
+	for i, tgt := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res.Platforms[i] = scanPlatform(ctx, c, opts, regToken, im, tgt, reportsDir, logf)
+		}()
+	}
+	wg.Wait()
+
+	res.Scanned = true
+	for _, p := range res.Platforms {
+		if p.Err != nil || !p.Scanned {
+			res.Scanned = false
+		}
+		res.Critical += p.Critical
+		res.High += p.High
+	}
 	return res
 }

@@ -50,7 +50,8 @@ func TestWriteJUnitPass(t *testing.T) {
 func TestWriteJUnitBreachAndError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "junit.xml")
 	results := []ImageResult{
-		{Name: "inari-server", Repo: "7k-inari/inari-server", Tag: "4.0.0", Critical: 3, High: 9, Scanned: true},
+		{Name: "inari-server", Repo: "7k-inari/inari-server", Tag: "4.0.0", Critical: 3, High: 9, Scanned: true,
+			Platforms: []PlatformResult{{Platform: "linux/amd64", Digest: "sha256:abc", Critical: 3, High: 9, Scanned: true}}},
 		{Name: "inari-agent", Repo: "7k-inari/inari-agent", Tag: "v0.6.0", Err: errTest},
 		{Name: "scan-gate-configuration", Err: errTest}, // config-error shape
 	}
@@ -62,17 +63,34 @@ func TestWriteJUnitBreachAndError(t *testing.T) {
 		t.Fatalf("tests=%d failures=%d, want 3/3", suite.Tests, suite.Failures)
 	}
 	breach := suite.Cases[0].Failure
-	if breach == nil || breach.Message != "3 critical CVE(s) exceed the threshold 0" {
+	if breach == nil || breach.Message != "3 critical CVE(s) across 1 platform manifest(s) exceed the threshold 0" {
 		t.Fatalf("unexpected breach failure: %+v", breach)
 	}
-	if !strings.Contains(breach.Body, "e2e/run-123/scan/reports/inari-server-4.0.0-vulnerabilities.json") {
-		t.Fatalf("failure body missing the S3 report pointer: %q", breach.Body)
+	if !strings.Contains(breach.Body, "e2e/run-123/scan/reports/") ||
+		!strings.Contains(breach.Body, "linux/amd64: 3 critical, 9 high") {
+		t.Fatalf("failure body missing report pointer or per-platform counts: %q", breach.Body)
 	}
 	if suite.Cases[1].Failure == nil || !strings.Contains(suite.Cases[1].Failure.Message, "scan gate error") {
 		t.Fatalf("infra error not mapped to a failure: %+v", suite.Cases[1].Failure)
 	}
 	if suite.Cases[2].Name != "scan-gate-configuration" {
 		t.Fatalf("config testcase name fell through: %q", suite.Cases[2].Name)
+	}
+}
+
+func TestPlatformErrorFails(t *testing.T) {
+	r := ImageResult{
+		Platforms: []PlatformResult{
+			{Platform: "linux/amd64", Scanned: true},
+			{Platform: "linux/arm64", Err: errTest},
+		},
+	}
+	if !r.Breached(100) {
+		t.Fatal("a platform error must fail the image regardless of the threshold")
+	}
+	f := r.failure(0, "")
+	if !strings.Contains(f.Message, "linux/arm64") {
+		t.Fatalf("platform error not named: %q", f.Message)
 	}
 }
 

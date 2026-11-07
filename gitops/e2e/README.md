@@ -50,19 +50,25 @@ on the public gateway/DNS/TLS path. Per image (`inari-server`,
 `inari-ui-bundle`, `inari-agent` in `ghcr-proxy`) the driver
 ([`scripts/e2e/scan/`](../../scripts/e2e/scan/)):
 
-1. **Primes the proxy cache** with a manifest-only pull — a proxy-cache
-   artifact exists only after something pulls it through.
-2. **Triggers the scan explicitly** (`POST
-   /api/v2.0/projects/ghcr-proxy/repositories/<repo>/artifacts/<tag>/scan`)
-   and polls `?with_scan_overview=true` until `scan_status=Success` —
-   asynchronous; a prior scan is never trusted (scan-on-push latency races).
+1. **Resolves the tag through the proxy cache to its scannable digests** —
+   multi-arch indexes are scanned **per platform sub-manifest** (attestations
+   skipped): Harbor registers pushed sub-manifests promptly, while index/tag
+   registration is async and racy (up to ~7 min wait on children; verified
+   against Harbor v2.15.4 source + live). The index's CVE content is the
+   union of its platform manifests — same signal, deterministic timing.
+2. **Registers + scans each digest**: pull the sub-manifest through the
+   proxy, kick blob caching (1-byte range GETs), poll artifact registration,
+   then explicit `POST .../artifacts/<digest>/scan` and poll
+   `?with_scan_overview=true` until `scan_status=Success` — asynchronous; a
+   prior scan is never trusted (scan-on-push latency races).
    `Error`/`Stopped` gets exactly one retrigger.
-3. **Archives the full report** (`additions/vulnerabilities`) in the Garage
-   bucket at `e2e/<workflow-uid>/scan/reports/`.
-4. **Fails the run** when the Critical count exceeds the workflow parameter
-   `scan-critical-threshold` (default `0`), and always writes the synthetic
-   **`security` JUnit** (`e2e/<uid>/scan/junit.xml` → the run's ReportPortal
-   launch via the exit-handler, including on failure — hard rule 8/10).
+3. **Archives the full reports** (`additions/vulnerabilities`, per platform)
+   in the Garage bucket at `e2e/<workflow-uid>/scan/reports/`.
+4. **Fails the run** when the aggregate Critical count exceeds the workflow
+   parameter `scan-critical-threshold` (default `0`), and always writes the
+   synthetic **`security` JUnit** (`e2e/<uid>/scan/junit.xml` → the run's
+   ReportPortal launch via the exit-handler, including on failure — hard
+   rule 8/10).
 
 Policies that live in **Harbor, never in scripts**: CVE allowlists (project
 `ghcr-proxy` → CVE Allowlist), scan-on-push, the daily re-scan schedule. The
@@ -92,10 +98,10 @@ single exemption knob. Complements cosign (provenance), never replaces it.
 | Symptom | Likely cause |
 |---|---|
 | `401`/`403` on the API calls | robot scopes — needs Create Scan + read/pull on `ghcr-proxy`; check Vault entry vs Harbor robot after rotation (ESO refresh/force-sync) |
-| `artifact not registered … after re-priming` | the tag does not exist upstream on `ghcr.io`, or the manifest pull 404s — check the tag |
+| `not registered in the ghcr proxy before the deadline` | the proxy never registered the digest — the tag may not exist upstream on `ghcr.io`, or Harbor's background push is wedged (core logs) |
 | persistent `scan ended in status "Error"` | Trivy scanner broken — usually vulnerability-DB egress from the cluster |
 | release run fails with `scan-gate-configuration` | prerequisite 2 not done / ESO not synced |
-| slow first scan of a large image | normal — the leg polls up to 10 min per image (`activeDeadlineSeconds: 1500` overall) |
+| slow first scan of a large image | normal — platforms scan concurrently per image; the leg allows up to 10 min per image (`activeDeadlineSeconds: 2400` overall) |
 
 ## Git service (replaces the kind hostPath coupling)
 

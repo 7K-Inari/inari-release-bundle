@@ -116,15 +116,16 @@ func run(getenv func(string) string, stdout io.Writer) int {
 
 	results := make([]ImageResult, 0, len(images))
 	failed := false
+	logf := func(format string, args ...any) { fmt.Fprintf(stdout, format+"\n", args...) }
 	for _, im := range images {
 		fmt.Fprintf(stdout, "== scanning %s:%s\n", im.Repo, im.Tag)
-		r := ScanImage(context.Background(), client, opts, im, reportsDir)
+		r := ScanImage(context.Background(), client, opts, im, reportsDir, logf)
 		results = append(results, r)
 		switch {
 		case r.Err != nil:
 			failed = true
 			fmt.Fprintf(stdout, "ERROR %s:%s — %v\n", r.Repo, r.Tag, r.Err)
-		case r.Critical > threshold:
+		case r.Breached(threshold):
 			failed = true
 			fmt.Fprintf(stdout, "FAIL %s:%s — %d critical (threshold %d), %d high\n",
 				r.Repo, r.Tag, r.Critical, threshold, r.High)

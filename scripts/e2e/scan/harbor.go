@@ -22,11 +22,12 @@ const manifestAccept = "application/vnd.oci.image.manifest.v1+json, " +
 	"application/vnd.docker.distribution.manifest.v2+json, " +
 	"application/vnd.docker.distribution.manifest.list.v2+json"
 
-// Client talks to Harbor's v2.0 API and the registry endpoint with robot
-// account basic auth. The token never appears in returned errors or logs.
+// Client talks to Harbor's core service: the v2.0 API and the /v2/ registry
+// proxy (with /service/token), all with robot account basic auth. The token
+// never appears in returned errors or logs.
 type Client struct {
-	api      string // e.g. https://harbor.7kgroup.org/api/v2.0
-	registry string // e.g. https://harbor.7kgroup.org
+	api      string // e.g. http://harbor-core.harbor.svc.cluster.local/api/v2.0
+	registry string // e.g. http://harbor-core.harbor.svc.cluster.local
 	project  string // e.g. ghcr-proxy
 	user     string
 	token    string
@@ -40,17 +41,18 @@ func NewClient(api, registry, project, user, token string) *Client {
 		project:  project,
 		user:     user,
 		token:    token,
-		hc:       &http.Client{Timeout: 30 * time.Second},
+		hc:       &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
 // artifactPath builds the API path for an artifact. The Harbor API requires
 // the repository name's slash to be double-URL-encoded (%252F) — a single
 // encoding is decoded back to a path separator by the API router and 404s.
-func (c *Client) artifactPath(repo, tag string) string {
+// ref may be a tag or a digest (sha256:...).
+func (c *Client) artifactPath(repo, ref string) string {
 	escRepo := strings.ReplaceAll(url.PathEscape(repo), "%2F", "%252F")
 	return fmt.Sprintf("%s/projects/%s/repositories/%s/artifacts/%s",
-		c.api, url.PathEscape(c.project), escRepo, url.PathEscape(tag))
+		c.api, url.PathEscape(c.project), escRepo, url.PathEscape(ref))
 }
 
 func (c *Client) do(ctx context.Context, method, u string) (int, []byte, error) {
@@ -70,6 +72,8 @@ func (c *Client) do(ctx context.Context, method, u string) (int, []byte, error) 
 	}
 	return resp.StatusCode, body, nil
 }
+
+// --- registry (/v2/) side: priming ----------------------------------------
 
 // registryToken fetches a registry pull token from Harbor's token service
 // (hosted on core, next to the /v2/ proxy) with robot basic auth. The e2e
@@ -101,42 +105,162 @@ func (c *Client) registryToken(ctx context.Context, repo string) (string, error)
 	return "", fmt.Errorf("registry token response carries no token")
 }
 
-// PrimeManifest performs a manifest-only pull through the proxy-cache project
-// so the artifact is registered in Harbor before any API call touches it: a
-// proxy-cache artifact exists only after something pulls it through.
-func (c *Client) PrimeManifest(ctx context.Context, repo, tag string) error {
-	tok, err := c.registryToken(ctx, repo)
-	if err != nil {
-		return err
-	}
-	u := fmt.Sprintf("%s/v2/%s/%s/manifests/%s",
-		c.registry, url.PathEscape(c.project), repo, url.PathEscape(tag))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", manifestAccept)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("manifest pull through the %s proxy: HTTP %d", c.project, resp.StatusCode)
-	}
-	return nil
+// ociManifest is the slice of an image manifest / index the gate needs.
+type ociManifest struct {
+	MediaType string `json:"mediaType"`
+	Config    struct {
+		Digest string `json:"digest"`
+	} `json:"config"`
+	Layers []struct {
+		Digest string `json:"digest"`
+	} `json:"layers"`
+	Manifests []struct {
+		Digest   string `json:"digest"`
+		Platform *struct {
+			OS           string `json:"os"`
+			Architecture string `json:"architecture"`
+		} `json:"platform"`
+	} `json:"manifests"`
 }
 
+// getManifest fetches a manifest or index by reference (tag or digest)
+// through the proxy cache, returning the body and the canonical digest.
+// Every GET through the proxy kicks Harbor's background registration of the
+// referenced content.
+func (c *Client) getManifest(ctx context.Context, regToken, repo, ref string) (*ociManifest, string, error) {
+	u := fmt.Sprintf("%s/v2/%s/%s/manifests/%s",
+		c.registry, url.PathEscape(c.project), repo, url.PathEscape(ref))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Accept", manifestAccept)
+	req.Header.Set("Authorization", "Bearer "+regToken)
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("manifest %s: HTTP %d", ref, resp.StatusCode)
+	}
+	var m ociManifest
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, "", fmt.Errorf("parse manifest %s: %w", ref, err)
+	}
+	return &m, resp.Header.Get("Docker-Content-Digest"), nil
+}
+
+// kickBlob issues a 1-byte range GET for a blob. Harbor's proxy serves it
+// (206) and, on a cache miss, pushes the FULL blob to local storage in a
+// background goroutine — this shortens the sub-manifest handler's dependency
+// wait (up to 200s without kicks) to seconds.
+func (c *Client) kickBlob(ctx context.Context, regToken, repo, digest string) {
+	u := fmt.Sprintf("%s/v2/%s/%s/blobs/%s",
+		c.registry, url.PathEscape(c.project), repo, url.PathEscape(digest))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+regToken)
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	// Deliberately truncate: the point is the server-side background push,
+	// not the bytes.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1))
+}
+
+// scanTarget is one scannable artifact digest of a candidate image: the
+// image manifest itself (single-arch images) or each platform sub-manifest
+// of an index (attestations excluded — they carry no packages).
+type scanTarget struct {
+	Digest   string
+	Platform string // "linux/amd64"; "" for a single-manifest image
+}
+
+// ResolveTargets resolves a tag to its scannable digests. Multi-arch indexes
+// are scanned per platform sub-manifest: Harbor registers pushed
+// sub-manifests synchronously-ish, while INDEX/tag registration is
+// asynchronous (waits on all children, up to ~7 min, trims or drops on
+// timeout) — far too racy for a gate. The CVE content of an index is the
+// union of its platform manifests, so per-digest scanning is the same signal
+// with deterministic timing.
+func (c *Client) ResolveTargets(ctx context.Context, regToken, repo, tag string) ([]scanTarget, error) {
+	m, digest, err := c.getManifest(ctx, regToken, repo, tag)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", tag, err)
+	}
+	if len(m.Manifests) == 0 {
+		if digest == "" {
+			return nil, fmt.Errorf("resolve %s: no Docker-Content-Digest header", tag)
+		}
+		return []scanTarget{{Digest: digest}}, nil
+	}
+	var targets []scanTarget
+	for _, sub := range m.Manifests {
+		if sub.Platform != nil && sub.Platform.OS == "unknown" && sub.Platform.Architecture == "unknown" {
+			continue // attestation manifest
+		}
+		targets = append(targets, scanTarget{
+			Digest:   sub.Digest,
+			Platform: sub.Platform.OS + "/" + sub.Platform.Architecture,
+		})
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("resolve %s: index carries no platform manifests", tag)
+	}
+	return targets, nil
+}
+
+// PrimeTarget registers a digest's artifact in the proxy cache: pull the
+// manifest by digest (kicks the background push), kick its blobs, then poll
+// the artifact API until Harbor registers it.
+func (c *Client) PrimeTarget(ctx context.Context, regToken, repo string, tgt scanTarget, pollInterval time.Duration) error {
+	m, _, err := c.getManifest(ctx, regToken, repo, tgt.Digest)
+	if err != nil {
+		return fmt.Errorf("pull sub-manifest: %w", err)
+	}
+	if m.Config.Digest != "" {
+		c.kickBlob(ctx, regToken, repo, m.Config.Digest)
+	}
+	for _, l := range m.Layers {
+		c.kickBlob(ctx, regToken, repo, l.Digest)
+	}
+	for {
+		code, _, err := c.do(ctx, http.MethodGet, c.artifactPath(repo, tgt.Digest))
+		if err == nil && code == http.StatusOK {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("artifact %s not registered in the %s proxy before the deadline (last HTTP %d)", tgt.Digest, c.project, code)
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// --- API side: scan + report ----------------------------------------------
+
 // TriggerScan asks Harbor to (re)scan the artifact. 202 Accepted is the
-// documented response; any 2xx is accepted. The gate never trusts a prior
-// scan's freshness — the explicit POST is the freshness mechanism (scan-on-
-// push latency races the poll otherwise).
-func (c *Client) TriggerScan(ctx context.Context, repo, tag string) error {
-	code, _, err := c.do(ctx, http.MethodPost, c.artifactPath(repo, tag)+"/scan")
+// documented response; any 2xx is accepted, and 409 (a scan is already
+// running — scan-on-push may have beaten us) is fine too. The gate never
+// trusts a prior scan's freshness — the explicit POST is the freshness
+// mechanism (scan-on-push latency races the poll otherwise).
+func (c *Client) TriggerScan(ctx context.Context, repo, ref string) error {
+	code, _, err := c.do(ctx, http.MethodPost, c.artifactPath(repo, ref)+"/scan")
 	if err != nil {
 		return err
+	}
+	if code == http.StatusConflict {
+		return nil
 	}
 	if code < 200 || code >= 300 {
 		return fmt.Errorf("POST scan: HTTP %d", code)
@@ -159,9 +283,9 @@ type scanOverview struct {
 // GetScanOverview reads the artifact with its scan overview. A missing
 // report yields a zero overview (ScanStatus ""), which the poll loop treats
 // as "not finished". HTTP 404 means the artifact is not registered (yet).
-func (c *Client) GetScanOverview(ctx context.Context, repo, tag string) (int, scanOverview, error) {
+func (c *Client) GetScanOverview(ctx context.Context, repo, ref string) (int, scanOverview, error) {
 	var ov scanOverview
-	code, body, err := c.do(ctx, http.MethodGet, c.artifactPath(repo, tag)+"?with_scan_overview=true")
+	code, body, err := c.do(ctx, http.MethodGet, c.artifactPath(repo, ref)+"?with_scan_overview=true")
 	if err != nil {
 		return 0, ov, err
 	}
@@ -191,8 +315,8 @@ type vulnReport struct {
 
 // GetVulnerabilityReport fetches the full vulnerability report (the
 // additions/vulnerabilities addition), returned verbatim for archival.
-func (c *Client) GetVulnerabilityReport(ctx context.Context, repo, tag string) ([]byte, error) {
-	code, body, err := c.do(ctx, http.MethodGet, c.artifactPath(repo, tag)+"/additions/vulnerabilities")
+func (c *Client) GetVulnerabilityReport(ctx context.Context, repo, ref string) ([]byte, error) {
+	code, body, err := c.do(ctx, http.MethodGet, c.artifactPath(repo, ref)+"/additions/vulnerabilities")
 	if err != nil {
 		return nil, err
 	}
@@ -222,34 +346,31 @@ func parseReport(body []byte) *vulnReport {
 // scanAndWait triggers a scan and polls until scan_status=Success. Terminal
 // scanner errors (Error/Stopped) get exactly one retrigger — persistent
 // failures usually mean the Trivy scanner is broken (DB egress), which must
-// fail the gate loudly. HTTP 404 mid-poll re-primes the proxy cache (the
-// priming pull raced artifact registration).
-func (c *Client) scanAndWait(ctx context.Context, repo, tag string, pollInterval time.Duration) (scanOverview, error) {
+// fail the gate loudly. HTTP 404 mid-poll means registration is still
+// catching up — keep waiting (the context bounds it).
+func (c *Client) scanAndWait(ctx context.Context, repo, ref string, pollInterval time.Duration) (scanOverview, error) {
 	var ov scanOverview
-	if err := c.TriggerScan(ctx, repo, tag); err != nil {
+	if err := c.TriggerScan(ctx, repo, ref); err != nil {
 		return ov, fmt.Errorf("trigger scan: %w", err)
 	}
 	retriggered := false
 	consecutiveBad := 0
 	for {
-		code, got, err := c.GetScanOverview(ctx, repo, tag)
+		code, got, err := c.GetScanOverview(ctx, repo, ref)
 		switch {
 		case err != nil:
 			consecutiveBad++
-			if consecutiveBad >= 3 {
+			if consecutiveBad >= 6 {
 				return ov, fmt.Errorf("poll scan overview: %w", err)
 			}
 		case code == http.StatusNotFound:
 			consecutiveBad++
-			if consecutiveBad >= 3 {
-				return ov, fmt.Errorf("artifact not registered in the %s proxy after re-priming", c.project)
-			}
-			if perr := c.PrimeManifest(ctx, repo, tag); perr != nil {
-				return ov, fmt.Errorf("re-prime proxy cache: %w", perr)
+			if consecutiveBad >= 6 {
+				return ov, fmt.Errorf("artifact %s vanished mid-scan (proxy GC?)", ref)
 			}
 		case code != http.StatusOK:
 			consecutiveBad++
-			if consecutiveBad >= 3 {
+			if consecutiveBad >= 6 {
 				return ov, fmt.Errorf("poll scan overview: HTTP %d", code)
 			}
 		default:
@@ -263,7 +384,7 @@ func (c *Client) scanAndWait(ctx context.Context, repo, tag string, pollInterval
 					return ov, fmt.Errorf("scan ended in status %q after one retrigger — check the Trivy scanner (DB egress?)", ov.ScanStatus)
 				}
 				retriggered = true
-				if err := c.TriggerScan(ctx, repo, tag); err != nil {
+				if err := c.TriggerScan(ctx, repo, ref); err != nil {
 					return ov, fmt.Errorf("retrigger scan: %w", err)
 				}
 			}
