@@ -12,9 +12,7 @@ the seed step (`scripts/e2e/seed`). Replaces the former
 scripts/e2e/ui/
 ├── playwright.config.ts        # local defaults (list reporter, no retries)
 ├── playwright.config.ci.ts     # CI: retries 2, workers 1, screenshot/video/trace on failure,
-│                               #   JUnit + HTML + JSON (+ ReportPortal when RP_* envs are set)
-├── report-flakes.mjs           # post-processes the JSON report: logs + writes test-results/flake-report.json
-├── report-flakes.test.mjs      # unit tests (node --test) — fixture with flaky/failed/passed cases
+│                               #   JUnit + HTML (+ ReportPortal when RP_* envs are set)
 ├── quarantine-issues.mjs       # NIGHTLY ONLY: files/dedupes `e2e-flake` issues for tests flaky
 │                             #   in 2+ nightly runs within 7 days
 ├── quarantine-issues.test.mjs  # unit tests (node --test) for the aggregation/dedupe logic
@@ -176,9 +174,9 @@ bug).
 3. **Tags.** Priority tags `@p0`/`@p1`/`@p2`, suite tags like `@smoke`, and
    `@quarantine` for known-flaky specs. The release gate greps `@p0` and
    inverts `@quarantine` (a quarantined test NEVER blocks a release); the
-   nightly (`e2e-nightly.yaml`) runs the full `@p0|@p1|@p2` set including
-   `@quarantine`. Flake → issue → quarantine lifecycle: see "Flakiness
-   containment" in `scripts/e2e/README.md`.
+   nightly (Argo CronWorkflow `e2e-nightly`) runs the full `@p0|@p1|@p2` set
+   including `@quarantine`. Flake → issue → quarantine lifecycle: see
+   "Flakiness containment" in `scripts/e2e/README.md`.
 4. **Personas are fixed, spec objects are unique.** Never mutate the role
    personas' assignments or `dev-admin` (see the table above); only
    `e2e-member`'s role may change, and only inside the role-lifecycle spec.

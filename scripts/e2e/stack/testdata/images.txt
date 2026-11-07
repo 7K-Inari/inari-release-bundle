@@ -1,6 +1,7 @@
-# CI image cache manifest — every image the golden-path stack pulls at its
-# pinned versions. This file is the actions/cache key input in
-# .github/workflows/e2e-stack.yaml: bump ANY entry -> new cache key.
+# Image manifest for the local kind dev loop — every image the golden-path
+# stack pulls at its pinned versions. Historically this file was also the
+# actions/cache key input in the retired .github/workflows/e2e-stack.yaml;
+# the Argo stack leg has no image-tar cache.
 # Regenerate after bumping chart/image pins: testdata/gen-images.sh
 #
 # Deliberately EXCLUDED (do not add — would break cache correctness):

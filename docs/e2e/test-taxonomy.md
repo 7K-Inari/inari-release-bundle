@@ -146,9 +146,9 @@ adopts it during the restructure):
 6. **De-quarantine.** Remove the label and close the issue once the test
    has been stable in the nightly for ~2 weeks.
 
-`ui/report-flakes.mjs` is retired once ReportPortal's analyzer covers flake
-detection; `quarantine-issues.mjs` (the GitHub-issue pipeline) is **kept** —
-ReportPortal visualizes, GitHub issues *act*.
+`ui/report-flakes.mjs` is **retired** (ReportPortal's trend widgets/analyzer
+cover flake detection); `quarantine-issues.mjs` (the GitHub-issue pipeline) is
+**kept** — ReportPortal visualizes, GitHub issues *act*.
 
 ---
 
@@ -171,6 +171,10 @@ Every suite leg writes JUnit XML to a shared artifact directory:
   synthetic JUnit (`image-scan: PASS, 0 critical, N high`).
 - Artifacts live in a Garage S3 bucket (the platform cluster convention);
   `retention-days` honored via bucket lifecycle.
+- Skipped testcases are dropped from the ReportPortal **import copy** and
+  never appear in RP (the JUnit plugin would otherwise derive FAILED for any
+  suite containing a skipped descendant); the full JUnit, skips included,
+  remains in the S3 artifact (PR #147).
 
 Labels must survive into JUnit: Ginkgo emits labels into the JUnit report
 natively; Playwright tags are part of the test title (already true today —
