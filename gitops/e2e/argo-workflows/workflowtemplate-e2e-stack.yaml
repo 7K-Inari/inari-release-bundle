@@ -1674,7 +1674,7 @@ spec:
         command: [sh]
         env:
           # Direct service DNS — no gateway/TLS/external-DNS dependency in the
-          # reporting path. Humans use https://reportportal.int.7kgroup.org.
+          # reporting path. Humans use https://reportportal.7kgroup.org.
           - name: RP_ENDPOINT
             value: http://reportportal-api.reportportal.svc.cluster.local:8585
           - name: RP_PROJECT
@@ -1843,7 +1843,7 @@ spec:
                 sleep 15
               done
               if [ -n "$LAUNCH_ID" ]; then
-                echo "  launch visible: id=$LAUNCH_ID — https://reportportal.int.7kgroup.org/ui/#$RP_PROJECT/launches/all/$LAUNCH_ID"
+                echo "  launch visible: id=$LAUNCH_ID — https://reportportal.7kgroup.org/ui/#$RP_PROJECT/launches/all/$LAUNCH_ID"
                 echo "rp-launch-id=$LAUNCH_ID" >> /artifacts/out/manifest.txt
               else
                 echo "WARNING: launch '$LAUNCH' not visible after 3m (async import lag) — check ReportPortal manually"

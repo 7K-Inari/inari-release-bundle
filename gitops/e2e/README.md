@@ -72,7 +72,7 @@ choice.
    a Harbor admin credential (Vault `harbor/app`); without the project the
    e2e image values ImagePullBackOff.
 5. **ReportPortal importer credential** (reporting only — runs work without
-   it, the onExit import just skips): on https://reportportal.int.7kgroup.org
+   it, the onExit import just skips): on https://reportportal.7kgroup.org
    (superadmin) create project **`inari-e2e`**, create local user
    **`e2e-importer`** assigned to it (MEMBER suffices), generate an API key,
    then `vault kv put secret/inari-e2e/reportportal api-key=<uuid>`. Synced
@@ -171,7 +171,7 @@ token must be the FULL Authorization header — the argo CLI sends
 with `printf 'Bearer %s' "$(kubectl -n inari-e2e get secret
 e2e-submitter-token -o jsonpath='{.data.token}' | base64 -d)"`. Every
 run — succeeded, failed, or aborted — lands in ReportPortal project
-`inari-e2e` as one launch (`https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all`);
+`inari-e2e` as one launch (`https://reportportal.7kgroup.org/ui/#inari-e2e/launches/all`);
 JUnit XMLs also persist in the Garage bucket at `e2e/<workflow-uid>/`.
 
 ### Upgrade leg (`mode=upgrade`, W5)
