@@ -1,0 +1,86 @@
+# TestRun template for the e2e k6 load legs (W7, taxonomy §1.3 `load`).
+# Rendered by the k6-run workflow step via envsubst (variables: TESTRUN_NAME,
+# SCENARIO, RUN_ID, BASE_DOMAIN, KC_URL, TENANT_SLUG, plus optional
+# LOAD_DURATION/LOAD_RATE/LOAD_VUS/LOAD_PACE_SECONDS overrides).
+#
+# parallelism 1: the e2e env is small and the legs run sequentially (D5);
+# raising it is a one-line change once a scenario needs distributed load.
+#
+# NEVER set spec.cleanup=post: the k6-run step extracts the JUnit from the
+# runner pod before deleting the TestRun, and post-cleanup would race that
+# extraction (operator deletes the pods at run end).
+apiVersion: k6.io/v1alpha1
+kind: TestRun
+metadata:
+  name: ${TESTRUN_NAME}
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+    e2e.inari.io/run-id: ${RUN_ID}
+    e2e.inari.io/scenario: ${SCENARIO}
+spec:
+  parallelism: 1
+  script:
+    configMap:
+      name: ${TESTRUN_NAME}
+      file: ${SCENARIO}.js
+  # spec.args (operator >= v1.6): passed to k6 verbatim, no shell escaping.
+  args:
+    - --tag
+    - runid=${RUN_ID}
+    - --tag
+    - scenario=${SCENARIO}
+  runner:
+    # Pinned runner via the Harbor ghcr proxy-cache (env image-pull
+    # convention; the package is public, no upstream creds needed).
+    image: harbor.7kgroup.org/ghcr-proxy/grafana/k6-operator:runner-v1.7.0
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: inari-e2e-workflows
+        e2e.inari.io/run-id: ${RUN_ID}
+        e2e.inari.io/scenario: ${SCENARIO}
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    env:
+      - name: E2E_BASE_DOMAIN
+        value: ${BASE_DOMAIN}
+      - name: E2E_KC_URL
+        value: ${KC_URL}
+      - name: E2E_TENANT_SLUG
+        value: ${TENANT_SLUG}
+      - name: E2E_RUN_ID
+        value: ${RUN_ID}
+      - name: E2E_SCENARIO
+        value: ${SCENARIO}
+      # Load-shape overrides; empty string = the scenario script defaults
+      # (quoted so an empty substitution never renders a YAML null).
+      - name: LOAD_DURATION
+        value: "${LOAD_DURATION}"
+      - name: LOAD_RATE
+        value: "${LOAD_RATE}"
+      - name: LOAD_VUS
+        value: "${LOAD_VUS}"
+      - name: LOAD_PACE_SECONDS
+        value: "${LOAD_PACE_SECONDS}"
+      # Persona passwords — resolved kubelet-side from the ESO personas
+      # secret; the runner pod's SA needs no RBAC for this.
+      - name: E2E_PASSWORD
+        valueFrom:
+          secretKeyRef: { name: inari-e2e-personas, key: dev-admin-password }
+      - name: E2E_OPERATOR_PASSWORD
+        valueFrom:
+          secretKeyRef: { name: inari-e2e-personas, key: operator-password }
+      - name: E2E_EDITOR_PASSWORD
+        valueFrom:
+          secretKeyRef: { name: inari-e2e-personas, key: editor-password }
+      - name: E2E_VIEWER_PASSWORD
+        valueFrom:
+          secretKeyRef: { name: inari-e2e-personas, key: viewer-password }
+      - name: E2E_MEMBER_PASSWORD
+        valueFrom:
+          secretKeyRef: { name: inari-e2e-personas, key: member-password }

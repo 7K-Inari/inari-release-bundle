@@ -645,3 +645,65 @@ metadata:
   annotations:
     kubernetes.io/service-account.name: e2e-submitter
 type: kubernetes.io/service-account-token
+---
+# e2e-load — the k6 load legs (W7; k6-run template in the e2e-stack
+# WorkflowTemplate). Creates TestRuns + script ConfigMaps, watches runner
+# pods, extracts artifacts (pods/exec for kubectl cp, pods/log for the
+# sentinel fallback), then deletes both. Deliberately NO secrets access:
+# persona passwords resolve kubelet-side in the runner pods (env valueFrom).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: e2e-load
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-load
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+rules:
+  # Argo wait-container plumbing.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  # TestRun lifecycle. delete is the cleanup step; the runner pods are
+  # owner-referenced and die with the TestRun.
+  - apiGroups: ["k6.io"]
+    resources: ["testruns"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Script ConfigMaps (named e2e-k6-<run>-<scenario>; create cannot be
+  # resourceNames-restricted — same semantics note as e2e-agent-ensure).
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "delete"]
+  # Runner pods: stage polling, log capture, kubectl cp extraction.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-load
+  namespace: inari-e2e
+  labels:
+    app.kubernetes.io/part-of: inari-e2e-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-load
+subjects:
+  - kind: ServiceAccount
+    name: e2e-load
+    namespace: inari-e2e
