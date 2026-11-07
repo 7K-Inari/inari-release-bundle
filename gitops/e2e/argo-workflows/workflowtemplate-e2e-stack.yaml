@@ -562,9 +562,10 @@ spec:
     # secret fails LOUD in the driver (config-error JUnit, run Failed) —
     # a gate that silently degrades to pass is worse than no gate.
     - name: harbor-scan-gate
-      # Cold-cache worst case: 3 images × (proxy registration + scan of
-      # 2 platform manifests) — platforms scan concurrently per image.
-      activeDeadlineSeconds: 2400
+      # Cold-cache worst case: 3 images × (proxy registration + queued Trivy
+      # scans of 2 platform manifests) — platforms scan concurrently per
+      # image, images serially.
+      activeDeadlineSeconds: 3300
       volumes:
         - name: work
           emptyDir: {}

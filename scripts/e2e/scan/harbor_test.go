@@ -25,14 +25,14 @@ type fakeHarbor struct {
 	tagDigest string // Docker-Content-Digest for the tag GET
 	subBodies map[string]string
 
-	registerAfter int32            // artifact GETs (no query) that 404 before 200
-	regGets       sync.Map         // ref → *atomic.Int32
+	registerAfter int32               // artifact GETs (no query) that 404 before 200
+	regGets       sync.Map            // ref → *atomic.Int32
 	statusSeq     map[string][]string // ref → overview status sequence
-	statusIdx     sync.Map         // ref → *atomic.Int32
+	statusIdx     sync.Map            // ref → *atomic.Int32
 	summary       map[string][2]int   // ref → (critical, high)
 
-	scanPosts atomic.Int32
-	blobKicks atomic.Int32
+	scanPosts  atomic.Int32
+	blobKicks  atomic.Int32
 	reportBody string
 }
 
@@ -167,11 +167,11 @@ const subManifestJSON = `{"mediaType":"application/vnd.oci.image.manifest.v1+jso
 
 func multiArchFake(t *testing.T) *fakeHarbor {
 	return &fakeHarbor{
-		t:         t,
-		tagBody:   indexJSON(),
-		tagDigest: idxDigest,
-		subBodies: map[string]string{subAmd64: subManifestJSON, subArm64: subManifestJSON},
-		summary:   map[string][2]int{subAmd64: {0, 2}, subArm64: {1, 3}},
+		t:          t,
+		tagBody:    indexJSON(),
+		tagDigest:  idxDigest,
+		subBodies:  map[string]string{subAmd64: subManifestJSON, subArm64: subManifestJSON},
+		summary:    map[string][2]int{subAmd64: {0, 2}, subArm64: {1, 3}},
 		reportBody: testReport,
 	}
 }

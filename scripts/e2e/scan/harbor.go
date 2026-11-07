@@ -41,7 +41,9 @@ func NewClient(api, registry, project, user, token string) *Client {
 		project:  project,
 		user:     user,
 		token:    token,
-		hc:       &http.Client{Timeout: 60 * time.Second},
+		// Cold-cache proxy fetches (upstream pull on a busy core) need
+		// headroom beyond the stock 30s.
+		hc: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -126,8 +128,28 @@ type ociManifest struct {
 // getManifest fetches a manifest or index by reference (tag or digest)
 // through the proxy cache, returning the body and the canonical digest.
 // Every GET through the proxy kicks Harbor's background registration of the
-// referenced content.
+// referenced content. One retry: a cold-cache upstream fetch under load
+// (concurrent background blob pushes) can outlast the client timeout.
 func (c *Client) getManifest(ctx context.Context, regToken, repo, ref string) (*ociManifest, string, error) {
+	var lastErr error
+	for attempt := range 2 {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, "", lastErr
+			case <-time.After(5 * time.Second):
+			}
+		}
+		m, digest, err := c.getManifestOnce(ctx, regToken, repo, ref)
+		if err == nil {
+			return m, digest, nil
+		}
+		lastErr = err
+	}
+	return nil, "", lastErr
+}
+
+func (c *Client) getManifestOnce(ctx context.Context, regToken, repo, ref string) (*ociManifest, string, error) {
 	u := fmt.Sprintf("%s/v2/%s/%s/manifests/%s",
 		c.registry, url.PathEscape(c.project), repo, url.PathEscape(ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

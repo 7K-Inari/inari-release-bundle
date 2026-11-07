@@ -46,7 +46,7 @@ the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
 | `SCAN_CRITICAL_THRESHOLD` | `0` | fail when Critical count exceeds this |
 | `SCAN_RUN_ID` | — | workflow uid (S3 report pointer in JUnit failures) |
 | `OUT_DIR` / `REPORTS_DIR` | `/artifacts/out` / `/artifacts/reports` | artifact paths |
-| `SCAN_POLL_INTERVAL_SECONDS` / `SCAN_TIMEOUT_SECONDS` | `15` / `600` | poll tuning (per image) |
+| `SCAN_POLL_INTERVAL_SECONDS` / `SCAN_TIMEOUT_SECONDS` | `15` / `900` | poll tuning (per image) |
 
 ## Rules
 

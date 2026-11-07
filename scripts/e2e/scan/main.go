@@ -101,7 +101,7 @@ func run(getenv func(string) string, stdout io.Writer) int {
 	)
 	opts := Options{
 		PollInterval: 15 * time.Second,
-		ScanTimeout:  10 * time.Minute,
+		ScanTimeout:  15 * time.Minute,
 	}
 	if v := getenv("SCAN_POLL_INTERVAL_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -127,6 +127,15 @@ func run(getenv func(string) string, stdout io.Writer) int {
 			fmt.Fprintf(stdout, "ERROR %s:%s — %v\n", r.Repo, r.Tag, r.Err)
 		case r.Breached(threshold):
 			failed = true
+			for _, p := range r.Platforms {
+				if p.Err != nil {
+					label := p.Platform
+					if label == "" {
+						label = "image"
+					}
+					fmt.Fprintf(stdout, "ERROR %s:%s %s (%s) — %v\n", r.Repo, r.Tag, label, p.Digest, p.Err)
+				}
+			}
 			fmt.Fprintf(stdout, "FAIL %s:%s — %d critical (threshold %d), %d high\n",
 				r.Repo, r.Tag, r.Critical, threshold, r.High)
 		default:
