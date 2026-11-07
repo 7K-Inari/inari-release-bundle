@@ -146,9 +146,9 @@ adopts it during the restructure):
 6. **De-quarantine.** Remove the label and close the issue once the test
    has been stable in the nightly for ~2 weeks.
 
-`ui/report-flakes.mjs` is **retired** (ReportPortal's trend widgets/analyzer
-cover flake detection); `quarantine-issues.mjs` (the GitHub-issue pipeline) is
-**kept** — ReportPortal visualizes, GitHub issues *act*.
+`ui/report-flakes.mjs` is retired once ReportPortal's analyzer covers flake
+detection; `quarantine-issues.mjs` (the GitHub-issue pipeline) is **kept** —
+ReportPortal visualizes, GitHub issues *act*.
 
 ---
 

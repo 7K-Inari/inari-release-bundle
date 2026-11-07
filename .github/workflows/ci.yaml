@@ -57,14 +57,15 @@ jobs:
 
       - name: e2e helper unit tests
         # The .mjs/.ts decision-logic tests for the e2e harness (env contract,
-        # git probe, quarantine automation, poll contract) — previously only
-        # run locally, so a contract break (e.g. poll's void-fn rule) shipped
-        # silently.
+        # git probe, flake reporter, quarantine automation, poll contract) —
+        # previously only run locally, so a contract break (e.g. poll's
+        # void-fn rule) shipped silently.
         run: |
           node --test --experimental-strip-types \
             scripts/e2e/ui/helpers/poll.test.ts \
             scripts/e2e/ui/helpers/env.test.ts \
             scripts/e2e/ui/helpers/git.test.ts \
+            scripts/e2e/ui/report-flakes.test.mjs \
             scripts/e2e/ui/quarantine-issues.test.mjs
 
       - name: Set up Go (e2e seed)

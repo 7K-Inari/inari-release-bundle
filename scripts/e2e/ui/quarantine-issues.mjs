@@ -12,10 +12,8 @@
 // stable again.
 //
 // Data source: the ui-e2e-flakes-* artifacts uploaded by recent e2e-nightly
-// runs (flake-report.json, written by the retired report-flakes.mjs — flake
-// trends moved to ReportPortal, and the sweep is being re-pointed at RP
-// data; per hard rule 9 the sweep itself stays GitHub-native). No state
-// outside GitHub artifacts + issues.
+// runs (flake-report.json written by report-flakes.mjs). No state outside
+// GitHub artifacts + issues.
 //
 // Env: GH_TOKEN or GITHUB_TOKEN (issues:write), GITHUB_REPOSITORY (owner/repo).
 // Uses the preinstalled `gh` CLI for API calls and artifact download

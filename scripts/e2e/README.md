@@ -102,9 +102,11 @@ The gate NEVER runs a quarantined test — the direct analog of inari-server's
   `npx playwright test --config playwright.config.ci.ts --grep @p0 --grep-invert @quarantine`.
   CI runs with `retries: 2`, so a test that passes only after a retry is
   green in the gate but recorded as a flake candidate.
-- **Flake signal**: ReportPortal trends/analyzer on the per-run JUnit
-  imports replace the retired `ui/report-flakes.mjs` post-processor (the
-  GHA artifact pipeline it fed is gone with the kind-era workflow).
+- **Flake reporter** (`ui/report-flakes.mjs`): post-processes the Playwright
+  JSON report after every CI run, logs a summary, and writes
+  `test-results/flake-report.json` (test title, file, run id, timestamp,
+  branch). (Retirement is owned by M1W10 — ReportPortal trends replace it —
+  together with the quarantine-sweep re-pointing.)
 - **Quarantine policy** (manual part): when an `e2e-flake` issue is triaged,
   tag the test `@quarantine` in its spec title. Quarantined tests are
   excluded from the gate (`--grep-invert @quarantine`) and run only in the
