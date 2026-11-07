@@ -18,8 +18,9 @@
 #   E2E_HA=1.
 # - Q9: PostSync smoke is chainsaw-only (gitops/e2e/chainsaw-hooks/);
 #   Ginkgo/Playwright smoke sets run via mode=smoke submissions.
-# - W6 seam: the Harbor scan gate inserts between cosign-verify and env-prep
-#   (when: mode == release) — this DAG leaves that slot deliberately.
+# - W6 (landed): the harbor-scan-gate leg fills the seam between
+#   cosign-verify and env-prep — release-only, parallel with cosign-verify;
+#   env-prep gates on both.
 # - W5 (upgrade leg, plan §10): mode=upgrade prepends a previous-stable phase
 #   — resolve-previous (latest stable chart release git tags + ghcr stable
 #   image tags) → env-prep-previous → upgrade-fixture (pre-upgrade data) →
@@ -89,6 +90,12 @@ spec:
       - name: cosign-verify
         value: "false"
         enum: ["true", "false"]
+      - name: scan-critical-threshold
+        # Release-mode Harbor/Trivy scan gate (W6): a candidate image fails
+        # when its Critical CVE count EXCEEDS this. CVE allowlists are
+        # managed in Harbor (project ghcr-proxy), never here — raise this
+        # only for a one-off debug submit, never on the release path.
+        value: "0"
       - name: include-quarantined
         value: "false"
         enum: ["true", "false"]
@@ -130,6 +137,17 @@ spec:
             template: cosign-verify
             depends: resolve
             when: "{{workflow.parameters.cosign-verify}} == true"
+          # Harbor/Trivy vulnerability scan gate (W6, plan C9/§5.2): release
+          # only, parallel with cosign-verify — fail fast and cheap before
+          # the expensive env-prep. Scans exactly the candidate image set
+          # (hard rule 5) in the ghcr-proxy project; pull-blocking stays OFF
+          # there (hard rule 7) — enforcement lives here, never in the pull
+          # path. Emits the synthetic `security` JUnit (taxonomy §1.2/§5) and
+          # archives the full vulnerability reports in S3.
+          - name: harbor-scan-gate
+            template: harbor-scan-gate
+            depends: resolve
+            when: "{{workflow.parameters.mode}} == release"
           # --- upgrade mode only (W5): previous-stable phase ----------------
           # Deploy the previous stable artifact set, write the pre-upgrade
           # fixture, then fall through to the normal candidate env-prep.
@@ -174,7 +192,7 @@ spec:
           # when-skipped and the fixture must still gate the candidate deploy.
           - name: env-prep
             template: env-prep
-            depends: (cosign-verify.Succeeded || cosign-verify.Skipped) && (upgrade-fixture.Succeeded || upgrade-fixture.Skipped) && (upgrade-drill-pause.Succeeded || upgrade-drill-pause.Skipped)
+            depends: (cosign-verify.Succeeded || cosign-verify.Skipped) && (harbor-scan-gate.Succeeded || harbor-scan-gate.Skipped) && (upgrade-fixture.Succeeded || upgrade-fixture.Skipped) && (upgrade-drill-pause.Succeeded || upgrade-drill-pause.Skipped)
             arguments:
               parameters:
                 - name: stage
@@ -481,6 +499,106 @@ spec:
                 name: argo-workflows-s3-credentials
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/cosign/verify.log
+
+    # ------------------------------------------------------- harbor-scan-gate
+    # W6 (plan C9/§5.2): Trivy scans of the candidate image set via the
+    # Harbor API (driver: scripts/e2e/scan, Go). Release mode only. Per
+    # image: prime the ghcr-proxy cache (manifest-only pull — a proxy-cache
+    # artifact exists only after something pulls it), POST
+    # .../artifacts/{tag}/scan, poll ?with_scan_overview=true until
+    # scan_status=Success (async! never trusts a prior scan's freshness),
+    # archive the full additions/vulnerabilities report in S3, and fail when
+    # the Critical count exceeds scan-critical-threshold. CVE allowlists are
+    # managed in Harbor, never in the driver. Complements cosign-verify
+    # (provenance), never replaces it.
+    #
+    # Credentials: ESO secret harbor-scanner (harbor-scanner-secret.yaml;
+    # robot account with pull/read + scan/create on ghcr-proxy only —
+    # gitops/e2e/README.md §Harbor scan gate). optional: true so a missing
+    # secret fails LOUD in the driver (config-error JUnit, run Failed) —
+    # a gate that silently degrades to pass is worse than no gate.
+    - name: harbor-scan-gate
+      activeDeadlineSeconds: 1500
+      volumes:
+        - name: work
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      script:
+        image: golang:1.26.3-bookworm
+        command: [sh]
+        env:
+          - name: SERVER_IMAGE
+            value: "{{workflow.parameters.server-image}}"
+          - name: CONSOLE_IMAGE
+            value: "{{workflow.parameters.console-image}}"
+          - name: AGENT_IMAGE
+            value: "{{workflow.parameters.agent-image}}"
+          - name: SCAN_CRITICAL_THRESHOLD
+            value: "{{workflow.parameters.scan-critical-threshold}}"
+          - name: SCAN_RUN_ID
+            value: "{{workflow.uid}}"
+          - name: HARBOR_ROBOT_USERNAME
+            valueFrom:
+              secretKeyRef: {name: harbor-scanner, key: username, optional: true}
+          - name: HARBOR_ROBOT_TOKEN
+            valueFrom:
+              secretKeyRef: {name: harbor-scanner, key: token, optional: true}
+        source: |
+          set -eu
+          # Nested Go module (scripts/e2e/scan/go.mod) — run from inside the
+          # module (the repo root has no go.mod; seed-leg precedent).
+          cd /work/scripts/e2e/scan
+          go run .
+        volumeMounts:
+          - name: work
+            mountPath: /work
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/scan/junit.xml
+          # The full additions/vulnerabilities report per image — the
+          # gate's evidence. Artifacts only; never imported to ReportPortal.
+          - name: reports
+            path: /artifacts/reports
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/scan/reports/
 
     # -------------------------------------------------------------- env-prep
     # Replaces kind bring-up: points the e2e env's per-component ArgoCD apps
@@ -1634,6 +1752,26 @@ spec:
                 name: argo-workflows-s3-credentials
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/upgrade/junit.xml
+          # Release mode only (W6): the Harbor scan gate's synthetic
+          # `security` JUnit — including the failed-gate case (the driver
+          # writes the JUnit before exiting non-zero).
+          - name: scan-junit
+            optional: true
+            path: /junit/scan-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/scan/junit.xml
           # Keep in sync with the playwright task's withParam shard list.
           - name: playwright-junit-1-2
             optional: true

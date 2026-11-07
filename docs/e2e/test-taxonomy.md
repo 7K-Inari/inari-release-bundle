@@ -32,6 +32,10 @@ triage, never for gating decisions on their own:
 - `smoke` — minimal "is the stack alive" set. Also the PostSync-hook set.
 - `rbac`, `settings`, `tenants` — UI surface areas (mirrors the
   `specs/<area>/` directory layout).
+- `security` — the Harbor/Trivy image scan gate: a workflow step on the
+  `e2e-stack` template (release mode only), not a Ginkgo/Playwright label —
+  it surfaces as the `security` JUnit testsuite in the run's ReportPortal
+  launch.
 - Go stack suite phases map to surfaces implicitly by spec file
   (`tenant`, `cluster`, `rbac`, `policy`, `disruption`).
 
@@ -168,7 +172,10 @@ Every suite leg writes JUnit XML to a shared artifact directory:
 - Playwright additionally writes its HTML report + traces (artifact only);
   live streaming via `@reportportal/agent-js-playwright` is optional.
 - k6 emits JUnit via `handleSummary`; the Harbor scan gate emits a small
-  synthetic JUnit (`image-scan: PASS, 0 critical, N high`).
+  synthetic JUnit (testsuite `security`, one `image-scan <repo>:<tag>`
+  testcase per candidate image; failures carry the Critical count, the
+  threshold, and the S3 pointer to the full `additions/vulnerabilities`
+  report archived at `e2e/<uid>/scan/reports/`).
 - Artifacts live in a Garage S3 bucket (the platform cluster convention);
   `retention-days` honored via bucket lifecycle.
 - Skipped testcases are dropped from the ReportPortal **import copy** and
