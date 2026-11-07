@@ -41,7 +41,8 @@ export default defineConfig({
   reporter: [
     ["junit", { outputFile: "test-results/junit.xml" }],
     ["html", { outputFolder: "playwright-report", open: "never" }],
-    // Machine-readable input for report-flakes.mjs (flake containment).
+    // JSON copy of the results (debugging; the quarantine sweep reads
+    // ReportPortal, not this file — report-flakes.mjs was retired).
     ["json", { outputFile: "test-results/report.json" }],
     ...(RP_ENABLED ? [reportPortal as unknown as [string, Record<string, unknown>]] : []),
   ],

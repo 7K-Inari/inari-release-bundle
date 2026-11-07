@@ -65,7 +65,6 @@ jobs:
             scripts/e2e/ui/helpers/poll.test.ts \
             scripts/e2e/ui/helpers/env.test.ts \
             scripts/e2e/ui/helpers/git.test.ts \
-            scripts/e2e/ui/report-flakes.test.mjs \
             scripts/e2e/ui/quarantine-issues.test.mjs
 
       - name: Set up Go (e2e seed)

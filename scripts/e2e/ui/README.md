@@ -13,11 +13,11 @@ scripts/e2e/ui/
 ├── playwright.config.ts        # local defaults (list reporter, no retries)
 ├── playwright.config.ci.ts     # CI: retries 2, workers 1, screenshot/video/trace on failure,
 │                               #   JUnit + HTML + JSON (+ ReportPortal when RP_* envs are set)
-├── report-flakes.mjs           # post-processes the JSON report: logs + writes test-results/flake-report.json
-├── report-flakes.test.mjs      # unit tests (node --test) — fixture with flaky/failed/passed cases
-├── quarantine-issues.mjs       # NIGHTLY ONLY: files/dedupes `e2e-flake` issues for tests flaky
-│                             #   in 2+ nightly runs within 7 days
-├── quarantine-issues.test.mjs  # unit tests (node --test) for the aggregation/dedupe logic
+├── quarantine-issues.mjs       # NIGHTLY ONLY: ReportPortal-fed quarantine pipeline — files/dedupes
+│                             #   `e2e-flake` issues for tests unstable in 2+ nightly launches within
+│                             #   7 days, enforces the 14/30-day expiry policy, maintains the pinned
+│                             #   [quarantine-budget] issue (docs/e2e/test-taxonomy.md §4)
+├── quarantine-issues.test.mjs  # unit tests (node --test) for the classification/dedupe/expiry logic
 ├── fixtures/
 │   ├── auth.ts                 # persona registry (5 personas) + KC two-step login helper
 │   ├── auth.setup.ts           # setup project: saves .auth/<persona>.json for every persona

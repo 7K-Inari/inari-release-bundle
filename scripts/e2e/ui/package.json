@@ -7,7 +7,7 @@
   "scripts": {
     "test": "playwright test",
     "test:ci": "playwright test --config playwright.config.ci.ts",
-    "test:flakes": "node --test report-flakes.test.mjs quarantine-issues.test.mjs",
+    "test:quarantine": "node --test quarantine-issues.test.mjs",
     "lint": "tsc --noEmit",
     "test:helpers": "node --test --experimental-strip-types helpers/poll.test.ts helpers/env.test.ts helpers/git.test.ts"
   },

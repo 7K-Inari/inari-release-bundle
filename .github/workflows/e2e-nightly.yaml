@@ -4,12 +4,25 @@ name: e2e-nightly
 # Argo CronWorkflow e2e-nightly (gitops/e2e/argo-workflows/, 03:17 UTC, full
 # surface incl. quarantined, HA). What stays here is what needs GitHub, not
 # a cluster:
-#   1. quarantine-sweep — files/dedupes `e2e-flake` issues for flaky tests.
-#      NEEDS issues:write. NOTE (interim until W4): the sweep aggregates the
-#      ui-e2e-flakes artifacts of prior runs of THIS workflow — with the
-#      stack leg gone those artifacts no longer exist, so the sweep is
-#      inert (no flake input = no issues filed) until W4 re-points it at
-#      ReportPortal. The 14/30-day expiry policy lands with that rewiring.
+#   1. quarantine-sweep — the ReportPortal-fed quarantine pipeline
+#      (docs/e2e/test-taxonomy.md §4):
+#      a. sweep: queries the inari-e2e ReportPortal project for tests
+#         unstable (flaky: passed after retry / recurring failure) in 2+
+#         nightly launches within 7 days and files/dedupes `e2e-flake`
+#         issues. RP visualizes, GitHub issues act.
+#      b. expiry (14/30-day policy): 14 days without human activity on an
+#         open e2e-flake issue ⇒ warning comment; 30 days ⇒ escalation +
+#         `quarantine-overdue` label (the test must be fixed, re-scoped, or
+#         deleted — enforcement is human, the sweep never closes/deletes).
+#      c. budget: quarantined-test count (grepped from the specs) in a
+#         pinned [quarantine-budget] issue; over QUARANTINE_BUDGET (10) is
+#         flagged. NEEDS issues:write.
+#      Auth: read-only ReportPortal API key from the REPORTPORTAL_API_KEY
+#      repo secret (RP user e2e-sweeper, project role CUSTOMER — owner
+#      action, gitops/e2e/README.md §Prerequisites; NOT the importer key,
+#      which stays cluster-only). Missing key/unreachable RP ⇒ the sweep
+#      skips with a warning (exit 0); expiry + budget are GitHub-only and
+#      always run. DRY_RUN=1 plans without mutating GitHub.
 #   2. kubectl-tunnel — docker-only kubectl gateway chain e2e
 #      (scripts/e2e/kubectl/kubectl-tunnel.sh): kubeproxy built from
 #      inari-server main, tunnel-agent built from inari-agent main; no kind
@@ -25,8 +38,7 @@ on:
 
 permissions:
   contents: read
-  actions: read # download prior runs' ui-e2e-flakes artifacts
-  issues: write # quarantine-issues.mjs files e2e-flake issues
+  issues: write # quarantine-issues.mjs files/labels/comments e2e-flake issues
 
 concurrency:
   group: e2e-nightly
@@ -39,14 +51,21 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Quarantine sweep (file/dedupe e2e-flake issues)
-        # Files an `e2e-flake` issue for any test flaky in 2+ nightly runs
-        # within 7 days; comments on the existing open issue for the same
-        # test path instead of opening duplicates. See the header's interim
-        # note: without flake-report artifacts this is a no-op until W4.
+      - name: "Quarantine sweep (ReportPortal-fed — flake issues, 14/30d expiry, budget)"
+        # A test unstable (flaky or recurring failure) in 2+ nightly
+        # launches within 7 days gets an `e2e-flake` issue; an open issue
+        # gets a comment instead of a duplicate. Open issues idle 14 days
+        # get a warning, 30 days an escalation + quarantine-overdue label.
+        # The pinned [quarantine-budget] issue tracks the quarantined-test
+        # count. See docs/e2e/test-taxonomy.md §4.
         working-directory: scripts/e2e/ui
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORTPORTAL_API_KEY: ${{ secrets.REPORTPORTAL_API_KEY }}
+          REPORTPORTAL_BASE_URL: https://reportportal.7kgroup.org
+          REPORTPORTAL_PROJECT: inari-e2e
+          # QUARANTINE_BUDGET: "10"  # default; uncomment to override
+          # DRY_RUN: "1"             # plan only, no GitHub mutations
         run: node quarantine-issues.mjs
 
   kubectl-tunnel:
