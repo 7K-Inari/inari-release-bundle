@@ -1809,7 +1809,16 @@ spec:
             i=$((i+1)); sleep 5
           done
 
-          RUNNER="$NAME-1"
+          # The operator names the runner JOB "$NAME-1" (parallelism index
+          # starting at 1); its pod gets a generated suffix — resolve by the
+          # labels the TestRun template stamps on runner pods.
+          RUNNER=$(kubectl -n inari-e2e get pod \
+            -l "e2e.inari.io/run-id=$RUN_ID,e2e.inari.io/scenario=$SCENARIO" \
+            -o jsonpath='{.items[0].metadata.name}')
+          if [ -z "$RUNNER" ]; then
+            echo "runner pod not found by run-id/scenario labels (TestRun $NAME, stage=$STAGE)" >&2
+            exit 1
+          fi
           echo "== extracting artifacts from runner pod $RUNNER"
           kubectl -n inari-e2e logs "$RUNNER" > /artifacts/out/runner.log 2>&1 \
             || echo "WARNING: runner log capture failed (pod $RUNNER missing?)"
