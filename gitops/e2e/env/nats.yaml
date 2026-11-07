@@ -1,7 +1,10 @@
 # inari-e2e-nats — JetStream event bus for the e2e environment (wave 1).
-# Single node with R=1 streams (the non-HA baseline; mirrors
-# scripts/e2e/stack/testdata/nats-values-e2e.yaml). HA runs flip to 3-node
-# R=3 at deploy time via the W3 env-prep step, not by editing this file.
+# Permanently 3-node clustered: standalone→clustered conversion is NOT
+# supported (JetStream never elects a meta leader over a PVC born
+# non-clustered — the 2026-11-07 nightly died on exactly this), so the
+# baseline matches the prod topology and HA runs no longer touch NATS (the
+# flip covers server/console/agent only). The server pins streamReplicas per
+# run (R=1 non-HA / R=3 HA); R=1 streams are fine on a clustered bus.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -18,12 +21,13 @@ spec:
     helm:
       releaseName: nats
       # valuesObject, NOT values — ArgoCD never merges the two (see the
-      # server app). env-prep flips config.cluster per HA run.
+      # server app). Cluster block is CONSTANT (see the header comment).
       valuesObject:
         fullnameOverride: nats
         config:
           cluster:
-            enabled: false
+            enabled: true
+            replicas: 3
           jetstream:
             enabled: true
             fileStore:

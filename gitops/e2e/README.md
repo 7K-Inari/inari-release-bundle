@@ -158,6 +158,12 @@ persist for the run's duration and each run re-converges the env to its
 own artifact set (hard rule 5). Platform apps are health-checked, never
 mutated.
 
+**NATS is permanently 3-node clustered** (since 2026-11-07): JetStream
+cannot convert a standalone-born PVC to clustered in place (no meta
+leader — the first nightly died on exactly this), so `env/nats.yaml` and
+env-prep both pin `cluster.enabled: true, replicas: 3` and the HA flip
+covers server/console/agent only.
+
 Manual run: `argo submit --from workflowtemplate/e2e-stack -n inari-e2e -p
 mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token). The
 token must be the FULL Authorization header — the argo CLI sends
