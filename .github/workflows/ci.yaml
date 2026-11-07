@@ -79,6 +79,13 @@ jobs:
         working-directory: scripts/e2e/seed
         run: go test ./...
 
+      - name: e2e scan-gate unit tests (go test)
+        # The Harbor/Trivy scan-gate driver (scripts/e2e/scan) — poll state
+        # machine, threshold math, JUnit wrapper, Harbor API encoding. Same
+        # Go toolchain as the seed (both go.mod files pin go 1.26).
+        working-directory: scripts/e2e/scan
+        run: go test ./...
+
       - name: chart-testing lint
         run: ct lint --config ct.yaml
 

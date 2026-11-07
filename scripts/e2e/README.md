@@ -26,6 +26,8 @@ scripts/e2e/
 ├── ui/                       # console UI e2e (Playwright Test suite; see ui/README.md)
 ├── api/
 │   └── api_schema_e2e_test.go    # API ↔ OpenAPI schema conformance (Go, tag e2e)
+├── scan/                       # Harbor/Trivy scan-gate driver (Go module) — the release-gate
+│                               #   harbor-scan-gate leg on the e2e-stack WorkflowTemplate (W6)
 ├── kubectl/
 │   ├── kubectl-access.sh         # control-plane-only kubectl access scenario
 │   └── kubectl-tunnel.sh         # gateway-mode chain: kubeproxy → tunnel-agent → apiserver
@@ -62,6 +64,7 @@ scripts/e2e/
 | Golden path (nightly, incl. quarantined Go specs) | `stack/` (Go/Ginkgo suite) | same as the fast leg, but the label filter is `p0\|\|p1\|\|p2` so `Label("quarantine")` specs run | Argo CronWorkflow `e2e-nightly` (`gitops/e2e/argo-workflows/cronworkflow-nightly.yaml`, `mode=nightly`, cron 03:17 UTC + manual `argo submit`) | No — nightly only, non-blocking |
 | Console UI e2e (full, incl. quarantine) | `ui/` (Playwright Test) | `npx playwright test --config playwright.config.ci.ts --grep "@p0\|@p1\|@p2"` (includes `@quarantine`, `continue-on-error`) | same Argo CronWorkflow `e2e-nightly` run — single env re-convergence, playwright legs run the full tag set | No — nightly only, non-blocking |
 | Upgrade path (previous stable → candidate) | reuses `stack/` + `ui/` gate selections on the upgraded env; the leg itself lives in `gitops/e2e/argo-workflows/workflowtemplate-e2e-stack.yaml` (`mode=upgrade`: resolve-previous → env-prep-previous → fixture → candidate env-prep → suites → upgrade-assert) | Argo workflow on the live env; Ginkgo `(p0\|\|smoke)&&!quarantine` + Playwright `--grep "@p0\|@smoke" --grep-invert @quarantine` + fixture-survival JUnit | `cronworkflow-upgrade.yaml` (**suspended** until the first post-sunset stable inari-server release) + manual `argo submit -p mode=upgrade`; drill runbook in `gitops/e2e/README.md` | No — non-gating; release-gating flip is a follow-up after ~2 weeks stable |
+| Harbor image scan gate (W6) | `scan/` (Go driver: prime proxy cache → trigger → poll → threshold → report) + the `harbor-scan-gate` leg in `gitops/e2e/argo-workflows/workflowtemplate-e2e-stack.yaml` | `go run .` in `scan/` (unit tests: `go test ./...`); on the cluster the leg runs it against `harbor.7kgroup.org` project `ghcr-proxy` | the `e2e-stack` WorkflowTemplate in `mode=release` (parallel with cosign-verify, before env-prep); emits the `security` JUnit + full CVE reports in S3 | **Yes** — fails the release run when any candidate image exceeds `scan-critical-threshold` (default 0) Critical CVEs |
 | kubectl access | `kubectl/kubectl-access.sh` | bash script (docker etcd + kube-apiserver; no kind) | not wired into CI yet | No — manual scenario |
 | kubectl tunnel (gateway) | `kubectl/kubectl-tunnel.sh` | bash script (docker etcd + kube-apiserver + Keycloak + postgres + OpenFGA + kubeproxy + tunnel-agent; no kind). Builds `inari/kubeproxy:e2e` and `inari/agent:e2e` from sibling checkouts (`INARI_SERVER_DIR`/`INARI_AGENT_DIR`); asserts impersonation, 503 upgrade path, 410 kill-switch, per-cluster client revoke, max-lifetime reaper | `e2e-nightly.yaml` job `kubectl-tunnel` (builds inari-server at the resolved tag + inari-agent main) | No — nightly only, non-blocking |
 

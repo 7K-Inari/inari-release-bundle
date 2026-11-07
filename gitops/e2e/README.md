@@ -38,6 +38,61 @@ OFF on this project** — e2e deliberately deploys unscanned edge/old images
 for upgrade tests; enforcement lives in the workflow scan gate (W6), never
 in the pull path.
 
+## Harbor scan gate (W6)
+
+Release-mode runs (`mode=release`) scan exactly the candidate image set
+(hard rule 5) with Trivy via the Harbor API before any deploy: the
+`harbor-scan-gate` DAG leg runs parallel with `cosign-verify` and blocks
+`env-prep`. Per image (`inari-server`, `inari-ui-bundle`, `inari-agent` in
+`ghcr-proxy`) the driver ([`scripts/e2e/scan/`](../../scripts/e2e/scan/)):
+
+1. **Primes the proxy cache** with a manifest-only pull — a proxy-cache
+   artifact exists only after something pulls it through.
+2. **Triggers the scan explicitly** (`POST
+   /api/v2.0/projects/ghcr-proxy/repositories/<repo>/artifacts/<tag>/scan`)
+   and polls `?with_scan_overview=true` until `scan_status=Success` —
+   asynchronous; a prior scan is never trusted (scan-on-push latency races).
+   `Error`/`Stopped` gets exactly one retrigger.
+3. **Archives the full report** (`additions/vulnerabilities`) in the Garage
+   bucket at `e2e/<workflow-uid>/scan/reports/`.
+4. **Fails the run** when the Critical count exceeds the workflow parameter
+   `scan-critical-threshold` (default `0`), and always writes the synthetic
+   **`security` JUnit** (`e2e/<uid>/scan/junit.xml` → the run's ReportPortal
+   launch via the exit-handler, including on failure — hard rule 8/10).
+
+Policies that live in **Harbor, never in scripts**: CVE allowlists (project
+`ghcr-proxy` → CVE Allowlist), scan-on-push, the daily re-scan schedule. The
+gate reads Harbor's own severity summary, so Harbor-side allowlisting is the
+single exemption knob. Complements cosign (provenance), never replaces it.
+
+### Prerequisites (one-time owner actions)
+
+1. **Robot account** — Harbor UI → project `ghcr-proxy` → Robot Accounts →
+   `e2e-scan-gate`, no expiration, least privilege: **Pull Repository, List
+   Repository, Read Repository (Artifact), Create Scan** (the existing Vault
+   `harbor/robot` is pull-only and stays untouched).
+2. **Vault** — `vault kv put secret/inari-e2e/harbor-robot
+   username='robot$ghcr-proxy+e2e-scan-gate' token='<token>'`. Synced by
+   `argo-workflows/harbor-scanner-secret.yaml` (ESO, hourly; force via a
+   `force-sync` annotation on the ExternalSecret). A missing secret fails the
+   release run loud (config-error JUnit) — it never silently skips.
+3. **Scan-on-push** — project `ghcr-proxy` → Configuration → enable
+   "Automatically scan images on push" (`auto_scan`). Runtime DB config, not
+   GitOps-able.
+4. **Daily re-scan** — Administration → Interrogation Services →
+   Vulnerability → schedule "Scan all" **Daily** (`scan_all_policy`) so
+   cached artifacts pick up newly published CVEs between releases.
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `401`/`403` on the API calls | robot scopes — needs Create Scan + read/pull on `ghcr-proxy`; check Vault entry vs Harbor robot after rotation (ESO refresh/force-sync) |
+| `artifact not registered … after re-priming` | the tag does not exist upstream on `ghcr.io`, or the manifest pull 404s — check the tag |
+| persistent `scan ended in status "Error"` | Trivy scanner broken — usually vulnerability-DB egress from the cluster |
+| release run fails with `scan-gate-configuration` | prerequisite 2 not done / ESO not synced |
+| slow first scan of a large image | normal — the leg polls up to 10 min per image (`activeDeadlineSeconds: 1500` overall) |
+
 ## Git service (replaces the kind hostPath coupling)
 
 inari-server runs with `INARI_GIT_PROVIDER=local`,
@@ -78,6 +133,9 @@ choice.
    then `vault kv put secret/inari-e2e/reportportal api-key=<uuid>`. Synced
    by `argo-workflows/reportportal-importer-secret.yaml` (ESO, hourly; force
    via a `force-sync` annotation on the ExternalSecret).
+6. **Harbor scan-gate robot** (release gate only — runs without it fail loud
+   at the scan leg): see §Harbor scan gate → Prerequisites (robot account +
+   Vault `inari-e2e/harbor-robot` + scan-on-push + daily re-scan).
 
 DNS needs no action: external-dns creates the records from the HTTPRoute
 annotations (same mechanism as the live instance, proxied flag flipped).
@@ -134,9 +192,10 @@ lives in 7k-app-of-apps (W1).
 
 | File | Contents |
 |---|---|
-| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) → [upgrade mode: resolve-previous → env-prep-previous → upgrade-fixture → drill-pause] → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release, upgrade-assert on upgrade) + chainsaw-verify; onExit imports every suite's JUnit into ReportPortal as ONE launch per run (name = `reportportal-launch`, attributes mode/run-id/image tags/charts-ref/status; a synthesized run-outcome testsuite anchors aborted runs — hard rule 8/10) |
+| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) + harbor-scan-gate (release, W6 — Trivy scan of the candidate images via Harbor, fail on Critical > `scan-critical-threshold`) → [upgrade mode: resolve-previous → env-prep-previous → upgrade-fixture → drill-pause] → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release, upgrade-assert on upgrade) + chainsaw-verify; onExit imports every suite's JUnit into ReportPortal as ONE launch per run (name = `reportportal-launch`, attributes mode/run-id/image tags/charts-ref/status; a synthesized run-outcome testsuite anchors aborted runs — hard rule 8/10) |
 | `cronworkflow-upgrade.yaml` | **Suspended** daily (05:47 UTC) `mode=upgrade` run — the upgrade-path leg (W5). Unsuspension criterion in the file header: first post-sunset stable inari-server release, then ~2 weeks stable before any release-gating flip |
 | `reportportal-importer-secret.yaml` | ESO ExternalSecret syncing the ReportPortal API key (Vault `inari-e2e/reportportal`) for the onExit importer; optional reference — runs skip the import with a warning until the owner provisions it |
+| `harbor-scanner-secret.yaml` | ESO ExternalSecret syncing the Harbor scan-gate robot credentials (Vault `inari-e2e/harbor-robot`); the scan gate fails LOUD until the owner provisions it — a release gate never silently skips (§Harbor scan gate) |
 | `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-*` orgs older than retention-days (contract invariant 6), skipping `e2e-org` + active runs; every 6h. Two identities: requests as dev-admin, approves as **e2e-ops** (lifecycle approvals are never self-decidable) |
 | `cronworkflow-nightly.yaml` | 03:17 UTC full surface incl. quarantined, edge images, env-wide HA flip |
 | `cronworkflow-weekly.yaml`, `cronworkflow-nightly-reset.yaml` | **Suspended placeholders** (phase 2: load/chaos legs; restore-from-backup needs CNPG barman wiring in env-extras first) |
