@@ -1,7 +1,8 @@
 # TestRun template for the e2e k6 load legs (W7, taxonomy §1.3 `load`).
 # Rendered by the k6-run workflow step via envsubst (variables: TESTRUN_NAME,
 # SCENARIO, RUN_ID, BASE_DOMAIN, KC_URL, TENANT_SLUG, plus optional
-# LOAD_DURATION/LOAD_RATE/LOAD_VUS/LOAD_PACE_SECONDS overrides).
+# LOAD_DURATION/LOAD_RATE/LOAD_VUS/LOAD_PACE_SECONDS/LOAD_RAMP_UP/
+# LOAD_RAMP_DOWN overrides).
 #
 # parallelism 1: the e2e env is small and the legs run sequentially (D5);
 # raising it is a one-line change once a scenario needs distributed load.
@@ -67,6 +68,10 @@ spec:
         value: "${LOAD_VUS}"
       - name: LOAD_PACE_SECONDS
         value: "${LOAD_PACE_SECONDS}"
+      - name: LOAD_RAMP_UP
+        value: "${LOAD_RAMP_UP}"
+      - name: LOAD_RAMP_DOWN
+        value: "${LOAD_RAMP_DOWN}"
       # Persona passwords — resolved kubelet-side from the ESO personas
       # secret; the runner pod's SA needs no RBAC for this.
       - name: E2E_PASSWORD
