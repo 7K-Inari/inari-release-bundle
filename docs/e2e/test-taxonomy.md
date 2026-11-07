@@ -91,6 +91,7 @@ unified:
 |---|---|---|---|---|
 | **Release gate** (`E2E_MODE=release`, via thin `release-e2e.yaml` → Argo) | `(p0 \|\| smoke) && !quarantine` | `--grep "@p0\|@smoke" --grep-invert @quarantine` | `smoke` set only | **Yes** — blocks the Release PR |
 | **Nightly** (CronWorkflow, `E2E_MODE=nightly`) | `p0 \|\| p1 \|\| p2` incl. `quarantine` | `--grep "@p0\|@p1\|@p2"` incl. `@quarantine` (`continue-on-error`) | all | No — signal + flake sweep |
+| **Upgrade** (`E2E_MODE=upgrade`, phase 2 — W5) | `(p0 \|\| smoke) && !quarantine` (the gate selection, re-run on the upgraded stack) | `--grep "@p0\|@smoke" --grep-invert @quarantine` | full bootstrap set, post-upgrade | **No — non-gating** (suspended CronWorkflow + manual); release-gating flip only after ~2 weeks stable, see below |
 | **Weekly** (CronWorkflow, `E2E_MODE=weekly`, phase 2) | `load \|\| chaos` | — | — | No |
 | **PostSync hook** (ArgoCD PostSync after env sync) | `smoke` | `--grep @smoke` | `smoke` | Sync health only |
 
@@ -102,6 +103,16 @@ Notes:
   parallel DAG steps with their own `p0` specs.
 - The api-schema conformance driver has no labels of its own; its ReportPortal
   launch carries `p0` (it is gate-only today).
+- **Upgrade is a stage, not a per-test label.** The `upgrade` stage
+  (phase 2, W5) is realized as `E2E_MODE=upgrade` on the e2e-stack
+  WorkflowTemplate: the run deploys the previous stable artifact set, writes
+  a pre-upgrade fixture tenant, upgrades to the candidate artifacts, then
+  re-selects the gate set above — no spec carries an `upgrade` label. The
+  leg adds its own synthetic `upgrade` JUnit testsuite (fixture-survival
+  assertion). Non-gating by construction; the release-gating flip is a
+  second `argo submit` in `release-e2e.yaml`, a deliberate follow-up after
+  ~2 weeks of stable runs (drill + unsuspension criteria:
+  `gitops/e2e/README.md` §upgrade leg).
 - Docs/markdown-only changes on a Release PR intentionally skip the e2e gate
   (existing `gate` job detection) — unchanged.
 

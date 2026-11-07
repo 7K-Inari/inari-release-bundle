@@ -38,7 +38,7 @@ those modules.**
 | `E2E_TENANT_SLUG` | no | `e2e-org` | Slug of the default seeded tenant, used in API paths. |
 | `E2E_SEEDED` | injected | `true` | Set to `"true"` by the seed step after it completes. Every suite leg fails fast if unset — a run without personas is a setup bug, not a test failure. |
 | `E2E_RUN_ID` | yes | — | Unique per workflow run (Argo workflow UID). Feeds the Playwright `uniqueName()` factories (replacing today's `GITHUB_RUN_ID` fallback) and the janitor CronWorkflow's `e2e-<runId>-*` reaping. |
-| `E2E_MODE` | yes | — | `release` \| `edge` \| `nightly` \| `weekly` \| `smoke`. Drives label selection (see [test-taxonomy.md](test-taxonomy.md)) and gate strictness — never suite behavior branches. |
+| `E2E_MODE` | yes | — | `release` \| `edge` \| `nightly` \| `weekly` \| `smoke` \| `upgrade`. Drives label selection (see [test-taxonomy.md](test-taxonomy.md)) and gate strictness — never suite behavior branches. `upgrade` re-runs the gate selection after the run's previous-stable → candidate upgrade leg. |
 | `E2E_HA` | no | `0` | `1` selects the HA legs (3-node NATS, HA values, disruption specs). |
 | `E2E_MIGRATIONS_DIR` | when `E2E_HA=1` | — | Mount of inari-server's `internal/db/migrations` from a `server-src-ref` checkout volume; the HA migration-count assertion fails fast without it. |
 | `E2E_GIT_URL` | yes | — | Base URL of the in-cluster git service (replaces the kind hostPath git root + `INARI_GIT_PROVIDER=local` coupling in `git-config.spec.ts`). The Go suite also clones the tenant state repo from here for the RBAC-materialization phase. |
@@ -236,6 +236,7 @@ docker-only in GHA and are **not** part of the Argo contract.
 | P1b — Ginkgo restructure | `suite/env.go` reworked to the target contract; attach mode becomes the only CI mode; handoff read from the `e2e-handoff` ConfigMap |
 | P1c — de-kind | `helpers/env.ts` re-parameterized; `ui-proxy.mjs` deleted; `git-config.spec.ts` on `E2E_GIT_URL`; seed becomes a workflow step emitting `E2E_SEEDED` |
 | P1d — Argo + ReportPortal | WorkflowTemplate injects the full contract; thin GHA wrappers pass parameters only |
+| P2 — upgrade leg (W5) | `E2E_MODE` gains `upgrade`; the WorkflowTemplate gains `upgrade-from-server-image` / `upgrade-from-console-image` / `upgrade-drill-pause-minutes` parameters (upgrade mode only, never injected into suites — the suite-visible contract is unchanged) |
 
 Local-dev note: the kind path in `provide.go`/`provision.go` stays as a
 dev-only inner loop (open question §9.8 of the architecture plan — default
