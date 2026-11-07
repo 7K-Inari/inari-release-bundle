@@ -10,10 +10,12 @@
 # 2026-11-05/06):
 # - Q3: agent-image="build" is unsupported on the Argo path (no in-cluster
 #   image builds); the agent repo publishes a moving "edge" image instead.
-# - Q5: HA is an ENV-WIDE flip (env-prep scales NATS to 3 nodes + server to
-#   2 replicas + redis cache) — one serialized env cannot run HA and non-HA
-#   legs in parallel, so the plan §5 "HA legs via withParam" sketch becomes a
-#   single ginkgo leg with E2E_HA=1.
+# - Q5: HA is an ENV-WIDE flip (env-prep scales the server to 2 replicas +
+#   redis cache; NATS stays permanently 3-node — standalone→clustered
+#   JetStream conversion is unsupported, the 2026-11-07 nightly died on it)
+#   — one serialized env cannot run HA and non-HA legs in parallel, so the
+#   plan §5 "HA legs via withParam" sketch becomes a single ginkgo leg with
+#   E2E_HA=1.
 # - Q9: PostSync smoke is chainsaw-only (gitops/e2e/chainsaw-hooks/);
 #   Ginkgo/Playwright smoke sets run via mode=smoke submissions.
 # - W6 seam: the Harbor scan gate inserts between cosign-verify and env-prep
@@ -618,13 +620,15 @@ spec:
             keycloakClientId: "inari-ui",
             apiBaseUrl: "/api/v1"
           }')
-          # Nats: full baseline either way — HA flips the cluster block,
-          # non-HA deterministically writes the single-node baseline back
-          # (no get-check/remove dance).
-          NATS_VALUES=$(jq -nc --arg ha "$HA" '{
+          # Nats: full baseline either way — the cluster block is CONSTANT
+          # (permanently 3-node since 2026-11-07: standalone→clustered
+          # conversion is unsupported — the first nightly died on it). The
+          # deterministic rewrite is pure self-heal. The HA flip now covers
+          # server/console/agent only; the server pins streamReplicas per run.
+          NATS_VALUES=$(jq -nc '{
             fullnameOverride: "nats",
             config: {
-              cluster: (if $ha == "true" then {enabled: true, replicas: 3} else {enabled: false} end),
+              cluster: {enabled: true, replicas: 3},
               jetstream: {
                 enabled: true,
                 fileStore: {
