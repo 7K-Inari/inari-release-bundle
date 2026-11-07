@@ -282,11 +282,14 @@ var ErrUnscannable = errors.New("scanner does not support the artifact's media t
 
 // unscannableBody reports whether a Harbor 400 body is the scanner's
 // unsupported-media/artifact-type refusal rather than a generic bad request.
+// Harbor v2.15.4's live phrasing: "the configured scanner Trivy does not
+// support scanning artifact with mime type application/vnd.oci.image...".
 func unscannableBody(body []byte) bool {
 	s := strings.ToLower(string(body))
 	return strings.Contains(s, "not scannable") ||
 		(strings.Contains(s, "does not support") &&
-			(strings.Contains(s, "media type") || strings.Contains(s, "artifact type")))
+			(strings.Contains(s, "media type") || strings.Contains(s, "mime type") ||
+				strings.Contains(s, "artifact type") || strings.Contains(s, "scanning artifact")))
 }
 
 // TriggerScan asks Harbor to (re)scan the artifact. 202 Accepted is the
@@ -306,7 +309,13 @@ func (c *Client) TriggerScan(ctx context.Context, repo, ref string) error {
 		return ErrUnscannable
 	}
 	if code < 200 || code >= 300 {
-		return fmt.Errorf("POST scan: HTTP %d", code)
+		// Harbor's error JSON carries the reason (never credentials) —
+		// keep a trimmed copy for the step log.
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 200 {
+			msg = msg[:200] + "…"
+		}
+		return fmt.Errorf("POST scan: HTTP %d: %s", code, msg)
 	}
 	return nil
 }

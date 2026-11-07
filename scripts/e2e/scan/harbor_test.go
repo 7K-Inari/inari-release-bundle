@@ -358,7 +358,7 @@ func TestUnscannableMediaTypeLoudPass(t *testing.T) {
 		tagDigest: idxDigest,
 		subBodies: map[string]string{idxDigest: subManifestJSON},
 		scanPost400: map[string]string{idxDigest: `{"errors":[{"code":"BAD_REQUEST",` +
-			`"message":"scanner does not support this media type: application/vnd.oci.empty.v1+json"}]}`},
+			`"message":"the configured scanner Trivy does not support scanning artifact with mime type application/vnd.oci.image.manifest.v1+json"}]}`},
 	}
 	c := newFakeClient(t, f)
 	dir := t.TempDir()
