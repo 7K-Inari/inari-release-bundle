@@ -5,11 +5,11 @@ description: >-
   ResourceGraphDefinition "tenantnamespace" (Namespace + tenant-admin RBAC +
   default-deny NetworkPolicy + optional ResourceQuota) and the Keycloak
   TenantRealm/TenantClient Crossplane claims (XRDs + Compositions) backed by
-  provider-keycloak. Installed via ArgoCD from gitops/; consumed as an OCI
-  chart from oci://ghcr.io/7k-inari/charts.
+  provider-keycloak. Installed via ArgoCD from gitops/; consumed as an OCI chart
+  from oci://ghcr.io/7k-inari/charts.
 type: application
-version: 0.1.0  # x-release-please-version
-appVersion: 0.1.0  # x-release-please-version
+version: 0.2.0 # x-release-please-version
+appVersion: 0.1.0 # x-release-please-version
 keywords:
   - inari
   - idp

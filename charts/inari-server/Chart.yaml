@@ -4,7 +4,7 @@ description: >-
   Inari control-plane API server (inari-server) — tenant/org management,
   catalog, resources inventory.
 type: application
-version: 0.1.9  # x-release-please-version
+version: 0.2.0 # x-release-please-version
 appVersion: 3.0.0
 maintainers:
   - name: 7K-Inari
