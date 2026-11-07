@@ -7,13 +7,96 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// kubectl with impersonation flags (auth can-i --as/--as-group — the RBAC
+// phase's authorizer probe) does NOT fall back to the in-cluster config: it
+// dies on localhost:8080 even though plain kubectl in the same pod resolves
+// the in-cluster endpoint fine (verified live, e2e-stack-mvhhf, 2026-11-07).
+// Fix: in-cluster runs (SA token + KUBERNETES_SERVICE_HOST, no KUBECONFIG,
+// no ~/.kube/config) get an explicit kubeconfig rendered from the SA files.
+// Dev hosts and explicit KUBECONFIG runs are untouched.
+const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+
+var (
+	writeKubeconfigOnce sync.Once
+	writtenKubeconfig   string
+)
+
+// renderInClusterKubeconfig renders a kubeconfig referencing the SA token
+// by FILE (tokenFile, not an embedded value): BoundServiceAccountTokenVolume
+// rotates the token mid-run and the file reference survives that.
+func renderInClusterKubeconfig(host, port string) string {
+	return `apiVersion: v1
+kind: Config
+clusters:
+- name: in-cluster
+  cluster:
+    server: https://` + host + `:` + port + `
+    certificate-authority: ` + saDir + `/ca.crt
+contexts:
+- name: in-cluster
+  context:
+    cluster: in-cluster
+    user: sa
+current-context: in-cluster
+users:
+- name: sa
+  user:
+    tokenFile: ` + saDir + `/token
+`
+}
+
+// kubeconfigEnv returns the "KUBECONFIG=<path>" env entry for child
+// processes, or "" when the ambient resolution should be used.
+func kubeconfigEnv() string {
+	if os.Getenv("KUBECONFIG") != "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if _, err := os.Stat(filepath.Join(home, ".kube", "config")); err == nil {
+			return ""
+		}
+	}
+	host := os.Getenv("KUBERNETES_SERVICE_HOST")
+	if host == "" {
+		return ""
+	}
+	port := os.Getenv("KUBERNETES_SERVICE_PORT")
+	if port == "" {
+		port = "443"
+	}
+	if _, err := os.Stat(saDir + "/token"); err != nil {
+		return ""
+	}
+	writeKubeconfigOnce.Do(func() {
+		path := filepath.Join(os.TempDir(), "e2e-incluster-kubeconfig")
+		if err := os.WriteFile(path, []byte(renderInClusterKubeconfig(host, port)), 0o600); err == nil {
+			writtenKubeconfig = path
+		}
+	})
+	if writtenKubeconfig == "" {
+		return ""
+	}
+	return "KUBECONFIG=" + writtenKubeconfig
+}
+
+// withKubeconfigEnv applies kubeconfigEnv to a command's environment.
+func withKubeconfigEnv(cmd *exec.Cmd) {
+	if ke := kubeconfigEnv(); ke != "" {
+		cmd.Env = append(os.Environ(), ke)
+	}
+}
 
 // Run executes a CLI and returns stdout; stderr is attached to the error.
 func Run(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	withKubeconfigEnv(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -26,6 +109,7 @@ func Run(name string, args ...string) (string, error) {
 // RunStdin executes a CLI with stdin piped in; stderr is attached to the error.
 func RunStdin(name, stdin string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	withKubeconfigEnv(cmd)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -56,6 +140,7 @@ func ExecInPodStdin(ns, pod, stdin string, cmd ...string) (string, error) {
 	args := []string{"-n", ns, "exec", "-i", pod, "--"}
 	args = append(args, cmd...)
 	c := exec.Command("kubectl", args...)
+	withKubeconfigEnv(c)
 	c.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
@@ -97,6 +182,7 @@ func WaitCondition(ns, condition, timeout string, resources ...string) error {
 // ApplyStdin pipes a manifest into kubectl apply -f -.
 func ApplyStdin(manifest string) (string, error) {
 	c := exec.Command("kubectl", "apply", "-f", "-")
+	withKubeconfigEnv(c)
 	c.Stdin = strings.NewReader(manifest)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
@@ -176,6 +262,7 @@ func AuthCanI(user string, groups []string, verb, resource string) (bool, error)
 		args = append(args, "--as-group="+g)
 	}
 	cmd := exec.Command("kubectl", args...)
+	withKubeconfigEnv(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
