@@ -43,8 +43,13 @@ triage, never for gating decisions on their own:
 
 | Label | Suite | Rule |
 |---|---|---|
-| `load` | k6 via k6-operator | **Never** in PR or release gates; weekly CronWorkflow only |
+| `load` | k6 via k6-operator TestRuns — realized (W7) as the sequential `k6-run` legs of the e2e-stack template (`mode=weekly`; `scripts/e2e/load/`), not a Ginkgo/Playwright label | **Never** in PR or release gates; weekly CronWorkflow only |
 | `chaos` | LitmusChaos (runs as Argo Workflows) | **Never** in gates; dedicated env only, scheduled the night before the nightly-reset CronWorkflow |
+
+The kubeproxy/tunnel throughput target from the migration plan is
+**deliberately dropped** (W7 D4): kubeproxy is disabled on the e2e env and
+the tunnel chain stays docker-only — there is nothing on the env to load.
+Revisit only if the tunnel is ever enabled there.
 
 ### 1.4 Lifecycle label
 
@@ -96,7 +101,7 @@ unified:
 | **Release gate** (`E2E_MODE=release`, via thin `release-e2e.yaml` → Argo) | `(p0 \|\| smoke) && !quarantine` | `--grep "@p0\|@smoke" --grep-invert @quarantine` | `smoke` set only | **Yes** — blocks the Release PR |
 | **Nightly** (CronWorkflow, `E2E_MODE=nightly`) | `p0 \|\| p1 \|\| p2` incl. `quarantine` | `--grep "@p0\|@p1\|@p2"` incl. `@quarantine` (`continue-on-error`) | all | No — signal + flake sweep |
 | **Upgrade** (`E2E_MODE=upgrade`, phase 2 — W5) | `(p0 \|\| smoke) && !quarantine` (the gate selection, re-run on the upgraded stack) | `--grep "@p0\|@smoke" --grep-invert @quarantine` | full bootstrap set, post-upgrade | **No — non-gating** (suspended CronWorkflow + manual); release-gating flip only after ~2 weeks stable, see below |
-| **Weekly** (CronWorkflow, `E2E_MODE=weekly`, phase 2) | `load \|\| chaos` | — | — | No |
+| **Weekly** (CronWorkflow, `E2E_MODE=weekly`, phase 2) | — (W7: the weekly mode runs the k6 load legs — sequential `k6-run` TestRuns, thresholds gating via the runner exit code; `load`/`chaos` are workflow legs, not suite labels — same realization model as the upgrade stage. Chaos legs join in W9.) | — | — | No |
 | **PostSync hook** (ArgoCD PostSync after env sync) | `smoke` | `--grep @smoke` | `smoke` | Sync health only |
 
 Notes:
@@ -187,7 +192,10 @@ Every suite leg writes JUnit XML to a shared artifact directory:
   widgets + analyzer then slice history by mode/label.
 - Playwright additionally writes its HTML report + traces (artifact only);
   live streaming via `@reportportal/agent-js-playwright` is optional.
-- k6 emits JUnit via `handleSummary`; the Harbor scan gate emits a small
+- k6 emits JUnit via `handleSummary` + the vendored k6-summary `jUnit()`
+  (realized in W7: one plain pass/fail testcase per threshold, classname
+  `k6.<scenario>`, artifact keys `e2e/<uid>/k6/<scenario>/junit.xml`); the
+  Harbor scan gate emits a small
   synthetic JUnit (testsuite `security`, one `image-scan <repo>:<tag>`
   testcase per candidate image; failures carry the Critical count, the
   threshold, and the S3 pointer to the full `additions/vulnerabilities`

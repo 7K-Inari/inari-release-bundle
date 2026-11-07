@@ -21,6 +21,9 @@
 # - W6 (landed): the harbor-scan-gate leg fills the seam between
 #   cosign-verify and env-prep — release-only, parallel with cosign-verify;
 #   env-prep gates on both.
+# - W7 (landed): weekly mode gains the k6 load legs (k6-run template × 3
+#   scenarios, sequential, mode==weekly only). Load NEVER runs in PR or
+#   release gates (hard rule 6); thresholds gate via the runner exit code.
 # - W5 (upgrade leg, plan §10): mode=upgrade prepends a previous-stable phase
 #   — resolve-previous (latest stable chart release git tags + ghcr stable
 #   image tags) → env-prep-previous → upgrade-fixture (pre-upgrade data) →
@@ -101,6 +104,12 @@ spec:
         enum: ["true", "false"]
       - name: retention-days
         value: "7"
+      - name: load-duration
+        # Weekly k6 legs (W7): empty = the scenario scripts' real load
+        # profiles. Set e.g. "2m" for acceptance/manual smoke runs — the
+        # k6-run step then shrinks every load-shape knob (rate/VUs/pace/
+        # ramps). Ignored by every other mode.
+        value: ""
       - name: reportportal-launch
         # Empty → resolve computes "<mode>-<workflow uid>".
         value: ""
@@ -251,6 +260,34 @@ spec:
             template: upgrade-assert
             depends: seed
             when: "{{workflow.parameters.mode}} == upgrade"
+          # --- weekly mode only (W7): k6 load legs -------------------------
+          # Sequential (D5 — measurement isolation: a login storm concurrent
+          # with a latency measurement confounds both). Depend on seed, not
+          # agent-ensure — API/KC load does not need a connected agent.
+          - name: k6-permissions-cache
+            template: k6-run
+            depends: seed
+            when: "{{workflow.parameters.mode}} == weekly"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: permissions-cache
+          - name: k6-login-storm
+            template: k6-run
+            depends: k6-permissions-cache
+            when: "{{workflow.parameters.mode}} == weekly"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: login-storm
+          - name: k6-provisioning-outbox
+            template: k6-run
+            depends: k6-login-storm
+            when: "{{workflow.parameters.mode}} == weekly"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: provisioning-outbox
 
     # -------------------------------------------------------------- resolve
     # Validates the parameter contract (release ⇒ cosign ON, quarantined
@@ -1671,6 +1708,178 @@ spec:
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/apischema/junit.xml
 
+    # ---------------------------------------------------------------- k6-run
+    # k6 load legs (W7, taxonomy §1.3 `load`; weekly mode only — the DAG
+    # tasks when-gate on it). One parameterized template per scenario
+    # (scripts/e2e/load/<scenario>.js): builds the script ConfigMap (flat —
+    # CM keys cannot contain slashes, so imports in scripts/e2e/load are
+    # flat too), renders + applies the TestRun (k6-operator installed via
+    # 7k-app-of-apps apps/7kgroup/k6-operator.yaml), waits for completion,
+    # extracts the JUnit (kubectl cp primary; the scripts also print it
+    # between K6-JUNIT sentinels as a logs fallback when the runner image
+    # lacks tar), archives the runner log, then deletes the TestRun +
+    # ConfigMap — runner pods are owner-referenced and die with the TestRun,
+    # so cleanup MUST follow extraction.
+    #
+    # Threshold violations = k6 nonzero runner exit = this step exits
+    # nonzero AFTER artifacts are archived (scan-gate fail-loud posture):
+    # load legs never gate PRs/releases (hard rule 6) but a breach fails the
+    # weekly run and lands in ReportPortal.
+    - name: k6-run
+      activeDeadlineSeconds: 2700
+      podSpecPatch: '{"serviceAccountName":"e2e-load"}'
+      inputs:
+        parameters:
+          - name: scenario
+      volumes:
+        - name: work
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      script:
+        image: alpine/k8s:1.35.10
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: SCENARIO
+            value: "{{inputs.parameters.scenario}}"
+          - name: RUN_ID
+            value: "{{workflow.uid}}"
+          - name: LOAD_DURATION
+            value: "{{workflow.parameters.load-duration}}"
+        source: |
+          set -eu
+          command -v envsubst >/dev/null 2>&1 || apk add --no-cache gettext >/dev/null
+          mkdir -p /artifacts/out
+
+          SHORT=$(echo "$RUN_ID" | cut -c1-8)
+          NAME="e2e-k6-$SHORT-$SCENARIO"
+
+          echo "== creating script ConfigMap $NAME (flat: scenario + libs)"
+          kubectl -n inari-e2e create configmap "$NAME" \
+            --from-file="$SCENARIO.js=/work/scripts/e2e/load/$SCENARIO.js" \
+            --from-file=common.js=/work/scripts/e2e/load/common.js \
+            --from-file=k6-summary.js=/work/scripts/e2e/load/k6-summary.js
+
+          # Cleanup is unconditional: the runner pods are owner-referenced
+          # to the TestRun and die with it — extraction below happens first.
+          cleanup() {
+            kubectl -n inari-e2e delete testrun "$NAME" --ignore-not-found || true
+            kubectl -n inari-e2e delete configmap "$NAME" --ignore-not-found || true
+          }
+          trap cleanup EXIT
+
+          # Load shape: a non-empty load-duration workflow param means a
+          # quick acceptance/manual run — shrink every knob (the scripts
+          # treat empty values as "use the scenario default").
+          LOAD_RATE=""; LOAD_VUS=""; LOAD_PACE_SECONDS=""; LOAD_RAMP_UP=""; LOAD_RAMP_DOWN=""
+          if [ -n "$LOAD_DURATION" ]; then
+            LOAD_RATE=5; LOAD_VUS=5; LOAD_PACE_SECONDS=3; LOAD_RAMP_UP=30s; LOAD_RAMP_DOWN=10s
+            echo "== quick load shape (load-duration=$LOAD_DURATION)"
+          fi
+
+          echo "== rendering + applying TestRun $NAME"
+          TESTRUN_NAME="$NAME" RUN_ID="$RUN_ID" SCENARIO="$SCENARIO" \
+          BASE_DOMAIN="$E2E_BASE_DOMAIN" KC_URL="$E2E_KC_URL" TENANT_SLUG="$E2E_TENANT_SLUG" \
+          LOAD_DURATION="$LOAD_DURATION" LOAD_RATE="$LOAD_RATE" LOAD_VUS="$LOAD_VUS" \
+          LOAD_PACE_SECONDS="$LOAD_PACE_SECONDS" LOAD_RAMP_UP="$LOAD_RAMP_UP" LOAD_RAMP_DOWN="$LOAD_RAMP_DOWN" \
+            envsubst '$TESTRUN_NAME $RUN_ID $SCENARIO $BASE_DOMAIN $KC_URL $TENANT_SLUG $LOAD_DURATION $LOAD_RATE $LOAD_VUS $LOAD_PACE_SECONDS $LOAD_RAMP_UP $LOAD_RAMP_DOWN' \
+            < /work/scripts/e2e/load/testrun-template.yaml > /tmp/testrun.yaml
+          kubectl apply -f /tmp/testrun.yaml
+
+          echo "== waiting for TestRun completion"
+          i=0
+          STAGE=""
+          while [ $i -lt 480 ]; do   # 40m at 5s — inside the 45m step deadline
+            STAGE=$(kubectl -n inari-e2e get testrun "$NAME" -o jsonpath='{.status.stage}' 2>/dev/null || echo "")
+            echo "  stage=${STAGE:-<pending>}"
+            case "$STAGE" in finished|error) break;; esac
+            i=$((i+1)); sleep 5
+          done
+
+          RUNNER="$NAME-1"
+          echo "== extracting artifacts from runner pod $RUNNER"
+          kubectl -n inari-e2e logs "$RUNNER" > /artifacts/out/runner.log 2>&1 \
+            || echo "WARNING: runner log capture failed (pod $RUNNER missing?)"
+
+          JUNIT_OK=""
+          if kubectl -n inari-e2e cp "$RUNNER:/tmp/junit.xml" /artifacts/out/junit.xml 2>/tmp/cp.err; then
+            JUNIT_OK=1
+          else
+            echo "WARNING: kubectl cp failed ($(head -c 200 /tmp/cp.err)) — falling back to the log sentinels"
+            awk '/---K6-JUNIT-BEGIN---/{f=1;next}/---K6-JUNIT-END---/{f=0}f' /artifacts/out/runner.log > /artifacts/out/junit.xml
+            if [ -s /artifacts/out/junit.xml ] && grep -q '</testsuites>' /artifacts/out/junit.xml; then
+              JUNIT_OK=1
+            fi
+          fi
+          [ -n "$JUNIT_OK" ] \
+            || echo "WARNING: no JUnit extracted — the exit-handler's run-outcome anchor covers ReportPortal"
+
+          echo "== runner verdict (stage=$STAGE)"
+          if [ "$STAGE" != "finished" ]; then
+            echo "TestRun ended in stage '${STAGE:-<timeout>}' (want finished)" >&2
+            exit 1
+          fi
+          CODES=$(kubectl -n inari-e2e get pod "$RUNNER" \
+            -o jsonpath='{.status.containerStatuses[*].state.terminated.exitCode}')
+          echo "  runner container exit codes: $CODES"
+          for c in $CODES; do
+            if [ "$c" != "0" ]; then
+              echo "k6 thresholds violated or runner failed (exit $c) — see junit.xml / runner.log" >&2
+              exit 1
+            fi
+          done
+          echo "== k6 scenario $SCENARIO passed"
+        volumeMounts:
+          - name: work
+            mountPath: /work
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/k6/{{inputs.parameters.scenario}}/junit.xml
+          - name: runner-log
+            path: /artifacts/out/runner.log
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/k6/{{inputs.parameters.scenario}}/runner.log
+
     # ----------------------------------------------------- exit-handler
     # Unconditional result reporting (hard rule 8/10): every suite's JUnit
     # lands here even when the run failed or was aborted (optional inputs
@@ -1775,6 +1984,60 @@ spec:
                 name: argo-workflows-s3-credentials
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/scan/junit.xml
+          # Weekly mode only (W7): the three k6 load legs' JUnit
+          # (k6-jslib-summary jUnit() shape — one plain pass/fail testcase
+          # per threshold; no skipped, no time attributes).
+          - name: k6-permissions-cache-junit
+            optional: true
+            path: /junit/k6-permissions-cache-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/k6/permissions-cache/junit.xml
+          - name: k6-login-storm-junit
+            optional: true
+            path: /junit/k6-login-storm-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/k6/login-storm/junit.xml
+          - name: k6-provisioning-outbox-junit
+            optional: true
+            path: /junit/k6-provisioning-outbox-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/k6/provisioning-outbox/junit.xml
           # Keep in sync with the playwright task's withParam shard list.
           - name: playwright-junit-1-2
             optional: true

@@ -1,10 +1,16 @@
-# PHASE 2 PLACEHOLDER — weekly load/chaos run (plan C2, taxonomy §1.3
-# execution-profile labels: load|chaos, never in PR/release gates).
+# Weekly LOAD run (plan C2, taxonomy §1.3 execution-profile label `load` —
+# never in PR/release gates). The e2e-stack template's weekly mode runs the
+# k6 legs (W7): permissions-cache → login-storm → provisioning-outbox,
+# sequential k6-operator TestRuns, thresholds gating via the runner exit
+# code. LitmusChaos legs join this same slot in W9 (taxonomy `chaos`).
 #
-# Suspended on purpose: the e2e-stack template has no load/chaos legs yet
-# (k6 via k6-operator and LitmusChaos land in phase 2 — tasks W7/W9).
-# Scheduling the chaos legs the night before the nightly-reset CronWorkflow
-# is the plan's DR-adjacent ordering.
+# SUSPENDED until the W7 acceptance run proves the legs (spec §9 V4/V5):
+# unsuspend after a manual mode=weekly submission goes green end-to-end and
+# the ReportPortal launch shows the three k6 testsuites.
+#
+# Ordering vs the nightly reset is deliberate: Saturday 02:17 UTC leaves ~23h
+# before the Sunday 01:17 nightly-reset CronWorkflow — the plan's "load/chaos
+# the night before the reset" DR-adjacent ordering.
 apiVersion: argoproj.io/v1alpha1
 kind: CronWorkflow
 metadata:
@@ -14,7 +20,7 @@ metadata:
     app.kubernetes.io/part-of: inari-e2e-workflows
 spec:
   suspend: true
-  # Saturday 02:17 UTC — off-peak, ahead of a reset window.
+  # Saturday 02:17 UTC — off-peak, ahead of the reset window.
   schedules: ["17 2 * * 6"]
   concurrencyPolicy: Forbid
   workflowSpec:
