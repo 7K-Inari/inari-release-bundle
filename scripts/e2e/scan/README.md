@@ -10,7 +10,9 @@ For each candidate image (`SERVER_IMAGE` / `CONSOLE_IMAGE` / `AGENT_IMAGE` in
 the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
 
 1. **Prime** the proxy cache with a manifest-only pull (a proxy-cache
-   artifact exists only after a pull).
+   artifact exists only after a pull). Harbor's core service reverse-proxies
+   `/v2/` and hosts `/service/token`: the driver fetches a registry token
+   (robot basic auth) and pulls the manifest with it.
 2. **Trigger** the scan explicitly (`POST
    /api/v2.0/projects/<p>/repositories/<r>/artifacts/<tag>/scan`) — a prior
    scan is never trusted; scan-on-push latency races the poll otherwise.
@@ -27,8 +29,8 @@ the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HARBOR_API` | `https://harbor.7kgroup.org/api/v2.0` | Harbor API base |
-| `HARBOR_REGISTRY` | `https://harbor.7kgroup.org` | registry endpoint (priming pull) |
+| `HARBOR_API` | `http://harbor-core.harbor.svc.cluster.local/api/v2.0` | Harbor API base — in-cluster service DNS by default: the release gate never depends on the public gateway/DNS/TLS path (exit-handler `RP_ENDPOINT` precedent). Overrides exist for out-of-cluster debugging. |
+| `HARBOR_REGISTRY` | `http://harbor-core.harbor.svc.cluster.local` | `/v2/` + `/service/token` endpoint (priming pull; core proxies to the registry) |
 | `HARBOR_PROJECT` | `ghcr-proxy` | proxy-cache project |
 | `HARBOR_ROBOT_USERNAME` / `HARBOR_ROBOT_TOKEN` | — (required) | robot account (ESO secret `harbor-scanner`; missing = loud config failure, never a silent skip) |
 | `SCAN_CRITICAL_THRESHOLD` | `0` | fail when Critical count exceeds this |

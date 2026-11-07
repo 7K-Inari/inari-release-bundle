@@ -510,7 +510,10 @@ spec:
     # archive the full additions/vulnerabilities report in S3, and fail when
     # the Critical count exceeds scan-critical-threshold. CVE allowlists are
     # managed in Harbor, never in the driver. Complements cosign-verify
-    # (provenance), never replaces it.
+    # (provenance), never replaces it. All Harbor traffic is in-cluster
+    # service DNS (harbor-core.harbor.svc: /api/v2.0, /v2/ proxy,
+    # /service/token — live-verified) — the gate never depends on the public
+    # gateway/DNS/TLS path (exit-handler RP_ENDPOINT precedent).
     #
     # Credentials: ESO secret harbor-scanner (harbor-scanner-secret.yaml;
     # robot account with pull/read + scan/create on ghcr-proxy only —

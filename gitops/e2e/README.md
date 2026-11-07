@@ -43,8 +43,12 @@ in the pull path.
 Release-mode runs (`mode=release`) scan exactly the candidate image set
 (hard rule 5) with Trivy via the Harbor API before any deploy: the
 `harbor-scan-gate` DAG leg runs parallel with `cosign-verify` and blocks
-`env-prep`. Per image (`inari-server`, `inari-ui-bundle`, `inari-agent` in
-`ghcr-proxy`) the driver ([`scripts/e2e/scan/`](../../scripts/e2e/scan/)):
+`env-prep`. All Harbor traffic stays on **in-cluster service DNS**
+(`harbor-core.harbor.svc.cluster.local` — API, `/v2/` proxy, and
+`/service/token`; live-verified 2026-11-07) — the release gate never depends
+on the public gateway/DNS/TLS path. Per image (`inari-server`,
+`inari-ui-bundle`, `inari-agent` in `ghcr-proxy`) the driver
+([`scripts/e2e/scan/`](../../scripts/e2e/scan/)):
 
 1. **Primes the proxy cache** with a manifest-only pull — a proxy-cache
    artifact exists only after something pulls it through.
