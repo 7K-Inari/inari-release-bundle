@@ -98,6 +98,8 @@ spec:
         # when its Critical CVE count EXCEEDS this. CVE allowlists are
         # managed in Harbor (project ghcr-proxy), never here — raise this
         # only for a one-off debug submit, never on the release path.
+        # -1 force-fails every image (Critical ≥ 0 > -1) — the self-check
+        # that live-proves the >threshold verdict path.
         value: "0"
       - name: include-quarantined
         value: "false"

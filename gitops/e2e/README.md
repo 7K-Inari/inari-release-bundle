@@ -65,10 +65,18 @@ on the public gateway/DNS/TLS path. Per image (`inari-server`,
 3. **Archives the full reports** (`additions/vulnerabilities`, per platform)
    in the Garage bucket at `e2e/<workflow-uid>/scan/reports/`.
 4. **Fails the run** when the aggregate Critical count exceeds the workflow
-   parameter `scan-critical-threshold` (default `0`), and always writes the
-   synthetic **`security` JUnit** (`e2e/<uid>/scan/junit.xml` → the run's
-   ReportPortal launch via the exit-handler, including on failure — hard
-   rule 8/10).
+   parameter `scan-critical-threshold` (default `0`; `-1` force-fails every
+   image — the live self-check of the `>threshold` verdict path), and always
+   writes the synthetic **`security` JUnit** (`e2e/<uid>/scan/junit.xml` →
+   the run's ReportPortal launch via the exit-handler, including on failure
+   — hard rule 8/10).
+
+One refusal maps to a **loud non-blocking pass**: Harbor's 400 "scanner does
+not support this media type" (the `inari-ui-bundle` ORAS artifact — JS deps
+are owned by inari-ui CI). The ReportPortal testcase name carries the reason
+(`unscannable: ORAS bundle artifact …`), so the pass is never silent.
+Shipping the bundle with a scannable image config media type is a tracked
+inari-ui follow-up.
 
 Policies that live in **Harbor, never in scripts**: CVE allowlists (project
 `ghcr-proxy` → CVE Allowlist), scan-on-push, the daily re-scan schedule. The

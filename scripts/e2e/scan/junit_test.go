@@ -78,6 +78,31 @@ func TestWriteJUnitBreachAndError(t *testing.T) {
 	}
 }
 
+func TestWriteJUnitUnscannable(t *testing.T) {
+	// Coordinator ruling (PR #165): the unscannable console bundle passes
+	// loudly — the reason rides in the testcase name, no failure element.
+	path := filepath.Join(t.TempDir(), "junit.xml")
+	results := []ImageResult{{
+		Name: "inari-ui-bundle", Repo: "7k-inari/inari-ui-bundle", Tag: "0.4.0",
+		Platforms: []PlatformResult{{Digest: "sha256:abc", Unscannable: true}},
+	}}
+	if err := WriteJUnit(path, results, 0, "run-123"); err != nil {
+		t.Fatalf("WriteJUnit: %v", err)
+	}
+	suite := readSuite(t, path)
+	if suite.Tests != 1 || suite.Failures != 0 {
+		t.Fatalf("unscannable must be a passing testcase: tests=%d failures=%d", suite.Tests, suite.Failures)
+	}
+	tc := suite.Cases[0]
+	want := "image-scan 7k-inari/inari-ui-bundle:0.4.0 — unscannable: ORAS bundle artifact — JS deps owned by inari-ui CI"
+	if tc.Name != want {
+		t.Fatalf("testcase name:\n got %q\nwant %q", tc.Name, want)
+	}
+	if tc.Failure != nil {
+		t.Fatalf("unscannable must not carry a failure: %+v", tc.Failure)
+	}
+}
+
 func TestPlatformErrorFails(t *testing.T) {
 	r := ImageResult{
 		Platforms: []PlatformResult{
@@ -101,6 +126,11 @@ func TestThresholdSemantics(t *testing.T) {
 	}
 	if !r.Breached(1) {
 		t.Fatal("above the threshold must fail")
+	}
+	// -1 force-fails every image (Critical ≥ 0 > -1) — the live self-check
+	// of the >threshold verdict path.
+	if !(&ImageResult{Critical: 0}).Breached(-1) {
+		t.Fatal("threshold -1 must fail even a zero-critical image")
 	}
 }
 

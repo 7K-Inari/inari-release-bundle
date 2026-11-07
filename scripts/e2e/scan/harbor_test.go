@@ -30,6 +30,7 @@ type fakeHarbor struct {
 	statusSeq     map[string][]string // ref → overview status sequence
 	statusIdx     sync.Map            // ref → *atomic.Int32
 	summary       map[string][2]int   // ref → (critical, high)
+	scanPost400   map[string]string   // ref → 400 body for the scan POST
 
 	scanPosts  atomic.Int32
 	blobKicks  atomic.Int32
@@ -47,6 +48,11 @@ const testReport = `{"` + vulnerabilityReportMIME + `":{"vulnerabilities":[` +
 func (f *fakeHarbor) artifactHandler(w http.ResponseWriter, r *http.Request, ref string) {
 	if r.Method == http.MethodPost || strings.HasSuffix(r.URL.Path, "/scan") {
 		f.scanPosts.Add(1)
+		if body, ok := f.scanPost400[ref]; ok {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(body))
+			return
+		}
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -341,6 +347,79 @@ func TestFallbackCountingFromReport(t *testing.T) {
 	}
 }
 
+func TestUnscannableMediaTypeLoudPass(t *testing.T) {
+	// The inari-ui-bundle ORAS artifact shape: Harbor's scan POST refuses
+	// with a 400 "scanner does not support this media type". Coordinator
+	// ruling (PR #165): exactly this response maps to a loud non-blocking
+	// pass — no error, no breach, no retrigger, no report fetch.
+	f := &fakeHarbor{
+		t:         t,
+		tagBody:   subManifestJSON,
+		tagDigest: idxDigest,
+		subBodies: map[string]string{idxDigest: subManifestJSON},
+		scanPost400: map[string]string{idxDigest: `{"errors":[{"code":"BAD_REQUEST",` +
+			`"message":"scanner does not support this media type: application/vnd.oci.empty.v1+json"}]}`},
+	}
+	c := newFakeClient(t, f)
+	dir := t.TempDir()
+
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), dir, discardLog)
+
+	if res.Err != nil {
+		t.Fatalf("unscannable must not be an image error: %v", res.Err)
+	}
+	if len(res.Platforms) != 1 || !res.Platforms[0].Unscannable || res.Platforms[0].Err != nil {
+		t.Fatalf("platform not marked unscannable: %+v", res.Platforms)
+	}
+	if !res.AllUnscannable() {
+		t.Fatal("image with only unscannable targets must be AllUnscannable")
+	}
+	if res.Breached(0) {
+		t.Fatal("unscannable must never breach the gate")
+	}
+	if f.scanPosts.Load() != 1 {
+		t.Fatalf("unscannable must not be retried, got %d POSTs", f.scanPosts.Load())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("no report exists for an unscannable artifact, found %d files", len(entries))
+	}
+}
+
+func TestScan400GenericIsAnError(t *testing.T) {
+	// A 400 that is NOT the unsupported-media-type refusal stays a plain,
+	// gate-failing error.
+	f := &fakeHarbor{
+		t:         t,
+		tagBody:   subManifestJSON,
+		tagDigest: idxDigest,
+		subBodies: map[string]string{idxDigest: subManifestJSON},
+		scanPost400: map[string]string{idxDigest: `{"errors":[{"code":"BAD_REQUEST",` +
+			`"message":"repository not configured for scanning"}]}`},
+	}
+	c := newFakeClient(t, f)
+
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
+
+	if res.AllUnscannable() {
+		t.Fatal("generic 400 must not map to unscannable")
+	}
+	if !res.Breached(0) {
+		t.Fatal("generic 400 must fail the gate")
+	}
+	var perr error
+	for _, p := range res.Platforms {
+		if p.Err != nil {
+			perr = p.Err
+		}
+	}
+	if perr == nil || !strings.Contains(perr.Error(), "HTTP 400") {
+		t.Fatalf("expected POST scan 400 error, got %+v", res.Platforms)
+	}
+	if strings.Contains(perr.Error(), "s3cret-token") {
+		t.Fatal("error leaks the robot token")
+	}
+}
+
 func TestResolveTargetsSkipsAttestations(t *testing.T) {
 	f := multiArchFake(t)
 	c := newFakeClient(t, f)
@@ -417,8 +496,12 @@ func TestParseThreshold(t *testing.T) {
 	if n, err := parseThreshold("3"); err != nil || n != 3 {
 		t.Fatalf("3: %d %v", n, err)
 	}
-	if _, err := parseThreshold("-1"); err == nil {
-		t.Fatal("negative accepted")
+	// -1 is the deliberate force-fail self-check (Critical ≥ 0 > -1).
+	if n, err := parseThreshold("-1"); err != nil || n != -1 {
+		t.Fatalf("-1 (force-fail): %d %v", n, err)
+	}
+	if _, err := parseThreshold("-2"); err == nil {
+		t.Fatal("-2 accepted")
 	}
 	if _, err := parseThreshold("soon"); err == nil {
 		t.Fatal("non-integer accepted")

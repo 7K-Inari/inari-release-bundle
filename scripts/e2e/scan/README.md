@@ -27,7 +27,13 @@ the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
    .../artifacts/<digest>/scan`) and poll `?with_scan_overview=true` until
    `scan_status=Success` — asynchronous; a prior scan is never trusted
    (scan-on-push latency races). `Error`/`Stopped` gets exactly one
-   retrigger. Platforms scan concurrently per image.
+   retrigger. Platforms scan concurrently per image. Exactly one refusal is
+   mapped to a **loud non-blocking pass**: Harbor's 400 "scanner does not
+   support this media/artifact type" (the `inari-ui-bundle` ORAS artifact —
+   its JS deps are owned by inari-ui CI; coordinator ruling on PR #165).
+   The JUnit testcase name carries `unscannable: ORAS bundle artifact — JS
+   deps owned by inari-ui CI`, so the pass is visible in ReportPortal and
+   never silent. Any other 400 stays a gate-failing error.
 4. **Archive** the full `additions/vulnerabilities` report per platform
    (`REPORTS_DIR`, uploaded to S3 at `e2e/<uid>/scan/reports/`).
 5. **Fail** when the aggregate Critical count exceeds
@@ -43,7 +49,7 @@ the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
 | `HARBOR_REGISTRY` | `http://harbor-core.harbor.svc.cluster.local` | `/v2/` + `/service/token` endpoint (priming pull; core proxies to the registry) |
 | `HARBOR_PROJECT` | `ghcr-proxy` | proxy-cache project |
 | `HARBOR_ROBOT_USERNAME` / `HARBOR_ROBOT_TOKEN` | — (required) | robot account (ESO secret `harbor-scanner`; missing = loud config failure, never a silent skip) |
-| `SCAN_CRITICAL_THRESHOLD` | `0` | fail when Critical count exceeds this |
+| `SCAN_CRITICAL_THRESHOLD` | `0` | fail when Critical count exceeds this; `-1` force-fails every image (the live self-check of the `>threshold` verdict path) |
 | `SCAN_RUN_ID` | — | workflow uid (S3 report pointer in JUnit failures) |
 | `OUT_DIR` / `REPORTS_DIR` | `/artifacts/out` / `/artifacts/reports` | artifact paths |
 | `SCAN_POLL_INTERVAL_SECONDS` / `SCAN_TIMEOUT_SECONDS` | `15` / `900` | poll tuning (per image) |

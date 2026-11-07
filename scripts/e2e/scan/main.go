@@ -31,13 +31,16 @@ func envOr(getenv func(string) string, key, def string) string {
 	return def
 }
 
+// parseThreshold parses SCAN_CRITICAL_THRESHOLD. -1 is the deliberate
+// force-fail value (every image breaches: Critical ≥ 0 > -1) — used to
+// live-prove the >threshold verdict path without a vulnerable image.
 func parseThreshold(s string) (int, error) {
 	if s == "" {
 		return 0, nil
 	}
 	n, err := strconv.Atoi(s)
-	if err != nil || n < 0 {
-		return 0, fmt.Errorf("SCAN_CRITICAL_THRESHOLD must be a non-negative integer (got %q)", s)
+	if err != nil || n < -1 {
+		return 0, fmt.Errorf("SCAN_CRITICAL_THRESHOLD must be an integer >= -1 (got %q)", s)
 	}
 	return n, nil
 }
@@ -125,6 +128,9 @@ func run(getenv func(string) string, stdout io.Writer) int {
 		case r.Err != nil:
 			failed = true
 			fmt.Fprintf(stdout, "ERROR %s:%s — %v\n", r.Repo, r.Tag, r.Err)
+		case r.AllUnscannable():
+			fmt.Fprintf(stdout, "PASS %s:%s — unscannable: ORAS bundle artifact — JS deps owned by inari-ui CI (loud non-blocking pass)\n",
+				r.Repo, r.Tag)
 		case r.Breached(threshold):
 			failed = true
 			for _, p := range r.Platforms {
