@@ -811,12 +811,28 @@ spec:
               echo "  already present — idempotent no-op";;
           esac
 
-          echo "== asserting the fixture is readable on the previous stack"
-          curl -sf -H "Authorization: Bearer $TOKEN" "https://$E2E_BASE_DOMAIN/api/v1/tenants" \
-            | jq -e --arg slug "$FIXTURE_SLUG" --arg name "$FIXTURE_NAME" \
-                '.tenants[] | select(.slug == $slug and .displayName == $name)' >/dev/null \
-            || { echo "fixture tenant not readable after creation" >&2; exit 1; }
-          echo "== fixture tenant $FIXTURE_SLUG present on the previous stack"
+          # Poll after the mutation (contract invariant 2): the read-back
+          # races the membership/list materialization — a token issued BEFORE
+          # the create does not see the new org at all (live-verified
+          # 2026-11-07: HTTP 200 on POST, immediate GET missed it, a fresh
+          # token minutes later saw it). Re-issue the token per attempt.
+          echo "== asserting the fixture is readable on the previous stack (poll)"
+          i=0
+          while [ $i -lt 24 ]; do
+            TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+              -d grant_type=password -d client_id=inari-server \
+              -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
+              -d "scope=openid organization:*" | jq -r '.access_token // ""') || TOKEN=""
+            if [ -n "$TOKEN" ] && curl -sf -H "Authorization: Bearer $TOKEN" \
+                "https://$E2E_BASE_DOMAIN/api/v1/tenants/$FIXTURE_SLUG" \
+                | jq -e --arg slug "$FIXTURE_SLUG" --arg name "$FIXTURE_NAME" \
+                    '.organization | select(.slug == $slug and .displayName == $name)' >/dev/null; then
+              break
+            fi
+            i=$((i+1)); sleep 5
+          done
+          [ $i -lt 24 ] || { echo "fixture tenant not readable after creation (2m poll)" >&2; exit 1; }
+          echo "== fixture tenant $FIXTURE_SLUG present on the previous stack (attempt $((i+1)))"
 
     # ----------------------------------------------------- upgrade-drill-pause
     # Drill aid (W5): when upgrade-drill-pause-minutes != 0, suspends the run
@@ -871,21 +887,27 @@ spec:
             fi
           }
 
-          TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
-            -d grant_type=password -d client_id=inari-server \
-            -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
-            -d "scope=openid organization:*" | jq -r '.access_token // ""') || TOKEN=""
-          if [ -z "$TOKEN" ]; then
-            write_junit "fail:could not obtain a user token on the upgraded stack"
-            cat /artifacts/out/junit.xml; exit 1
-          fi
-
-          echo "== asserting fixture tenant $FIXTURE_SLUG survived the upgrade"
-          if curl -sf -H "Authorization: Bearer $TOKEN" "https://$E2E_BASE_DOMAIN/api/v1/tenants" \
-              | jq -e --arg slug "$FIXTURE_SLUG" --arg name "$FIXTURE_NAME" \
-                  '.tenants[] | select(.slug == $slug and .displayName == $name)' >/dev/null; then
+          echo "== asserting fixture tenant $FIXTURE_SLUG survived the upgrade (poll)"
+          i=0
+          FOUND=""
+          while [ $i -lt 12 ]; do
+            # Fresh token per attempt (the post-create read-back race is
+            # token-scope staleness — see upgrade-fixture).
+            TOKEN=$(curl -sf "$E2E_KC_URL/realms/inari/protocol/openid-connect/token" \
+              -d grant_type=password -d client_id=inari-server \
+              -d "username=$E2E_USER" -d "password=$E2E_PASSWORD" \
+              -d "scope=openid organization:*" | jq -r '.access_token // ""') || TOKEN=""
+            if [ -n "$TOKEN" ] && curl -sf -H "Authorization: Bearer $TOKEN" \
+                "https://$E2E_BASE_DOMAIN/api/v1/tenants/$FIXTURE_SLUG" \
+                | jq -e --arg slug "$FIXTURE_SLUG" --arg name "$FIXTURE_NAME" \
+                    '.organization | select(.slug == $slug and .displayName == $name)' >/dev/null; then
+              FOUND=1; break
+            fi
+            i=$((i+1)); sleep 10
+          done
+          if [ -n "$FOUND" ]; then
             write_junit pass
-            echo "== fixture survived the upgrade"
+            echo "== fixture survived the upgrade (attempt $((i+1)))"
           else
             write_junit "fail:fixture tenant $FIXTURE_SLUG missing or altered after the upgrade"
             cat /artifacts/out/junit.xml
