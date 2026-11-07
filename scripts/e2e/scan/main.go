@@ -31,13 +31,16 @@ func envOr(getenv func(string) string, key, def string) string {
 	return def
 }
 
+// parseThreshold parses SCAN_CRITICAL_THRESHOLD. -1 is the deliberate
+// force-fail value (every image breaches: Critical ≥ 0 > -1) — used to
+// live-prove the >threshold verdict path without a vulnerable image.
 func parseThreshold(s string) (int, error) {
 	if s == "" {
 		return 0, nil
 	}
 	n, err := strconv.Atoi(s)
-	if err != nil || n < 0 {
-		return 0, fmt.Errorf("SCAN_CRITICAL_THRESHOLD must be a non-negative integer (got %q)", s)
+	if err != nil || n < -1 {
+		return 0, fmt.Errorf("SCAN_CRITICAL_THRESHOLD must be an integer >= -1 (got %q)", s)
 	}
 	return n, nil
 }
@@ -101,7 +104,7 @@ func run(getenv func(string) string, stdout io.Writer) int {
 	)
 	opts := Options{
 		PollInterval: 15 * time.Second,
-		ScanTimeout:  10 * time.Minute,
+		ScanTimeout:  15 * time.Minute,
 	}
 	if v := getenv("SCAN_POLL_INTERVAL_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -116,16 +119,29 @@ func run(getenv func(string) string, stdout io.Writer) int {
 
 	results := make([]ImageResult, 0, len(images))
 	failed := false
+	logf := func(format string, args ...any) { fmt.Fprintf(stdout, format+"\n", args...) }
 	for _, im := range images {
 		fmt.Fprintf(stdout, "== scanning %s:%s\n", im.Repo, im.Tag)
-		r := ScanImage(context.Background(), client, opts, im, reportsDir)
+		r := ScanImage(context.Background(), client, opts, im, reportsDir, logf)
 		results = append(results, r)
 		switch {
 		case r.Err != nil:
 			failed = true
 			fmt.Fprintf(stdout, "ERROR %s:%s — %v\n", r.Repo, r.Tag, r.Err)
-		case r.Critical > threshold:
+		case r.AllUnscannable():
+			fmt.Fprintf(stdout, "PASS %s:%s — unscannable: ORAS bundle artifact — JS deps owned by inari-ui CI (loud non-blocking pass)\n",
+				r.Repo, r.Tag)
+		case r.Breached(threshold):
 			failed = true
+			for _, p := range r.Platforms {
+				if p.Err != nil {
+					label := p.Platform
+					if label == "" {
+						label = "image"
+					}
+					fmt.Fprintf(stdout, "ERROR %s:%s %s (%s) — %v\n", r.Repo, r.Tag, label, p.Digest, p.Err)
+				}
+			}
 			fmt.Fprintf(stdout, "FAIL %s:%s — %d critical (threshold %d), %d high\n",
 				r.Repo, r.Tag, r.Critical, threshold, r.High)
 		default:

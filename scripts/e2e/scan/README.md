@@ -9,21 +9,37 @@ The release-mode image vulnerability gate of the `e2e-stack` WorkflowTemplate
 For each candidate image (`SERVER_IMAGE` / `CONSOLE_IMAGE` / `AGENT_IMAGE` in
 the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
 
-1. **Prime** the proxy cache with a manifest-only pull (a proxy-cache
-   artifact exists only after a pull). Harbor's core service reverse-proxies
-   `/v2/` and hosts `/service/token`: the driver fetches a registry token
-   (robot basic auth) and pulls the manifest with it.
-2. **Trigger** the scan explicitly (`POST
-   /api/v2.0/projects/<p>/repositories/<r>/artifacts/<tag>/scan`) — a prior
-   scan is never trusted; scan-on-push latency races the poll otherwise.
-3. **Poll** `GET .../artifacts/<tag>?with_scan_overview=true` until
-   `scan_status=Success` (async; `Error`/`Stopped` get one retrigger).
-4. **Archive** the full `additions/vulnerabilities` report per image
+1. **Resolve** the tag through the proxy to its scannable digests. Multi-arch
+   indexes are scanned **per platform sub-manifest** (attestations skipped —
+   they carry no packages): Harbor's proxy registers pushed sub-manifests
+   promptly, while index/tag registration is asynchronous (waits on all
+   children, up to ~7 min, trims or drops on timeout — verified against
+   Harbor v2.15.4 source and live) — far too racy for a gate. The CVE content
+   of an index is the union of its platform manifests, so per-digest scanning
+   is the same signal with deterministic timing. Harbor's core service
+   reverse-proxies `/v2/` and hosts `/service/token`: the driver fetches a
+   registry token (robot basic auth) and pulls manifests with it.
+2. **Register** each digest's artifact: pull the sub-manifest by digest
+   through the proxy (kicks Harbor's background push), kick its blobs with
+   1-byte range GETs (shortens the server-side dependency wait), poll the
+   artifact API until registered.
+3. **Trigger** the scan explicitly (`POST
+   .../artifacts/<digest>/scan`) and poll `?with_scan_overview=true` until
+   `scan_status=Success` — asynchronous; a prior scan is never trusted
+   (scan-on-push latency races). `Error`/`Stopped` gets exactly one
+   retrigger. Platforms scan concurrently per image. Exactly one refusal is
+   mapped to a **loud non-blocking pass**: Harbor's 400 "scanner does not
+   support this media/artifact type" (the `inari-ui-bundle` ORAS artifact —
+   its JS deps are owned by inari-ui CI; coordinator ruling on PR #165).
+   The JUnit testcase name carries `unscannable: ORAS bundle artifact — JS
+   deps owned by inari-ui CI`, so the pass is visible in ReportPortal and
+   never silent. Any other 400 stays a gate-failing error.
+4. **Archive** the full `additions/vulnerabilities` report per platform
    (`REPORTS_DIR`, uploaded to S3 at `e2e/<uid>/scan/reports/`).
-5. **Fail** when the Critical count exceeds `SCAN_CRITICAL_THRESHOLD`
-   (default 0) and always write the synthetic **`security` JUnit**
-   (`OUT_DIR/junit.xml`) — including configuration errors, so a failed gate
-   still lands in the run's ReportPortal launch.
+5. **Fail** when the aggregate Critical count exceeds
+   `SCAN_CRITICAL_THRESHOLD` (default 0) and always write the synthetic
+   **`security` JUnit** (`OUT_DIR/junit.xml`) — including configuration
+   errors, so a failed gate still lands in the run's ReportPortal launch.
 
 ## Configuration (env)
 
@@ -33,10 +49,10 @@ the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
 | `HARBOR_REGISTRY` | `http://harbor-core.harbor.svc.cluster.local` | `/v2/` + `/service/token` endpoint (priming pull; core proxies to the registry) |
 | `HARBOR_PROJECT` | `ghcr-proxy` | proxy-cache project |
 | `HARBOR_ROBOT_USERNAME` / `HARBOR_ROBOT_TOKEN` | — (required) | robot account (ESO secret `harbor-scanner`; missing = loud config failure, never a silent skip) |
-| `SCAN_CRITICAL_THRESHOLD` | `0` | fail when Critical count exceeds this |
+| `SCAN_CRITICAL_THRESHOLD` | `0` | fail when Critical count exceeds this; `-1` force-fails every image (the live self-check of the `>threshold` verdict path) |
 | `SCAN_RUN_ID` | — | workflow uid (S3 report pointer in JUnit failures) |
 | `OUT_DIR` / `REPORTS_DIR` | `/artifacts/out` / `/artifacts/reports` | artifact paths |
-| `SCAN_POLL_INTERVAL_SECONDS` / `SCAN_TIMEOUT_SECONDS` | `15` / `600` | poll tuning (per image) |
+| `SCAN_POLL_INTERVAL_SECONDS` / `SCAN_TIMEOUT_SECONDS` | `15` / `900` | poll tuning (per image) |
 
 ## Rules
 

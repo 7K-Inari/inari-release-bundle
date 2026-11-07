@@ -3,32 +3,98 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// fakeHarbor is a scriptable Harbor stand-in: the artifact overview walks a
-// caller-supplied status sequence, and every endpoint hit is recorded.
+// fakeHarbor is a scriptable Harbor stand-in for the per-digest scan flow:
+// registry token → manifest/index pulls (+ blob kicks) → artifact
+// registration poll → scan trigger → overview poll → report fetch.
 type fakeHarbor struct {
-	t           *testing.T
-	statuses    []string // polled in order; the last one repeats
-	overviewIdx atomic.Int32
-	scanPosts   atomic.Int32
-	primePulls  atomic.Int32
-	overview404 int32  // first N overview GETs return 404
-	reportBody  string // additions/vulnerabilities payload
-	reportCode  int
+	t *testing.T
+
+	tagBody   string // JSON served at /v2/.../manifests/<tag>
+	tagDigest string // Docker-Content-Digest for the tag GET
+	subBodies map[string]string
+
+	registerAfter int32               // artifact GETs (no query) that 404 before 200
+	regGets       sync.Map            // ref → *atomic.Int32
+	statusSeq     map[string][]string // ref → overview status sequence
+	statusIdx     sync.Map            // ref → *atomic.Int32
+	summary       map[string][2]int   // ref → (critical, high)
+	scanPost400   map[string]string   // ref → 400 body for the scan POST
+
+	scanPosts  atomic.Int32
+	blobKicks  atomic.Int32
+	reportBody string
 }
 
 const testRepo = "7k-inari/inari-server"
-const testTag = "1.2.3"
+const testTag = "2.0.0"
 const testEscRepo = "7k-inari%252Finari-server"
+
+const testReport = `{"` + vulnerabilityReportMIME + `":{"vulnerabilities":[` +
+	`{"id":"CVE-2099-0001","severity":"Critical"},` +
+	`{"id":"CVE-2099-0002","severity":"High"}]}}`
+
+func (f *fakeHarbor) artifactHandler(w http.ResponseWriter, r *http.Request, ref string) {
+	if r.Method == http.MethodPost || strings.HasSuffix(r.URL.Path, "/scan") {
+		f.scanPosts.Add(1)
+		if body, ok := f.scanPost400[ref]; ok {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(body))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/additions/vulnerabilities") {
+		w.Write([]byte(f.reportBody))
+		return
+	}
+	if r.URL.Query().Get("with_scan_overview") == "true" {
+		idx, _ := f.statusIdx.LoadOrStore(ref, &atomic.Int32{})
+		n := idx.(*atomic.Int32).Add(1) - 1
+		seq := f.statusSeq[ref]
+		if len(seq) == 0 {
+			seq = []string{"Success"}
+		}
+		i := int(n)
+		if i >= len(seq) {
+			i = len(seq) - 1
+		}
+		crit, high := f.summary[ref][0], f.summary[ref][1]
+		json.NewEncoder(w).Encode(map[string]any{
+			"scan_overview": map[string]any{
+				vulnerabilityReportMIME: map[string]any{
+					"report_id":   "r-1",
+					"scan_status": seq[i],
+					"summary": map[string]any{
+						"total":   crit + high,
+						"fixable": 0,
+						"summary": map[string]int{"Critical": crit, "High": high},
+					},
+				},
+			},
+		})
+		return
+	}
+	// Registration poll.
+	c, _ := f.regGets.LoadOrStore(ref, &atomic.Int32{})
+	if c.(*atomic.Int32).Add(1) <= f.registerAfter {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	w.Write([]byte(`{"digest":"` + ref + `"}`))
+}
 
 func (f *fakeHarbor) handler() http.Handler {
 	mux := http.NewServeMux()
@@ -36,66 +102,40 @@ func (f *fakeHarbor) handler() http.Handler {
 		if !strings.Contains(r.URL.Query().Get("scope"), "repository:ghcr-proxy/"+testRepo+":pull") {
 			f.t.Errorf("token request scope wrong: %q", r.URL.Query().Get("scope"))
 		}
-		user, _, ok := r.BasicAuth()
-		if !ok || user == "" {
+		if user, _, ok := r.BasicAuth(); !ok || user == "" {
 			f.t.Error("token request without robot basic auth")
 		}
 		w.Write([]byte(`{"token":"fake-registry-token"}`))
 	})
-	mux.HandleFunc("/v2/ghcr-proxy/"+testRepo+"/manifests/"+testTag, func(w http.ResponseWriter, r *http.Request) {
-		f.primePulls.Add(1)
+	mux.HandleFunc("/v2/ghcr-proxy/"+testRepo+"/manifests/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fake-registry-token" {
 			f.t.Errorf("manifest pull without the registry Bearer token: %q", r.Header.Get("Authorization"))
 		}
-		if !strings.Contains(r.Header.Get("Accept"), "oci.image.manifest") {
-			f.t.Errorf("manifest pull missing OCI Accept header")
+		ref := strings.TrimPrefix(r.URL.Path, "/v2/ghcr-proxy/"+testRepo+"/manifests/")
+		if body, ok := f.subBodies[ref]; ok {
+			w.Header().Set("Docker-Content-Digest", ref)
+			w.Write([]byte(body))
+			return
 		}
-		w.WriteHeader(http.StatusOK)
+		if ref == testTag {
+			w.Header().Set("Docker-Content-Digest", f.tagDigest)
+			w.Write([]byte(f.tagBody))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
 	})
-	mux.HandleFunc("POST /api/v2.0/projects/ghcr-proxy/repositories/"+testEscRepo+"/artifacts/"+testTag+"/scan",
-		func(w http.ResponseWriter, r *http.Request) {
-			f.scanPosts.Add(1)
-			w.WriteHeader(http.StatusAccepted)
-		})
-	mux.HandleFunc("GET /api/v2.0/projects/ghcr-proxy/repositories/"+testEscRepo+"/artifacts/"+testTag+"/additions/vulnerabilities",
-		func(w http.ResponseWriter, r *http.Request) {
-			if f.reportCode != 0 && f.reportCode != http.StatusOK {
-				w.WriteHeader(f.reportCode)
-				return
-			}
-			w.Write([]byte(f.reportBody))
-		})
-	mux.HandleFunc("GET /api/v2.0/projects/ghcr-proxy/repositories/"+testEscRepo+"/artifacts/"+testTag,
-		func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Get("with_scan_overview") != "true" {
-				f.t.Errorf("overview GET without with_scan_overview=true")
-			}
-			n := f.overviewIdx.Add(1) - 1
-			if n < f.overview404 {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-			i := int(n - f.overview404)
-			if i >= len(f.statuses) {
-				i = len(f.statuses) - 1
-			}
-			status := f.statuses[i]
-			ov := map[string]any{
-				"scan_overview": map[string]any{
-					vulnerabilityReportMIME: map[string]any{
-						"report_id":   "r-1",
-						"scan_status": status,
-						"severity":    "High",
-						"summary": map[string]any{
-							"total":   7,
-							"fixable": 2,
-							"summary": map[string]int{"Critical": 0, "High": 2, "Medium": 5},
-						},
-					},
-				},
-			}
-			json.NewEncoder(w).Encode(ov)
-		})
+	mux.HandleFunc("/v2/ghcr-proxy/"+testRepo+"/blobs/", func(w http.ResponseWriter, r *http.Request) {
+		f.blobKicks.Add(1)
+		w.WriteHeader(http.StatusPartialContent)
+	})
+	mux.HandleFunc("/api/v2.0/projects/ghcr-proxy/repositories/"+testEscRepo+"/artifacts/", func(w http.ResponseWriter, r *http.Request) {
+		// r.URL.Path is decoded once (7k-inari%2F...), so split on the
+		// stable marker instead of trimming the encoded prefix.
+		i := strings.Index(r.URL.Path, "/artifacts/")
+		ref := r.URL.Path[i+len("/artifacts/"):]
+		ref = strings.TrimSuffix(strings.TrimSuffix(ref, "/scan"), "/additions/vulnerabilities")
+		f.artifactHandler(w, r, ref)
+	})
 	return mux
 }
 
@@ -110,133 +150,194 @@ func testOptions() Options {
 	return Options{PollInterval: time.Millisecond, ScanTimeout: 30 * time.Second}
 }
 
-const twoVulnReport = `{"` + vulnerabilityReportMIME + `":{"vulnerabilities":[` +
-	`{"id":"CVE-2099-0001","severity":"Critical"},` +
-	`{"id":"CVE-2099-0002","severity":"High"}]}}`
+func testImage() imageSpec {
+	return imageSpec{Name: "inari-server", Repo: testRepo, Tag: testTag}
+}
 
-func TestScanImagePass(t *testing.T) {
-	f := &fakeHarbor{t: t, statuses: []string{"Running", "Success"}, reportBody: twoVulnReport}
+func discardLog(string, ...any) {}
+
+const subAmd64 = "sha256:aaaa000000000000000000000000000000000000000000000000000000000001"
+const subArm64 = "sha256:aaaa000000000000000000000000000000000000000000000000000000000002"
+const subAttest = "sha256:aaaa000000000000000000000000000000000000000000000000000000000003"
+const idxDigest = "sha256:bbbb000000000000000000000000000000000000000000000000000000000001"
+
+func indexJSON() string {
+	return fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[
+		{"digest":"%s","mediaType":"application/vnd.oci.image.manifest.v1+json","platform":{"os":"linux","architecture":"amd64"}},
+		{"digest":"%s","mediaType":"application/vnd.oci.image.manifest.v1+json","platform":{"os":"linux","architecture":"arm64"}},
+		{"digest":"%s","mediaType":"application/vnd.oci.image.manifest.v1+json","platform":{"os":"unknown","architecture":"unknown"}}
+	]}`, subAmd64, subArm64, subAttest)
+}
+
+const subManifestJSON = `{"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:c1"},"layers":[{"digest":"sha256:l1"},{"digest":"sha256:l2"}]}`
+
+func multiArchFake(t *testing.T) *fakeHarbor {
+	return &fakeHarbor{
+		t:          t,
+		tagBody:    indexJSON(),
+		tagDigest:  idxDigest,
+		subBodies:  map[string]string{subAmd64: subManifestJSON, subArm64: subManifestJSON},
+		summary:    map[string][2]int{subAmd64: {0, 2}, subArm64: {1, 3}},
+		reportBody: testReport,
+	}
+}
+
+func TestScanImageMultiArchAggregatesPlatforms(t *testing.T) {
+	f := multiArchFake(t)
 	c := newFakeClient(t, f)
 	dir := t.TempDir()
 
-	res := ScanImage(context.Background(), c, testOptions(),
-		imageSpec{Name: "inari-server", Repo: testRepo, Tag: testTag}, dir)
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), dir, discardLog)
 
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}
-	if !res.Scanned || res.Critical != 0 || res.High != 2 {
-		t.Fatalf("unexpected result: %+v", res)
+	if len(res.Platforms) != 2 {
+		t.Fatalf("expected 2 platform targets (attestation skipped), got %+v", res.Platforms)
 	}
-	if f.primePulls.Load() != 1 {
-		t.Fatalf("expected exactly one priming pull, got %d", f.primePulls.Load())
+	if !res.Scanned || res.Critical != 1 || res.High != 5 {
+		t.Fatalf("unexpected aggregate: %+v", res)
 	}
-	if f.scanPosts.Load() != 1 {
-		t.Fatalf("expected exactly one scan POST, got %d", f.scanPosts.Load())
-	}
-	body, err := os.ReadFile(filepath.Join(dir, "inari-server-1.2.3-vulnerabilities.json"))
-	if err != nil || string(body) != twoVulnReport {
-		t.Fatalf("report not archived verbatim: %v", err)
-	}
-}
-
-func TestSummaryCountsArePrimary(t *testing.T) {
-	// The overview summary (0 critical / 2 high) disagrees with the report
-	// body (1 critical / 1 high) on purpose: Harbor's own summary number is
-	// the primary source, so project CVE allowlists stay a Harbor-side knob.
-	f := &fakeHarbor{t: t, statuses: []string{"Success"}, reportBody: twoVulnReport}
-	c := newFakeClient(t, f)
-
-	res := ScanImage(context.Background(), c, testOptions(),
-		imageSpec{Name: "inari-server", Repo: testRepo, Tag: testTag}, t.TempDir())
-
-	if res.Err != nil {
-		t.Fatalf("unexpected error: %v", res.Err)
-	}
-	if res.Critical != 0 || res.High != 2 {
-		t.Fatalf("summary counts not used: %+v", res)
-	}
-}
-
-func TestScanErrorRetriggerOnce(t *testing.T) {
-	f := &fakeHarbor{t: t, statuses: []string{"Error", "Running", "Success"}, reportBody: twoVulnReport}
-	c := newFakeClient(t, f)
-
-	res := ScanImage(context.Background(), c, testOptions(),
-		imageSpec{Name: "inari-server", Repo: testRepo, Tag: testTag}, t.TempDir())
-
-	if res.Err != nil {
-		t.Fatalf("unexpected error: %v", res.Err)
-	}
+	// One scan POST per platform digest.
 	if f.scanPosts.Load() != 2 {
-		t.Fatalf("expected one retrigger (2 POSTs), got %d", f.scanPosts.Load())
+		t.Fatalf("expected 2 scan POSTs, got %d", f.scanPosts.Load())
+	}
+	// Blob kicks happened (config + 2 layers per platform).
+	if f.blobKicks.Load() != 6 {
+		t.Fatalf("expected 6 blob kicks, got %d", f.blobKicks.Load())
+	}
+	// Per-platform reports archived.
+	for _, plat := range []string{"linux-amd64", "linux-arm64"} {
+		p := filepath.Join(dir, "inari-server-2.0.0-"+plat+"-vulnerabilities.json")
+		body, err := os.ReadFile(p)
+		if err != nil || string(body) != testReport {
+			t.Fatalf("report %s not archived verbatim: %v", p, err)
+		}
 	}
 }
 
-func TestScanErrorPersistentFails(t *testing.T) {
-	f := &fakeHarbor{t: t, statuses: []string{"Error", "Error", "Error"}, reportBody: twoVulnReport}
+func TestScanImageSingleManifest(t *testing.T) {
+	f := &fakeHarbor{
+		t:          t,
+		tagBody:    subManifestJSON,
+		tagDigest:  idxDigest,
+		subBodies:  map[string]string{idxDigest: subManifestJSON},
+		summary:    map[string][2]int{idxDigest: {0, 4}},
+		reportBody: testReport,
+	}
 	c := newFakeClient(t, f)
 
-	res := ScanImage(context.Background(), c, testOptions(),
-		imageSpec{Name: "inari-server", Repo: testRepo, Tag: testTag}, t.TempDir())
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
 
-	if res.Err == nil || !strings.Contains(res.Err.Error(), "after one retrigger") {
-		t.Fatalf("expected persistent-error failure, got %+v", res)
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
 	}
-	if f.scanPosts.Load() != 2 {
-		t.Fatalf("expected exactly one retrigger, got %d POSTs", f.scanPosts.Load())
+	if len(res.Platforms) != 1 || res.Platforms[0].Digest != idxDigest {
+		t.Fatalf("expected one digest target, got %+v", res.Platforms)
 	}
-	if strings.Contains(res.Err.Error(), "s3cret-token") {
+	if res.Critical != 0 || res.High != 4 {
+		t.Fatalf("unexpected counts: %+v", res)
+	}
+}
+
+func TestRegistrationPollWaits(t *testing.T) {
+	f := multiArchFake(t)
+	f.registerAfter = 3 // artifact GETs 404 three times before registering
+	c := newFakeClient(t, f)
+
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
+
+	if res.Err != nil || !res.Scanned {
+		t.Fatalf("registration poll should have waited: %+v", res)
+	}
+}
+
+func TestRegistrationTimeout(t *testing.T) {
+	f := multiArchFake(t)
+	f.registerAfter = 1 << 30 // never registers
+	c := newFakeClient(t, f)
+	opts := Options{PollInterval: time.Millisecond, ScanTimeout: 50 * time.Millisecond}
+
+	res := ScanImage(context.Background(), c, opts, testImage(), t.TempDir(), discardLog)
+
+	if res.Err == nil && res.Platforms[0].Err == nil {
+		t.Fatalf("expected registration timeout, got %+v", res)
+	}
+	err := res.Platforms[0].Err
+	if err == nil || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "s3cret-token") {
 		t.Fatal("error leaks the robot token")
 	}
 }
 
-func TestArtifact404Reprimes(t *testing.T) {
-	f := &fakeHarbor{t: t, statuses: []string{"Success"}, overview404: 2, reportBody: twoVulnReport}
+func TestScanErrorRetriggerOnce(t *testing.T) {
+	f := multiArchFake(t)
+	f.statusSeq = map[string][]string{subAmd64: {"Error", "Running", "Success"}}
 	c := newFakeClient(t, f)
 
-	res := ScanImage(context.Background(), c, testOptions(),
-		imageSpec{Name: "inari-server", Repo: testRepo, Tag: testTag}, t.TempDir())
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
 
-	if res.Err != nil {
-		t.Fatalf("unexpected error: %v", res.Err)
+	if res.Err != nil || !res.Scanned {
+		t.Fatalf("unexpected failure: %+v", res)
 	}
-	if f.primePulls.Load() != 3 { // initial prime + one re-prime per 404
-		t.Fatalf("expected 3 priming pulls, got %d", f.primePulls.Load())
+	// 2 POSTs for the amd64 retrigger + 1 for arm64.
+	if f.scanPosts.Load() != 3 {
+		t.Fatalf("expected 3 scan POSTs, got %d", f.scanPosts.Load())
+	}
+}
+
+func TestScanErrorPersistentFails(t *testing.T) {
+	f := multiArchFake(t)
+	f.statusSeq = map[string][]string{subAmd64: {"Error", "Error", "Error"}}
+	c := newFakeClient(t, f)
+
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
+
+	if res.Scanned {
+		t.Fatalf("expected failure, got %+v", res)
+	}
+	var perr error
+	for _, p := range res.Platforms {
+		if p.Err != nil {
+			perr = p.Err
+		}
+	}
+	if perr == nil || !strings.Contains(perr.Error(), "after one retrigger") {
+		t.Fatalf("expected persistent-error failure, got %+v", res.Platforms)
+	}
+	if strings.Contains(perr.Error(), "s3cret-token") {
+		t.Fatal("error leaks the robot token")
 	}
 }
 
 func TestFallbackCountingFromReport(t *testing.T) {
 	// Overview reaches Success but carries no severity summary → count from
-	// the full report.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/service/token" {
-			w.Write([]byte(`{"token":"fake"}`))
+	// the full report (1 critical, 1 high in testReport).
+	f := &fakeHarbor{
+		t:          t,
+		tagBody:    subManifestJSON,
+		tagDigest:  idxDigest,
+		subBodies:  map[string]string{idxDigest: subManifestJSON},
+		reportBody: testReport,
+	}
+	// Wrapper server drops the summary from the overview response.
+	noSummary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/artifacts/") && r.URL.Query().Get("with_scan_overview") == "true" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"scan_overview": map[string]any{
+					vulnerabilityReportMIME: map[string]any{"report_id": "r-1", "scan_status": "Success"},
+				},
+			})
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/additions/vulnerabilities") {
-			w.Write([]byte(twoVulnReport))
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/scan") {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		if strings.Contains(r.URL.Path, "/manifests/") {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"scan_overview": map[string]any{
-				vulnerabilityReportMIME: map[string]any{"report_id": "r-1", "scan_status": "Success"},
-			},
-		})
+		f.handler().ServeHTTP(w, r)
 	}))
-	t.Cleanup(srv.Close)
-	c := NewClient(srv.URL+"/api/v2.0", srv.URL, "ghcr-proxy", "u", "p")
+	defer noSummary.Close()
+	c := NewClient(noSummary.URL+"/api/v2.0", noSummary.URL, "ghcr-proxy", "u", "p")
 
-	res := ScanImage(context.Background(), c, testOptions(),
-		imageSpec{Name: "inari-server", Repo: testRepo, Tag: testTag}, t.TempDir())
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
 
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
@@ -246,30 +347,112 @@ func TestFallbackCountingFromReport(t *testing.T) {
 	}
 }
 
-func TestPrimeFailureFailsImage(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(srv.Close)
-	c := NewClient(srv.URL+"/api/v2.0", srv.URL, "ghcr-proxy", "u", "s3cret-token")
-
-	res := ScanImage(context.Background(), c, testOptions(),
-		imageSpec{Name: "inari-server", Repo: testRepo, Tag: "does-not-exist"}, t.TempDir())
-
-	if res.Err == nil || !strings.Contains(res.Err.Error(), "prime proxy cache") {
-		t.Fatalf("expected prime failure, got %+v", res)
+func TestUnscannableMediaTypeLoudPass(t *testing.T) {
+	// The inari-ui-bundle ORAS artifact shape: Harbor's scan POST refuses
+	// with a 400 "scanner does not support this media type". Coordinator
+	// ruling (PR #165): exactly this response maps to a loud non-blocking
+	// pass — no error, no breach, no retrigger, no report fetch.
+	f := &fakeHarbor{
+		t:         t,
+		tagBody:   subManifestJSON,
+		tagDigest: idxDigest,
+		subBodies: map[string]string{idxDigest: subManifestJSON},
+		scanPost400: map[string]string{idxDigest: `{"errors":[{"code":"BAD_REQUEST",` +
+			`"message":"the configured scanner Trivy does not support scanning artifact with mime type application/vnd.oci.image.manifest.v1+json"}]}`},
 	}
-	if strings.Contains(res.Err.Error(), "s3cret-token") {
+	c := newFakeClient(t, f)
+	dir := t.TempDir()
+
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), dir, discardLog)
+
+	if res.Err != nil {
+		t.Fatalf("unscannable must not be an image error: %v", res.Err)
+	}
+	if len(res.Platforms) != 1 || !res.Platforms[0].Unscannable || res.Platforms[0].Err != nil {
+		t.Fatalf("platform not marked unscannable: %+v", res.Platforms)
+	}
+	if !res.AllUnscannable() {
+		t.Fatal("image with only unscannable targets must be AllUnscannable")
+	}
+	if res.Breached(0) {
+		t.Fatal("unscannable must never breach the gate")
+	}
+	if f.scanPosts.Load() != 1 {
+		t.Fatalf("unscannable must not be retried, got %d POSTs", f.scanPosts.Load())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("no report exists for an unscannable artifact, found %d files", len(entries))
+	}
+}
+
+func TestScan400GenericIsAnError(t *testing.T) {
+	// A 400 that is NOT the unsupported-media-type refusal stays a plain,
+	// gate-failing error.
+	f := &fakeHarbor{
+		t:         t,
+		tagBody:   subManifestJSON,
+		tagDigest: idxDigest,
+		subBodies: map[string]string{idxDigest: subManifestJSON},
+		scanPost400: map[string]string{idxDigest: `{"errors":[{"code":"BAD_REQUEST",` +
+			`"message":"repository not configured for scanning"}]}`},
+	}
+	c := newFakeClient(t, f)
+
+	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
+
+	if res.AllUnscannable() {
+		t.Fatal("generic 400 must not map to unscannable")
+	}
+	if !res.Breached(0) {
+		t.Fatal("generic 400 must fail the gate")
+	}
+	var perr error
+	for _, p := range res.Platforms {
+		if p.Err != nil {
+			perr = p.Err
+		}
+	}
+	if perr == nil || !strings.Contains(perr.Error(), "HTTP 400") {
+		t.Fatalf("expected POST scan 400 error, got %+v", res.Platforms)
+	}
+	if strings.Contains(perr.Error(), "s3cret-token") {
 		t.Fatal("error leaks the robot token")
 	}
 }
 
+func TestResolveTargetsSkipsAttestations(t *testing.T) {
+	f := multiArchFake(t)
+	c := newFakeClient(t, f)
+	tok, err := c.registryToken(context.Background(), testRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := c.ResolveTargets(context.Background(), tok, testRepo, testTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets, got %+v", targets)
+	}
+	for _, tgt := range targets {
+		if tgt.Digest == subAttest {
+			t.Fatal("attestation manifest not skipped")
+		}
+	}
+}
+
 func TestArtifactPathDoubleEncoding(t *testing.T) {
-	c := NewClient("https://harbor.example/api/v2.0", "https://harbor.example", "ghcr-proxy", "u", "p")
+	c := NewClient("http://harbor/api/v2.0", "http://harbor", "ghcr-proxy", "u", "p")
 	got := c.artifactPath(testRepo, testTag)
-	want := "https://harbor.example/api/v2.0/projects/ghcr-proxy/repositories/7k-inari%252Finari-server/artifacts/1.2.3"
+	want := "http://harbor/api/v2.0/projects/ghcr-proxy/repositories/7k-inari%252Finari-server/artifacts/2.0.0"
 	if got != want {
 		t.Fatalf("artifactPath:\n got %s\nwant %s", got, want)
+	}
+	// Digests keep their raw colon (Go's PathEscape leaves it; Harbor accepts
+	// it — live-verified).
+	got = c.artifactPath(testRepo, "sha256:abc")
+	if !strings.HasSuffix(got, "/artifacts/sha256:abc") {
+		t.Fatalf("digest reference mangled: %s", got)
 	}
 }
 
@@ -300,7 +483,7 @@ func TestImagesFromEnv(t *testing.T) {
 	if images[2].Tag != "v0.6.0" {
 		t.Fatalf("agent tag not normalized: %q", images[2].Tag)
 	}
-	images, missing = imagesFromEnv(func(string) string { return "" })
+	_, missing = imagesFromEnv(func(string) string { return "" })
 	if len(missing) != 3 {
 		t.Fatalf("expected 3 missing, got %v", missing)
 	}
@@ -313,8 +496,12 @@ func TestParseThreshold(t *testing.T) {
 	if n, err := parseThreshold("3"); err != nil || n != 3 {
 		t.Fatalf("3: %d %v", n, err)
 	}
-	if _, err := parseThreshold("-1"); err == nil {
-		t.Fatal("negative accepted")
+	// -1 is the deliberate force-fail self-check (Critical ≥ 0 > -1).
+	if n, err := parseThreshold("-1"); err != nil || n != -1 {
+		t.Fatalf("-1 (force-fail): %d %v", n, err)
+	}
+	if _, err := parseThreshold("-2"); err == nil {
+		t.Fatal("-2 accepted")
 	}
 	if _, err := parseThreshold("soon"); err == nil {
 		t.Fatal("non-integer accepted")
@@ -322,9 +509,13 @@ func TestParseThreshold(t *testing.T) {
 }
 
 func TestReportFileName(t *testing.T) {
-	got := reportFileName(imageSpec{Name: "inari-server", Tag: "1.2.3"})
-	if got != "inari-server-1.2.3-vulnerabilities.json" {
+	got := reportFileName(testImage(), PlatformResult{Platform: "linux/amd64"})
+	if got != "inari-server-2.0.0-linux-amd64-vulnerabilities.json" {
 		t.Fatalf("unexpected file name %q", got)
+	}
+	got = reportFileName(testImage(), PlatformResult{})
+	if got != "inari-server-2.0.0-image-vulnerabilities.json" {
+		t.Fatalf("unexpected single-manifest file name %q", got)
 	}
 	if strings.Contains(got, "/") {
 		t.Fatal("file name contains a path separator")
