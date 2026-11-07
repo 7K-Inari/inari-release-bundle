@@ -136,6 +136,17 @@ choice.
 6. **Harbor scan-gate robot** (release gate only — runs without it fail loud
    at the scan leg): see §Harbor scan gate → Prerequisites (robot account +
    Vault `inari-e2e/harbor-robot` + scan-on-push + daily re-scan).
+7. **ReportPortal sweeper credential** (quarantine pipeline — without it the
+   GHA quarantine-sweep skips its ReportPortal leg with a warning; expiry +
+   budget still run): create local user **`e2e-sweeper`** assigned to project
+   `inari-e2e` with role **CUSTOMER** (read-mostly — MEMBER can edit items,
+   do not use), generate an API key, and store it as the GitHub repo secret
+   **`REPORTPORTAL_API_KEY`** on `7K-Inari/inari-release-bundle`. The
+   importer key is NOT reused — it stays cluster-only. The sweep calls the
+   public route `https://reportportal.7kgroup.org` from GitHub-hosted
+   runners — route LIVE (7k-app-of-apps#40, internet-gateway, grey-cloud;
+   resolves to the origin IP and answers 401 without a key, verified
+   2026-11-07).
 
 DNS needs no action: external-dns creates the records from the HTTPRoute
 annotations (same mechanism as the live instance, proxied flag flipped).

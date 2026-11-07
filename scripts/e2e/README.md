@@ -86,7 +86,9 @@ Argo (cluster, ns inari-e2e)
                                 stable inari-server release)
 
 e2e-nightly.yaml  (GHA remainder, cron + dispatch, non-blocking — no cluster
-                   legs: quarantine-sweep + the docker-only kubectl-tunnel
+                   legs: quarantine-sweep (ReportPortal-fed: files/expires
+                   e2e-flake issues + the pinned quarantine budget;
+                   issues:write, no cluster) + the docker-only kubectl-tunnel
                    scenario)
 ```
 
@@ -105,11 +107,12 @@ The gate NEVER runs a quarantined test — the direct analog of inari-server's
   `npx playwright test --config playwright.config.ci.ts --grep @p0 --grep-invert @quarantine`.
   CI runs with `retries: 2`, so a test that passes only after a retry is
   green in the gate but recorded as a flake candidate.
-- **Flake reporter** (`ui/report-flakes.mjs`): post-processes the Playwright
-  JSON report after every CI run, logs a summary, and writes
-  `test-results/flake-report.json` (test title, file, run id, timestamp,
-  branch). (Retirement is owned by M1W10 — ReportPortal trends replace it —
-  together with the quarantine-sweep re-pointing.)
+- **Flake history** lives in ReportPortal (project `inari-e2e`): every suite
+  leg's JUnit imports as one launch per run (name `<mode>-<uid>`, attribute
+  `mode:nightly`), so a test passing only after a retry shows as mixed
+  FAILED+PASSED items and a recurring failure as all-FAILED across launches.
+  (`ui/report-flakes.mjs` + the `ui-e2e-flakes-*` artifacts were retired with
+  the ReportPortal feed.)
 - **Quarantine policy** (manual part): when an `e2e-flake` issue is triaged,
   tag the test `@quarantine` in its spec title. Quarantined tests are
   excluded from the gate (`--grep-invert @quarantine`) and run only in the
@@ -122,12 +125,19 @@ The gate NEVER runs a quarantined test — the direct analog of inari-server's
   (`p0||p1||p2`) always does — the label analog of inari-server's `flaky`
   build tag. De-quarantine by removing the label once stable in the nightly
   for ~2 weeks.
-- **Quarantine automation** (`ui/quarantine-issues.mjs`, nightly only):
-  aggregates the last 7 days of `ui-e2e-flakes-*` artifacts; a test flaky in
-  2+ nightly runs within the window gets an issue titled
-  `[flake] <test path> — <test title>` labeled `e2e-flake`. Dedupe is by
-  test path: an open issue for the same path gets a comment with the new
-  occurrences instead of a duplicate.
+- **Quarantine automation** (`ui/quarantine-issues.mjs`, nightly only —
+  docs/e2e/test-taxonomy.md §4): queries ReportPortal for tests unstable
+  (flaky or recurring-failure) in 2+ nightly launches within 7 days and
+  files/dedupes issues titled `[flake]|[failure] <test path> — <test title>`
+  labeled `e2e-flake` (an open issue for the same test gets a comment with
+  the new occurrences). It also enforces the **expiry policy** (14 days
+  without human activity ⇒ warning comment; 30 days ⇒ escalation comment +
+  `quarantine-overdue` label — fix, re-scope, or delete the test) and
+  maintains the pinned `[quarantine-budget]` issue with the
+  quarantined-test count (budget 10). Auth: read-only `REPORTPORTAL_API_KEY`
+  repo secret (RP user `e2e-sweeper`, CUSTOMER role — owner action, see
+  `gitops/e2e/README.md` §Prerequisites); `DRY_RUN=1` plans without
+  mutating GitHub. ReportPortal visualizes, GitHub issues act.
 
 ## Running locally
 

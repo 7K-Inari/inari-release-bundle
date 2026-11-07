@@ -124,35 +124,51 @@ Notes:
 
 ## 4. Quarantine lifecycle
 
-Flake containment pipeline (Playwright side exists today; the Ginkgo side
-adopts it during the restructure):
+Flake containment pipeline (one mechanism across Ginkgo, Playwright, and
+Chainsaw — all suites land in the same ReportPortal launch):
 
-1. **Detect.** The nightly runs the full surface including quarantined
-   tests, with `continue-on-error`. CI Playwright runs use `retries: 2` — a
-   test that passes only on retry is green in the gate but recorded as a
-   flake candidate.
+1. **Detect.** The nightly CronWorkflow runs the full surface including
+   quarantined tests. CI Playwright runs use `retries: 2`, so a test that
+   passes only on a retry imports into ReportPortal as mixed FAILED+PASSED
+   items under one launch (skipped testcases are dropped at import, so item
+   statuses are clean signal); a test failing outright imports all-FAILED.
 2. **File.** `ui/quarantine-issues.mjs` (nightly, stays in GHA — needs
-   `issues:write`, no cluster) aggregates the last 7 days of flake reports;
-   a test flaky in 2+ nightly runs gets an issue
-   `[flake] <test path> — <test title>` labeled `e2e-flake` (dedupe by test
-   path; an open issue gets a comment instead of a duplicate).
+   `issues:write`, no cluster) queries ReportPortal for the last 7 days of
+   nightly launches (launch name `nightly-*`, attribute `mode:nightly`) and
+   groups items by stable test identity (pathNames + name; the RP
+   `uniqueId` is launch-specific). A test unstable in 2+ nightly launches
+   gets an issue `[flake]|[failure] <test path> — <test title>` labeled
+   `e2e-flake` (dedupe by test identity; an open issue gets a comment
+   instead of a duplicate). The workflow's synthetic anchors
+   (`e2e.run`/`workflow-outcome`, `upgrade`) and already-quarantined tests
+   are excluded. Auth: the `REPORTPORTAL_API_KEY` repo secret (read-only RP
+   user `e2e-sweeper`, project role CUSTOMER — owner action, see
+   `gitops/e2e/README.md` §Prerequisites; the importer key stays
+   cluster-only). Missing key/unreachable RP ⇒ the sweep skips with a
+   warning and stays exit-0.
 3. **Quarantine.** A human tags the test `quarantine` (and the issue
    number/reason in a comment). It immediately stops blocking gates.
-4. **Expiry (new policy).** The quarantine-sweep gains the 14/30-day
-   policy: a quarantined test with no fix activity for **14 days** gets a
-   warning comment on its issue; at **30 days** the issue is escalated
-   (the test is either fixed, re-scoped, or deleted — quarantine is a
-   remediation queue, not a graveyard).
-5. **Budget visibility.** The sweep maintains the **quarantined-test
-   count** (Ginkgo + Playwright, counted from the specs) in a pinned
-   tracking issue — the quarantine-budget signal without a metrics
-   dashboard (Grafana is descoped).
+4. **Expiry.** Implemented in the sweep: an open `e2e-flake` issue with no
+   **human** activity for **14 days** gets one warning comment (marker
+   `quarantine-sweep:warn-14d`); at **30 days** one escalation comment
+   (marker `quarantine-sweep:escalate-30d`) plus the `quarantine-overdue`
+   label — the test must then be fixed, re-scoped, or deleted. Bot/sweep
+   comments never reset the clock; any human comment does. The sweep never
+   closes issues and never deletes tests — quarantine is a remediation
+   queue, not a graveyard, and enforcement is human.
+5. **Budget visibility.** Implemented in the sweep: the **quarantined-test
+   count** (Playwright `@quarantine` tags + Ginkgo `LabelQuarantine`
+   labels, counted from the specs) is maintained in a pinned
+   `[quarantine-budget]` tracking issue; over `QUARANTINE_BUDGET` (default
+   10) the body flags it and the sweep comments. This is the
+   quarantine-budget signal without a metrics dashboard (Grafana is
+   descoped).
 6. **De-quarantine.** Remove the label and close the issue once the test
    has been stable in the nightly for ~2 weeks.
 
-`ui/report-flakes.mjs` is retired once ReportPortal's analyzer covers flake
-detection; `quarantine-issues.mjs` (the GitHub-issue pipeline) is **kept** —
-ReportPortal visualizes, GitHub issues *act*.
+`ui/report-flakes.mjs` is **retired** (deleted; ReportPortal history
+replaces it); `quarantine-issues.mjs` (the GitHub-issue pipeline) is
+**kept** — ReportPortal visualizes, GitHub issues *act*.
 
 ---
 
