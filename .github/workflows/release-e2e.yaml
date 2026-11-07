@@ -298,7 +298,7 @@ jobs:
           LAUNCH: release-${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR" --body "$(cat <<EOF
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
           ### e2e release gate (Argo Workflows)
 
           Submitted \`$WF\` to the persistent e2e environment (mode=release —
@@ -355,7 +355,7 @@ jobs:
           else
             result="❌ **FAILED** — \`$WF\` (or the wait budget elapsed; the Argo run may still be in flight)"
           fi
-          gh pr comment "$PR" --body "$(cat <<EOF
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
           ### e2e release gate — result
 
           $result
