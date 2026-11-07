@@ -305,7 +305,7 @@ jobs:
           exact candidate artifact set, cosign on, quarantined excluded).
 
           - **Argo UI:** https://argo-workflows.7kgroup.org/workflows/inari-e2e/$WF
-          - **ReportPortal launch:** [\`$LAUNCH\`](https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all?filter.eq.name=$LAUNCH) — JUnit imports at run end, including on failure/abort
+          - **ReportPortal launch:** [\`$LAUNCH\`](https://reportportal.7kgroup.org/ui/#inari-e2e/launches/all?filter.eq.name=$LAUNCH) — JUnit imports at run end, including on failure/abort
 
           This check waits for the workflow and reports its result.
           EOF
@@ -361,7 +361,7 @@ jobs:
           $result
 
           - **Argo UI:** https://argo-workflows.7kgroup.org/workflows/inari-e2e/$WF
-          - **ReportPortal launch:** [\`$LAUNCH\`](https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all?filter.eq.name=$LAUNCH)
+          - **ReportPortal launch:** [\`$LAUNCH\`](https://reportportal.7kgroup.org/ui/#inari-e2e/launches/all?filter.eq.name=$LAUNCH)
           EOF
           )"
 

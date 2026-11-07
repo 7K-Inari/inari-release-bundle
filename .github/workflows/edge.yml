@@ -190,4 +190,4 @@ jobs:
             -o name)
           echo "submitted $name"
           echo "watch: https://argo-workflows.7kgroup.org/workflows/inari-e2e/$name"
-          echo "reportportal: launch edge-$RUN_ID — https://reportportal.int.7kgroup.org/ui/#inari-e2e/launches/all (JUnit imports at run end)"
+          echo "reportportal: launch edge-$RUN_ID — https://reportportal.7kgroup.org/ui/#inari-e2e/launches/all (JUnit imports at run end)"
