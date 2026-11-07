@@ -71,10 +71,44 @@ func (c *Client) do(ctx context.Context, method, u string) (int, []byte, error) 
 	return resp.StatusCode, body, nil
 }
 
+// registryToken fetches a registry pull token from Harbor's token service
+// (hosted on core, next to the /v2/ proxy) with robot basic auth. The e2e
+// defaults point at the in-cluster core service, so the whole flow stays on
+// service DNS — no gateway/DNS/TLS in the gate path.
+func (c *Client) registryToken(ctx context.Context, repo string) (string, error) {
+	u := fmt.Sprintf("%s/service/token?service=harbor-registry&scope=%s",
+		c.registry, url.QueryEscape("repository:"+c.project+"/"+repo+":pull"))
+	code, body, err := c.do(ctx, http.MethodGet, u)
+	if err != nil {
+		return "", err
+	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("registry token: HTTP %d", code)
+	}
+	var tok struct {
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(body, &tok); err != nil {
+		return "", fmt.Errorf("parse registry token: %w", err)
+	}
+	if t := tok.Token; t != "" {
+		return t, nil
+	}
+	if t := tok.AccessToken; t != "" {
+		return t, nil
+	}
+	return "", fmt.Errorf("registry token response carries no token")
+}
+
 // PrimeManifest performs a manifest-only pull through the proxy-cache project
 // so the artifact is registered in Harbor before any API call touches it: a
 // proxy-cache artifact exists only after something pulls it through.
 func (c *Client) PrimeManifest(ctx context.Context, repo, tag string) error {
+	tok, err := c.registryToken(ctx, repo)
+	if err != nil {
+		return err
+	}
 	u := fmt.Sprintf("%s/v2/%s/%s/manifests/%s",
 		c.registry, url.PathEscape(c.project), repo, url.PathEscape(tag))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -82,7 +116,7 @@ func (c *Client) PrimeManifest(ctx context.Context, repo, tag string) error {
 		return err
 	}
 	req.Header.Set("Accept", manifestAccept)
-	req.SetBasicAuth(c.user, c.token)
+	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return err

@@ -32,8 +32,21 @@ const testEscRepo = "7k-inari%252Finari-server"
 
 func (f *fakeHarbor) handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/service/token", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Query().Get("scope"), "repository:ghcr-proxy/"+testRepo+":pull") {
+			f.t.Errorf("token request scope wrong: %q", r.URL.Query().Get("scope"))
+		}
+		user, _, ok := r.BasicAuth()
+		if !ok || user == "" {
+			f.t.Error("token request without robot basic auth")
+		}
+		w.Write([]byte(`{"token":"fake-registry-token"}`))
+	})
 	mux.HandleFunc("/v2/ghcr-proxy/"+testRepo+"/manifests/"+testTag, func(w http.ResponseWriter, r *http.Request) {
 		f.primePulls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer fake-registry-token" {
+			f.t.Errorf("manifest pull without the registry Bearer token: %q", r.Header.Get("Authorization"))
+		}
 		if !strings.Contains(r.Header.Get("Accept"), "oci.image.manifest") {
 			f.t.Errorf("manifest pull missing OCI Accept header")
 		}
@@ -197,6 +210,10 @@ func TestFallbackCountingFromReport(t *testing.T) {
 	// Overview reaches Success but carries no severity summary → count from
 	// the full report.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/service/token" {
+			w.Write([]byte(`{"token":"fake"}`))
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/additions/vulnerabilities") {
 			w.Write([]byte(twoVulnReport))
 			return
