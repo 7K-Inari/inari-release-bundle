@@ -1820,17 +1820,30 @@ spec:
             exit 1
           fi
           echo "== extracting artifacts from runner pod $RUNNER"
+          # JUnit extraction: the log sentinels are PRIMARY. V3 smoke
+          # (2026-11-07) proved kubectl cp can never be the primary path —
+          # the runner pod is already phase=Succeeded when the TestRun hits
+          # stage=finished, and exec (which cp rides on) refuses completed
+          # pods ("cannot exec into a container in a completed pod").
+          # logs works on completed pods, and k6 writes handleSummary's
+          # 'stdout' key (console summary + ---K6-JUNIT--- sentinels) to real
+          # stdout even under the operator's default --quiet (verified
+          # against k6 v2.3.0 handleSummaryResult: c.gs.Stdout, ungated).
+          # cp remains as a last resort for the pathological case (hung k6
+          # killed by the step deadline: pod still Running, no sentinels).
           kubectl -n inari-e2e logs "$RUNNER" > /artifacts/out/runner.log 2>&1 \
             || echo "WARNING: runner log capture failed (pod $RUNNER missing?)"
 
           JUNIT_OK=""
-          if kubectl -n inari-e2e cp "$RUNNER:/tmp/junit.xml" /artifacts/out/junit.xml 2>/tmp/cp.err; then
+          awk '/---K6-JUNIT-BEGIN---/{f=1;next}/---K6-JUNIT-END---/{f=0}f' /artifacts/out/runner.log > /artifacts/out/junit.xml
+          if [ -s /artifacts/out/junit.xml ] && grep -q '</testsuites>' /artifacts/out/junit.xml; then
             JUNIT_OK=1
           else
-            echo "WARNING: kubectl cp failed ($(head -c 200 /tmp/cp.err)) — falling back to the log sentinels"
-            awk '/---K6-JUNIT-BEGIN---/{f=1;next}/---K6-JUNIT-END---/{f=0}f' /artifacts/out/runner.log > /artifacts/out/junit.xml
-            if [ -s /artifacts/out/junit.xml ] && grep -q '</testsuites>' /artifacts/out/junit.xml; then
+            echo "WARNING: no JUnit sentinels in the runner log — trying kubectl cp as a last resort"
+            if kubectl -n inari-e2e cp "$RUNNER:/tmp/junit.xml" /artifacts/out/junit.xml 2>/tmp/cp.err; then
               JUNIT_OK=1
+            else
+              echo "WARNING: kubectl cp failed too ($(head -c 200 /tmp/cp.err))"
             fi
           fi
           [ -n "$JUNIT_OK" ] \

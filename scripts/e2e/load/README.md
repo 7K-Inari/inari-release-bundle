@@ -44,7 +44,10 @@ identically from a local checkout and inside the runner pod.
   the ReportPortal import path tolerates by construction (PRs #145/#147).
   `handleSummary` also returns the `stdout` key (exporting it suppresses the
   console summary otherwise) and prints the JUnit between `---K6-JUNIT-*---`
-  sentinels as the logs-based extraction fallback.
+  sentinels — the PRIMARY extraction path: the k6-run step reads it from the
+  runner pod log (runner pods are already Completed at `stage=finished`, so
+  `kubectl cp`/exec cannot work; the cp attempt remains only as a last
+  resort for still-Running pathological pods).
 - `testrun-template.yaml` — the TestRun manifest rendered by the workflow
   step (envsubst). Never set `spec.cleanup=post` (it would race the
   artifact extraction).

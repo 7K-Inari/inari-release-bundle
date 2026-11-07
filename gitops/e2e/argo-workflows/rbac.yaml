@@ -648,8 +648,8 @@ type: kubernetes.io/service-account-token
 ---
 # e2e-load — the k6 load legs (W7; k6-run template in the e2e-stack
 # WorkflowTemplate). Creates TestRuns + script ConfigMaps, watches runner
-# pods, extracts artifacts (pods/exec for kubectl cp, pods/log for the
-# sentinel fallback), then deletes both. Deliberately NO secrets access:
+# pods, extracts artifacts (pods/log for the sentinel-primary JUnit
+# extraction, pods/exec for the kubectl cp last resort), then deletes both. Deliberately NO secrets access:
 # persona passwords resolve kubelet-side in the runner pods (env valueFrom).
 apiVersion: v1
 kind: ServiceAccount
@@ -681,7 +681,9 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "create", "delete"]
-  # Runner pods: stage polling, log capture, kubectl cp extraction.
+  # Runner pods: stage polling, log capture (the JUnit sentinel source),
+  # kubectl cp last resort (needs pods/exec; only viable on still-Running
+  # pods — completed pods refuse exec).
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]

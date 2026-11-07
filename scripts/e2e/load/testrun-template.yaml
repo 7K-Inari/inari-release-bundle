@@ -8,8 +8,10 @@
 # raising it is a one-line change once a scenario needs distributed load.
 #
 # NEVER set spec.cleanup=post: the k6-run step extracts the JUnit from the
-# runner pod before deleting the TestRun, and post-cleanup would race that
-# extraction (operator deletes the pods at run end).
+# runner pod's LOG (sentinel block; the pod is already Completed at
+# stage=finished, so kubectl cp/exec cannot work — V3 smoke 2026-11-07)
+# before deleting the TestRun, and post-cleanup would race that extraction
+# (operator deletes the pods at run end).
 apiVersion: k6.io/v1alpha1
 kind: TestRun
 metadata:
