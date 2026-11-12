@@ -74,13 +74,18 @@ export function directGrant(username, password) {
   };
 }
 
-// bearer returns a cached per-VU dev-admin token, refreshing at expiry.
+// bearer returns a cached per-VU token for username (dev-admin by default),
+// refreshing at expiry. A scenario uses one identity per VU (one cache slot).
 // Scenarios must additionally retry once on a 401 (a token can be invalidated
 // early by a mid-run realm re-import) via invalidateBearer().
 let cached = null;
-export function bearer() {
+export function bearer(username = PERSONAS[0].user) {
+  const persona = PERSONAS.find((p) => p.user === username);
+  if (!persona) {
+    throw new Error(`unknown load persona ${username}`);
+  }
   if (!cached || Date.now() > cached.expiresAt) {
-    cached = directGrant(PERSONAS[0].user, PERSONAS[0].password);
+    cached = directGrant(persona.user, persona.password);
     tokenRefreshes.add(1);
     if (!cached.ok) {
       throw new Error(`token acquisition failed (HTTP ${cached.status}) — env not seeded?`);
