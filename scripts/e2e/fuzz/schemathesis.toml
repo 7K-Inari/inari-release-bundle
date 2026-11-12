@@ -5,6 +5,7 @@
 # /api/v1, so base-url is the origin root (never .../api/v1 here).
 
 color = false
+hooks = "keycloak_auth"
 base-url = "https://${E2E_BASE_DOMAIN}"
 headers = { Authorization = "Bearer ${E2E_TOKEN}" }
 workers = 1
