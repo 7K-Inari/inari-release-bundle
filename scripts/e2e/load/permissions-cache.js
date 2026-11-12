@@ -1,6 +1,9 @@
 // Scenario: permissions-cache (taxonomy §1.3 `load`; W7 spec §4.1).
 // Hammers GET /api/v1/me/permissions — the PEP tenant-cache hot path
 // (inari-server decision 0010) — and gates on error rate + p95 latency.
+// Uses e2e-viewer's fixed e2e-org membership, NOT dev-admin: the outbox leg
+// creates tenants as dev-admin, whose permissions cost/response grows with
+// those retained memberships and would make repeated runs self-poisoning.
 // Initial thresholds are deliberately conservative (W7 D7); calibrate after
 // the first weekly runs. Load shape is env-tunable (LOAD_RATE/LOAD_DURATION)
 // so acceptance runs can shrink it.
@@ -28,14 +31,14 @@ export const options = {
 
 export default function () {
   let res = http.get(`${apiBase()}/me/permissions`, {
-    headers: { Authorization: `Bearer ${bearer()}` },
+    headers: { Authorization: `Bearer ${bearer('e2e-viewer')}` },
     tags: { endpoint: 'me-permissions' },
   });
   if (res.status === 401) {
     // Token invalidated mid-run (e.g. realm re-import) — refresh once.
     invalidateBearer();
     res = http.get(`${apiBase()}/me/permissions`, {
-      headers: { Authorization: `Bearer ${bearer()}` },
+      headers: { Authorization: `Bearer ${bearer('e2e-viewer')}` },
       tags: { endpoint: 'me-permissions' },
     });
   }

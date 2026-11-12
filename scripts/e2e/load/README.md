@@ -11,13 +11,16 @@ run Failed → ReportPortal signal) but never block a release.
 
 | Script | Target | Profile (defaults) | Threshold gates (initial, conservative — calibrate after the first weekly runs) |
 |---|---|---|---|
-| `permissions-cache.js` | `GET /api/v1/me/permissions` (PEP tenant-cache hot path, inari-server decision 0010) | constant-arrival-rate 50 rps, 10m | `http_req_failed<1%`, `p(95)<500ms`, `checks>99%` |
+| `permissions-cache.js` | `GET /api/v1/me/permissions` as `e2e-viewer` (PEP tenant-cache hot path, inari-server decision 0010) | constant-arrival-rate 50 rps, 10m | `http_req_failed<1%`, `p(95)<500ms`, `checks>99%` |
 | `login-storm.js` | Keycloak token endpoint (`/realms/inari/.../token`, direct grant, rotating personas) | ramp 0→30 VUs (2m), hold 8m, down 1m | `http_req_failed<2%`, `p(95)<2s`, `checks>99%` |
 | `provisioning-outbox.js` | `POST /api/v1/tenants` write path + read-after-write materialization (the NATS outbox/JetStream relay assertion) | 1 VU, ~20 creates over 5m, 15s pace | `http_req_failed<5%`, create `p(95)<5s`, `tenant_visible_seconds p(95)<10s`, `checks>95%` |
 
 Load-created tenants use janitor-reapable slugs (`e2e-<runid>-load-<n>`) and
 are deliberately not deleted by the scenario — decommission is a four-eyes
-approval flow owned by the janitor CronWorkflow.
+approval flow owned by the janitor CronWorkflow. `permissions-cache` uses
+`e2e-viewer` (fixed `e2e-org` membership), not the outbox scenario's dev-admin
+identity: dev-admin's permissions cost and response size grow with every
+retained tenant it creates, which otherwise makes the next run self-poisoning.
 
 **kubeproxy/tunnel throughput is intentionally NOT covered** (W7 D4):
 kubeproxy is disabled on the e2e env (`kubeproxy.enabled: false`) and the
@@ -42,6 +45,9 @@ identically from a local checkout and inside the runner pod.
   never egress to jslib.k6.io. Its `jUnit()` emits one plain pass/fail
   `<testcase>` per threshold — no `time` attributes, no `<skipped/>` — which
   the ReportPortal import path tolerates by construction (PRs #145/#147).
+  Both the testsuite name and testcase classname are `k6.<scenario>`:
+  ReportPortal uses the suite name for its item hierarchy (and ignores the
+  classname), so this keeps the three scenarios distinguishable in a launch.
   `handleSummary` also returns the `stdout` key (exporting it suppresses the
   console summary otherwise) and prints the JUnit between `---K6-JUNIT-*---`
   sentinels — the PRIMARY extraction path: the k6-run step reads it from the
