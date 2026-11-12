@@ -4,9 +4,8 @@
 # sequential k6-operator TestRuns, thresholds gating via the runner exit
 # code. LitmusChaos legs join this same slot in W9 (taxonomy `chaos`).
 #
-# SUSPENDED until the W7 acceptance run proves the legs (spec §9 V4/V5):
-# unsuspend after a manual mode=weekly submission goes green end-to-end and
-# the ReportPortal launch shows the three k6 testsuites.
+# Enabled after the W7 acceptance run (2026-11-12): all three legs went green
+# end-to-end and ReportPortal launch 72 recorded the three named k6 testsuites.
 #
 # Ordering vs the nightly reset is deliberate: Saturday 02:17 UTC leaves ~23h
 # before the Sunday 01:17 nightly-reset CronWorkflow — the plan's "load/chaos
@@ -19,7 +18,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: inari-e2e-workflows
 spec:
-  suspend: true
+  suspend: false
   # Saturday 02:17 UTC — off-peak, ahead of the reset window.
   schedules: ["17 2 * * 6"]
   concurrencyPolicy: Forbid

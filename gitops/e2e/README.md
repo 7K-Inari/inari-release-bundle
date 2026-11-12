@@ -227,7 +227,7 @@ lives in 7k-app-of-apps (W1).
 | `harbor-scanner-secret.yaml` | ESO ExternalSecret syncing the Harbor scan-gate robot credentials (Vault `inari-e2e/harbor-robot`); the scan gate fails LOUD until the owner provisions it — a release gate never silently skips (§Harbor scan gate) |
 | `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-*` orgs older than retention-days (contract invariant 6), skipping `e2e-org` + active runs; every 6h. Two identities: requests as dev-admin, approves as **e2e-ops** (lifecycle approvals are never self-decidable) |
 | `cronworkflow-nightly.yaml` | 03:17 UTC full surface incl. quarantined, edge images, env-wide HA flip |
-| `cronworkflow-weekly.yaml` | **Suspended** (W7 acceptance pending) — Saturday 02:17 UTC `mode=weekly`: the k6 load legs (never in PR/release gates). Sits ~23h ahead of the nightly-reset — the plan's "load/chaos the night before the reset" ordering; chaos legs join this slot in W9 |
+| `cronworkflow-weekly.yaml` | **Enabled after W7 acceptance** (2026-11-12) — Saturday 02:17 UTC `mode=weekly`: the k6 load legs (never in PR/release gates). Sits ~23h ahead of the nightly-reset — the plan's "load/chaos the night before the reset" ordering; chaos legs join this slot in W9 |
 | `cronworkflow-nightly-reset.yaml` | **Suspended placeholder** (restore-from-backup needs CNPG barman wiring in env-extras first) |
 | `semaphore-e2e-env-lock.yaml` | One permit — serializes every run against the single env |
 | `rbac.yaml` | Runner SAs (e2e-runner default; e2e-seed, e2e-agent-ensure, e2e-chainsaw-hook, e2e-load per step; e2e-submitter for the GHA wrappers), the env-prep Application-patch Role in ns argocd, the controller semaphore-write fix, and the e2e agent namespace + cluster RBAC |
