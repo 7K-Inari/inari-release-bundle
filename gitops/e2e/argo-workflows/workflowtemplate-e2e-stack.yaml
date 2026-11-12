@@ -24,6 +24,10 @@
 # - W7 (landed): weekly mode gains the k6 load legs (k6-run template × 3
 #   scenarios, sequential, mode==weekly only). Load NEVER runs in PR or
 #   release gates (hard rule 6); thresholds gate via the runner exit code.
+# - W8: nightly mode gains a serialized Schemathesis fuzz leg AFTER the
+#   Ginkgo/Playwright outcomes. It pulls the OpenAPI OCI tag matching
+#   server-image, scopes writes to one run-owned tenant, and archives JUnit +
+#   replay artifacts. Fuzz never runs in release/edge/upgrade/smoke/weekly.
 # - W5 (upgrade leg, plan §10): mode=upgrade prepends a previous-stable phase
 #   — resolve-previous (latest stable chart release git tags + ghcr stable
 #   image tags) → env-prep-previous → upgrade-fixture (pre-upgrade data) →
@@ -262,6 +266,13 @@ spec:
             template: upgrade-assert
             depends: seed
             when: "{{workflow.parameters.mode}} == upgrade"
+          # Nightly-only W8 fuzz: serialized after BOTH suites to avoid random
+          # writes racing their assertions. A red sibling must not starve the
+          # fuzz signal, hence the explicit Failed/Errored disjunctions.
+          - name: fuzz
+            template: fuzz
+            depends: (ginkgo.Succeeded || ginkgo.Failed || ginkgo.Errored) && (playwright.Succeeded || playwright.Failed || playwright.Errored)
+            when: "{{workflow.parameters.mode}} == nightly"
           # --- weekly mode only (W7): k6 load legs -------------------------
           # Sequential (D5 — measurement isolation: a login storm concurrent
           # with a latency measurement confounds both). Depend on seed, not
@@ -1717,6 +1728,116 @@ spec:
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/apischema/junit.xml
 
+    # -------------------------------------------------------------------- fuzz
+    # W8 nightly Schemathesis (taxonomy §1.3): pulls the OpenAPI artifact whose
+    # tag EXACTLY matches the deployed server-image (never a silent edge
+    # fallback), then runs the checked-in safety/budget contract. DELETE and
+    # seeded persona/RBAC mutations are disabled; every tenant path targets
+    # e2e-<uid>-fuzz (ensured once by the runner; createTenant itself is
+    # excluded to avoid duplicate-create 500s — inari-server #216).
+    - name: fuzz
+      activeDeadlineSeconds: 2400
+      # The official Schemathesis image runs as uid/gid 1000; make the
+      # root-owned emptyDir mounts writable without running the container root.
+      podSpecPatch: '{"securityContext":{"fsGroup":1000,"fsGroupChangePolicy":"OnRootMismatch"}}'
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: spec
+          emptyDir: {}
+        - name: artifacts
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+        - name: pull-openapi
+          image: ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if ! oras pull -o /spec "$SPEC"; then
+                echo "fuzz: no spec tag for server-image {{workflow.parameters.server-image}} — publish pipeline gap or bad manual submit" >&2
+                exit 1
+              fi
+              if [ ! -s /spec/dist/openapi.yaml ]; then
+                echo "fuzz: $SPEC did not contain dist/openapi.yaml" >&2
+                exit 1
+              fi
+          env:
+            - name: SPEC
+              value: ghcr.io/7k-inari/inari-server-openapi:{{workflow.parameters.server-image}}
+          volumeMounts:
+            - name: spec
+              mountPath: /spec
+      script:
+        image: schemathesis/schemathesis:4.33.4@sha256:708d934c8208a8f785bdf1b1610476e691f1efda0b7a3cb9ce7536d0f3280eec
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_RUN_ID
+            value: "{{workflow.uid}}"
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          - name: E2E_FUZZ_ORG
+            value: e2e-{{workflow.uid}}-fuzz
+        source: |
+          set -eu
+          sh /work/scripts/e2e/fuzz/run.sh /spec/dist/openapi.yaml
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: spec
+            mountPath: /spec
+          - name: artifacts
+            mountPath: /artifacts
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/fuzz/junit.xml
+          - name: report
+            path: /artifacts/report
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/fuzz/report
+
     # ---------------------------------------------------------------- k6-run
     # k6 load legs (W7, taxonomy §1.3 `load`; weekly mode only — the DAG
     # tasks when-gate on it). One parameterized template per scenario
@@ -1977,6 +2098,25 @@ spec:
                 name: argo-workflows-s3-credentials
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/apischema/junit.xml
+          # Nightly mode only (W8): Schemathesis JUnit. The shared import-copy
+          # normalization below strips skipped testcases/empty time attrs.
+          - name: fuzz-junit
+            optional: true
+            path: /junit/fuzz-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/fuzz/junit.xml
           # Upgrade mode only (W5): the upgrade leg's synthetic JUnit.
           - name: upgrade-junit
             optional: true

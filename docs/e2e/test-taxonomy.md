@@ -47,6 +47,7 @@ triage, never for gating decisions on their own:
 | Label | Suite | Rule |
 |---|---|---|
 | `load` | k6 via k6-operator TestRuns — realized (W7) as the sequential `k6-run` legs of the e2e-stack template (`mode=weekly`; `scripts/e2e/load/`), not a Ginkgo/Playwright label | **Never** in PR or release gates; weekly CronWorkflow only |
+| `fuzz` | Schemathesis via the `fuzz` leg of the e2e-stack template (`mode=nightly`; `scripts/e2e/fuzz/`), not a Ginkgo/Playwright label | **Never** in PR or release gates; nightly only, serialized after Ginkgo and Playwright; surfaces as the `fuzz` JUnit testsuite |
 | `chaos` | LitmusChaos (runs as Argo Workflows) | **Never** in gates; dedicated env only, scheduled the night before the nightly-reset CronWorkflow |
 
 The kubeproxy/tunnel throughput target from the migration plan is
@@ -118,6 +119,10 @@ Notes:
 - `@p2 @visual` and `@p2 @a11y` join the existing two Playwright shards in the
   nightly. The priority filters exclude them from release, edge, upgrade, and
   smoke runs; they have no separate shards, workflow legs, or gates.
+- `fuzz` is a nightly workflow leg, not a per-test label. Its `when` clause
+  excludes every other mode, and its dependency expression runs it after both
+  Ginkgo and Playwright regardless of their outcomes so a red suite does not
+  starve the fuzz signal.
 - **Upgrade is a stage, not a per-test label.** The `upgrade` stage
   (phase 2, W5) is realized as `E2E_MODE=upgrade` on the e2e-stack
   WorkflowTemplate: the run deploys the previous stable artifact set, writes
@@ -188,7 +193,7 @@ replaces it); `quarantine-issues.mjs` (the GitHub-issue pipeline) is
 Every suite leg writes JUnit XML to a shared artifact directory:
 
 ```
-/artifacts/{ginkgo,playwright,chainsaw,apischema,k6,scan}/junit.xml
+/artifacts/{ginkgo,playwright,chainsaw,apischema,k6,scan,fuzz}/junit.xml
 ```
 
 - The workflow `onExit` handler uploads **all** JUnit to ReportPortal
@@ -198,6 +203,10 @@ Every suite leg writes JUnit XML to a shared artifact directory:
   widgets + analyzer then slice history by mode/label.
 - Playwright additionally writes its HTML report + traces (artifact only);
   live streaming via `@reportportal/agent-js-playwright` is optional.
+- Schemathesis emits JUnit directly (W8), normalized to the `fuzz` testsuite;
+  its full JUnit, VCR cassette, JSON summary, and crash/replay files are archived
+  at `e2e/<uid>/fuzz/`. The exit-handler's optional `fuzz-junit` input joins the
+  same nightly ReportPortal launch.
 - k6 emits JUnit via `handleSummary` + the vendored k6-summary `jUnit()`
   (realized in W7: one plain pass/fail testcase per threshold, classname
   `k6.<scenario>`, artifact keys `e2e/<uid>/k6/<scenario>/junit.xml`); the

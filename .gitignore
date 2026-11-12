@@ -3,4 +3,5 @@ dist/
 charts/*/charts/
 charts/*/Chart.lock
 scripts/e2e/chainsaw/reports/
+__pycache__/
 .DS_Store

@@ -1,0 +1,97 @@
+# W8 nightly API fuzz contract (Schemathesis 4.33.4).
+#
+# Safety model: one run-owned tenant, no DELETE, no seeded persona/RBAC
+# mutations, no global catalog sync. The schema's paths already include
+# /api/v1, so base-url is the origin root (never .../api/v1 here).
+
+color = false
+base-url = "https://${E2E_BASE_DOMAIN}"
+headers = { Authorization = "Bearer ${E2E_TOKEN}" }
+workers = 1
+max-time = 1200                 # 20m; the Argo template allows 40m total
+max-failures = 25
+continue-on-failure = true
+request-timeout = 10.0
+request-retries = 2             # network errors only; HTTP 5xx still fails
+rate-limit = "10/s"
+tls-verify = true
+
+[generation]
+mode = "all"
+max-examples = 25               # per operation in the fuzzing phase
+database = ":memory:"
+
+[phases]
+examples.enabled = false
+coverage.enabled = false
+# Defense in depth: coverage's unexpected-method probes must never issue a
+# DELETE even if the coverage phase is enabled during a local experiment.
+coverage.unexpected-methods = []
+stateful.enabled = false
+fuzzing.enabled = true
+# Do not feed real resource identifiers from earlier responses into later
+# requests. path.org below is the authoritative tenant scope.
+fuzzing.extra-data-sources.responses = false
+
+[checks]
+enabled = false
+not_a_server_error.enabled = true
+# Deliberate "feature disabled" 501 responses are valid on this e2e env;
+# every other 5xx remains a failure.
+not_a_server_error.expected-statuses = ["2xx", "3xx", "4xx", 501]
+response_schema_conformance.enabled = true
+# Huma does not document every deliberate 4xx. Keep this off until nightly
+# signal shows it is actionable; undocumented 4xx is not itself a failure.
+status_code_conformance.enabled = false
+
+[reports]
+directory = "/artifacts/report"
+preserve-bytes = false
+
+[reports.junit]
+path = "/artifacts/out/junit.xml"
+
+[reports.vcr]
+path = "/artifacts/report/cassette.yaml"
+
+[reports.json]
+path = "/artifacts/report/run.json"
+
+[cache]
+# Crash files are archived with the VCR cassette for st replay. The pod is
+# ephemeral, so this cache cannot influence the next nightly run.
+directory = "/artifacts/report/cache"
+
+[output.sanitization]
+enabled = true
+replacement = "[Filtered]"
+
+[parameters]
+# Every tenant-scoped operation targets the org owned by this run. Never use
+# response-discovered org IDs here: that could select the seeded e2e-org.
+"path.org" = "${E2E_FUZZ_ORG}"
+
+[[operations]]
+include-method = "DELETE"
+enabled = false
+
+# Protect persona assignments and team/role state. OpenAPI paths are
+# templated, so these method+path filters necessarily apply to every org;
+# reads remain enabled. The run-owned path.org guard protects everything else.
+[[operations]]
+# One name regex is intentional: separate include-method + include-path keys
+# are OR'ed by Schemathesis and would disable every write operation globally.
+include-name-regex = "^(POST|PUT|PATCH) /api/v1/tenants/\\{org\\}/(members|roles|rbac|teams)(/|$)"
+enabled = false
+
+# A global side effect, not a resource write scoped to the fuzz tenant.
+[[operations]]
+include-name-regex = "^POST /api/v1/admin/catalog/sync$"
+enabled = false
+
+# run.sh creates the run-owned tenant exactly once before this run. Repeating
+# the same create in the fuzz loop is not useful coverage: the server currently
+# wraps Keycloak's duplicate-name 409 in a 500 (inari-server #216).
+[[operations]]
+include-operation-id = "createTenant"
+enabled = false
