@@ -19,7 +19,17 @@ export default defineConfig({
   retries: 0,
   reporter: "list",
   timeout: 60_000,
-  expect: { timeout: 20_000 },
+  expect: {
+    timeout: 20_000,
+    // One deterministic screenshot contract for specs/visual. Baselines are
+    // linux/chromium-only and generated in the workflow's Playwright image.
+    toHaveScreenshot: {
+      animations: "disabled",
+      caret: "hide",
+      maxDiffPixelRatio: 0.001,
+      scale: "css",
+    },
+  },
   use: {
     baseURL: UI_BASE,
     trace: "off",

@@ -21,7 +21,8 @@ scripts/e2e/ui/
 ├── fixtures/
 │   ├── auth.ts                 # persona registry (5 personas) + KC two-step login helper
 │   ├── auth.setup.ts           # setup project: saves .auth/<persona>.json for every persona
-│   └── org.ts                  # unique-name factories: e2e-<runId>-<seq>[-<kind>]
+│   ├── org.ts                  # unique-name factories: e2e-<runId>-<seq>[-<kind>]
+│   └── key-pages.ts            # shared live-page registry/navigation for visual + a11y
 ├── helpers/
 │   ├── env.ts                  # THE env contract (single process.env reader — see below)
 │   ├── env.test.ts             # contract tests: live/legacy resolution, E2E_SEEDED fail-fast
@@ -29,9 +30,11 @@ scripts/e2e/ui/
 │   ├── poll.test.ts            # poll contract tests (node --test)
 │   ├── git.ts                  # git ls-remote probe for the git-daemon precondition
 │   ├── git.test.ts             # unit tests (local bare repos; no daemon needed)
-│   └── api.ts                  # thin inari-server REST client (direct-grant token; reads +
-│                               #   DELETE for spec-owned cleanup only + raw() for
-│                               #   negative-path assertions — see rule 5 below)
+│   ├── api.ts                  # thin inari-server REST client (direct-grant token; reads +
+│   │                           #   DELETE for spec-owned cleanup only + raw() for
+│   │                           #   negative-path assertions — see rule 5 below)
+│   ├── a11y.ts                 # standard axe scan + accepted/stale violation partitioning
+│   └── a11y.test.ts            # unit tests for the pure violation helpers
 ├── pages/
 │   ├── login.page.ts           # KC 26 two-step form (username → submit → password)
 │   ├── app-shell.page.ts       # boot gate, tenant cards, sidebar nav, tenant switcher,
@@ -43,6 +46,10 @@ scripts/e2e/ui/
 │   └── settings/               # Settings inner nav (admin-filtered), read-only notice,
 │                               #   Org profile / Git config sub-pages
 └── specs/
+    ├── visual/
+    │   └── key-pages.spec.ts   # @p2 @visual — four live-page baselines (+ adjacent snapshots)
+    ├── a11y/
+    │   └── key-pages.spec.ts   # @p2 @a11y — axe on the shell/dashboard/Access tabs/profile
     ├── smoke/
     │   └── access-tabs.spec.ts # @p0 @smoke — the four RBAC tabs render their markers
     ├── settings/
@@ -144,6 +151,63 @@ Without `E2E_BASE_DOMAIN` the suite resolves exactly the pre-migration
 defaults — single origin in kind required the (deleted) ui-proxy, so point
 `UI_BASE` at whatever single-origin shim your loop uses.
 
+## Visual regression and accessibility (nightly-only)
+
+`specs/visual/` and `specs/a11y/` use the shared live-page registry in
+`fixtures/key-pages.ts`. Both layers carry **`@p2`**, so the existing release,
+edge, upgrade, and smoke filters exclude them while the nightly's
+`@p0|@p1|@p2` selection includes them in the existing two Playwright shards.
+There is no separate workflow leg or release gate.
+
+### Visual baselines
+
+The initial four baselines cover the all-tenants app shell, tenant dashboard,
+Access → Identity (including the four-tab strip), and Settings → Organization
+profile. The home baseline clips to stable shell chrome above the
+variable-height live aggregates. All baselines run against the real seeded
+environment: **never stub API routes** to make a screenshot deterministic.
+Mask only live data (identity, counts, tenant/member rows, timestamps, and
+fields another spec may mutate); do not mask away the static layout the
+baseline is meant to protect.
+
+Screenshot defaults (`animations: "disabled"`, `caret: "hide"`, CSS scale, and
+a 0.1% pixel-difference budget) live in `playwright.config.ts`. Baselines are
+Linux/Chromium-specific and must be generated in the **same Playwright image
+as the workflow**, not on a host browser. With the live-env variables from
+"Running against the live e2e environment" exported, run from `scripts/e2e/ui`:
+
+```sh
+docker run --rm --ipc=host \
+  -v "$PWD:/work" -w /work \
+  -e E2E_BASE_DOMAIN -e E2E_KC_URL -e E2E_SEEDED -e E2E_RUN_ID \
+  -e E2E_USER -e E2E_PASSWORD \
+  -e E2E_OPERATOR_PASSWORD -e E2E_EDITOR_PASSWORD \
+  -e E2E_VIEWER_PASSWORD -e E2E_MEMBER_PASSWORD \
+  mcr.microsoft.com/playwright:v1.64.1-noble \
+  sh -c 'npm ci --include=dev && npx playwright test --grep @visual --update-snapshots --workers=1'
+```
+
+Bump that image tag in lockstep with `@playwright/test` and the workflow.
+Review every added/changed PNG in the PR; never use `--update-snapshots`
+merely to make an unexplained red test green. A legitimate UI change needs a
+deliberate baseline refresh; an unintended change needs an inari-ui fix.
+Snapshots use Playwright's default adjacent
+`key-pages.spec.ts-snapshots/*-chromium-linux.png` convention and are
+committed.
+
+### Accessibility scans
+
+`helpers/a11y.ts` runs axe with `wcag2a`, `wcag2aa`, `wcag21a`, and `wcag21aa`.
+The shell, dashboard, all four Access tabs, and org profile must have zero
+unexpected violations. Fix-forward in inari-ui is the default. If a violation
+is genuinely accepted, add it only to that page's `ACCEPTED` list with a
+non-empty `rule`, `issue` (for example `7K-Inari/inari-ui#123`), and `reason`.
+An exclusion without a tracking issue is a config error; an exclusion whose
+rule stops violating fails as stale and must be removed. Selector/subtree
+exclusions and blanket `disableRules` are deliberately unsupported. Accepted
+violations are attached to the Playwright result for triage. The first live
+baseline needed **no accepted exclusions**.
+
 ## Personas
 
 Seeded by the Go seed step (`scripts/e2e/seed`) — run as a workflow step
@@ -191,6 +255,13 @@ bug).
    the spec's subject IS the rejection (e.g. the 409 guardrails in
    `specs/rbac/`). Never use `raw()` to set up state or to bypass the UI for
    behavior a spec is meant to exercise through the console.
+6. **Screenshots belong only in `specs/visual/`.** Use the shared key-page
+   registry, the container-locked baseline flow, and narrow live-data masks.
+   Never introduce ad-hoc screenshots in functional specs or route stubs for
+   visual determinism.
+7. **Axe scans are read-only and live.** Use `scanA11y()` against the real
+   page; specs own the unexpected/stale-exclusion assertions. Never silence a
+   rule globally or without a linked issue.
 
 ## Key constraints (learned the hard way — do not "fix")
 

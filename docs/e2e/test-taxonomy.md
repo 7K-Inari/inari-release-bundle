@@ -32,6 +32,9 @@ triage, never for gating decisions on their own:
 - `smoke` — minimal "is the stack alive" set. Also the PostSync-hook set.
 - `rbac`, `settings`, `tenants` — UI surface areas (mirrors the
   `specs/<area>/` directory layout).
+- `visual`, `a11y` — Playwright-only visual-regression and axe accessibility
+  quality signals (W8). Every spec also carries `@p2`, so these labels select
+  ad-hoc runs but never alter gating: both layers are nightly-only.
 - `security` — the Harbor/Trivy image scan gate: a workflow step on the
   `e2e-stack` template (release mode only), not a Ginkgo/Playwright label —
   it surfaces as the `security` JUnit testsuite in the run's ReportPortal
@@ -112,6 +115,9 @@ Notes:
   parallel DAG steps with their own `p0` specs.
 - The api-schema conformance driver has no labels of its own; its ReportPortal
   launch carries `p0` (it is gate-only today).
+- `@p2 @visual` and `@p2 @a11y` join the existing two Playwright shards in the
+  nightly. The priority filters exclude them from release, edge, upgrade, and
+  smoke runs; they have no separate shards, workflow legs, or gates.
 - **Upgrade is a stage, not a per-test label.** The `upgrade` stage
   (phase 2, W5) is realized as `E2E_MODE=upgrade` on the e2e-stack
   WorkflowTemplate: the run deploys the previous stable artifact set, writes
@@ -215,13 +221,15 @@ the title is what `--grep` matches).
 
 ## 6. Current tag inventory (migration baseline)
 
-Validated against the specs on 2026-10-30.
+Validated against the specs on 2026-11-12.
 
 **Playwright** (`scripts/e2e/ui/specs/`):
 
 | Spec | Tags | Notes |
 |---|---|---|
 | `smoke/access-tabs.spec.ts` | `@p0 @smoke` | the four RBAC tabs render their markers |
+| `visual/key-pages.spec.ts` | `@p2 @visual` | four container-locked live-page screenshot baselines; nightly-only |
+| `a11y/key-pages.spec.ts` | `@p2 @a11y` | axe WCAG 2.0/2.1 A+AA scans of the app shell, dashboard, all Access tabs, and org profile; nightly-only |
 | `rbac/role-lifecycle.spec.ts` | `@p0 @rbac` (+ 3 `@quarantine` tests) | mutates `e2e-member`, must restore it role-less |
 | `rbac/builtin-protection.spec.ts` | `@p0 @rbac` | built-in role 409s, tenant.admin guardrail |
 | `rbac/role-gating-matrix.spec.ts` | `@p1 @rbac` | per-persona gating matrix |
