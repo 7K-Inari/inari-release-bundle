@@ -221,7 +221,7 @@ lives in 7k-app-of-apps (W1).
 
 | File | Contents |
 |---|---|
-| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) + harbor-scan-gate (release, W6 — Trivy scan of the candidate images via Harbor, fail on Critical > `scan-critical-threshold`) → [upgrade mode: resolve-previous → env-prep-previous → upgrade-fixture → drill-pause] → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release, upgrade-assert on upgrade, **k6 load legs on weekly — W7:** `k6-run` × permissions-cache → login-storm → provisioning-outbox, sequential k6-operator TestRuns, thresholds gating via the runner exit code; `load-duration` param shrinks the load shape for acceptance/manual runs) + chainsaw-verify; onExit imports every suite's JUnit into ReportPortal as ONE launch per run (name = `reportportal-launch`, attributes mode/run-id/image tags/charts-ref/status; a synthesized run-outcome testsuite anchors aborted runs — hard rule 8/10) |
+| `workflowtemplate-e2e-stack.yaml` | The one parameter-driven workflow (contract §3.1): resolve → cosign-verify (release) + harbor-scan-gate (release, W6 — Trivy scan of the candidate images via Harbor, fail on Critical > `scan-critical-threshold`) → [upgrade mode: resolve-previous → env-prep-previous → upgrade-fixture → drill-pause] → env-prep → seed → agent-ensure → suite legs (ginkgo / playwright×2 shards / apischema on release, fuzz after Ginkgo+Playwright on nightly — W8, upgrade-assert on upgrade, **k6 load legs on weekly — W7:** `k6-run` × permissions-cache → login-storm → provisioning-outbox, sequential k6-operator TestRuns, thresholds gating via the runner exit code; `load-duration` param shrinks the load shape for acceptance/manual runs) + chainsaw-verify; onExit imports every suite's JUnit into ReportPortal as ONE launch per run (name = `reportportal-launch`, attributes mode/run-id/image tags/charts-ref/status; a synthesized run-outcome testsuite anchors aborted runs — hard rule 8/10) |
 | `cronworkflow-upgrade.yaml` | **Suspended** daily (05:47 UTC) `mode=upgrade` run — the upgrade-path leg (W5). Unsuspension criterion in the file header: first post-sunset stable inari-server release, then ~2 weeks stable before any release-gating flip |
 | `reportportal-importer-secret.yaml` | ESO ExternalSecret syncing the ReportPortal API key (Vault `inari-e2e/reportportal`) for the onExit importer; optional reference — runs skip the import with a warning until the owner provisions it |
 | `harbor-scanner-secret.yaml` | ESO ExternalSecret syncing the Harbor scan-gate robot credentials (Vault `inari-e2e/harbor-robot`); the scan gate fails LOUD until the owner provisions it — a release gate never silently skips (§Harbor scan gate) |
@@ -262,6 +262,42 @@ e2e-submitter-token -o jsonpath='{.data.token}' | base64 -d)"`. Every
 run — succeeded, failed, or aborted — lands in ReportPortal project
 `inari-e2e` as one launch (`https://reportportal.7kgroup.org/ui/#inari-e2e/launches/all`);
 JUnit XMLs also persist in the Garage bucket at `e2e/<workflow-uid>/`.
+
+### Fuzz leg (`mode=nightly`, W8)
+
+The nightly DAG ends with an official-Schemathesis API-fuzz leg after both
+Ginkgo and Playwright finish. Its dependency expression includes
+`Succeeded|Failed|Errored` for both suites, so a red suite does not suppress
+this independent signal. Fuzz is **never** selected by release, edge, upgrade,
+smoke, or weekly modes and never blocks a release.
+
+- **Exact contract:** an ORAS init container pulls
+  `ghcr.io/7k-inari/inari-server-openapi:<server-image>` and requires
+  `dist/openapi.yaml`. There is no fallback to `edge`; a missing tag means the
+  publish pipeline or manual submit is wrong.
+- **Contained writes:** the runner ensures `e2e-<uid>-fuzz` once and forces
+  every `{org}` path to it. DELETE, membership/team/role/RBAC mutations, and
+  the global catalog sync are disabled. `createTenant` itself is excluded to
+  avoid artificial duplicate-create 500s (inari-server #216). The janitor and
+  nightly reset bound residue.
+- **Actionable checks:** unexpected 5xx (excluding deliberate feature-disabled
+  501 responses) and response-schema violations fail. Undocumented 4xx is
+  initially accepted because Huma does not declare every deliberate
+  rejection. One worker, 10 req/s, 25 examples/operation/round, 25 failures max,
+  and a 20-minute engine budget fit inside the leg's 40-minute deadline.
+- **Results:** JUnit lands at `e2e/<uid>/fuzz/junit.xml` and enters the same
+  ReportPortal launch through the optional `fuzz-junit` exit-handler input.
+  The VCR cassette, JSON verdict, exact schema/config, and `st replay` crash
+  files live under `e2e/<uid>/fuzz/report/`; see `scripts/e2e/fuzz/README.md`
+  for replay and safety details.
+
+A manual acceptance run submits the whole nightly workflow (there is no
+fuzz-only bypass around the functional suites):
+
+```
+argo submit --from workflowtemplate/e2e-stack -n inari-e2e \
+  -p mode=nightly -p charts-ref=<bundle-sha> -p server-image=edge
+```
 
 ### Upgrade leg (`mode=upgrade`, W5)
 
