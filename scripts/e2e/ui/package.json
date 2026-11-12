@@ -9,9 +9,10 @@
     "test:ci": "playwright test --config playwright.config.ci.ts",
     "test:quarantine": "node --test quarantine-issues.test.mjs",
     "lint": "tsc --noEmit",
-    "test:helpers": "node --test --experimental-strip-types helpers/poll.test.ts helpers/env.test.ts helpers/git.test.ts"
+    "test:helpers": "node --test --experimental-strip-types helpers/poll.test.ts helpers/env.test.ts helpers/git.test.ts helpers/a11y.test.ts"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@playwright/test": "1.64.1",
     "@reportportal/agent-js-playwright": "5.5.0",
     "@types/node": "^26.0.0",
