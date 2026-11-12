@@ -42,6 +42,9 @@ identically from a local checkout and inside the runner pod.
   never egress to jslib.k6.io. Its `jUnit()` emits one plain pass/fail
   `<testcase>` per threshold — no `time` attributes, no `<skipped/>` — which
   the ReportPortal import path tolerates by construction (PRs #145/#147).
+  Both the testsuite name and testcase classname are `k6.<scenario>`:
+  ReportPortal uses the suite name for its item hierarchy (and ignores the
+  classname), so this keeps the three scenarios distinguishable in a launch.
   `handleSummary` also returns the `stdout` key (exporting it suppresses the
   console summary otherwise) and prints the JUnit between `---K6-JUNIT-*---`
   sentinels — the PRIMARY extraction path: the k6-run step reads it from the

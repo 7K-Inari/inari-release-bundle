@@ -110,7 +110,10 @@ export function loadSlug(n) {
 // possible (no tar in the runner image — D6 contingency).
 export function makeSummary(scenario) {
   return function handleSummary(data) {
-    const junit = jUnit(data, { classname: `k6.${scenario}` });
+    // ReportPortal builds its hierarchy from <testsuite name>, not the
+    // testcase classname. Set both or every scenario appears as the same
+    // generic "k6 thresholds" suite and loses its identity in launch history.
+    const junit = jUnit(data, { classname: `k6.${scenario}`, name: `k6.${scenario}` });
     return {
       stdout:
         textSummary(data, { indent: ' ', enableColors: false }) +
