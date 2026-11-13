@@ -27,8 +27,10 @@ are GHCR TLS and exact deployed-tag parity. The schema paths already include
 run-owned tenant once, then invokes `st run`. The `keycloak_auth` provider
 refreshes that short-lived token every four minutes and on a 401 response, so
 coverage does not degrade into authentication warnings during the 20-minute
-window. Only network-level failures are retried; an HTTP 500 is never retried
-into a pass.
+window. No static `Authorization` header is configured: Schemathesis applies
+configured headers after its auth provider, which would otherwise pin the
+initial token until it expires. Only network-level failures are retried; an
+HTTP 500 is never retried into a pass.
 
 ## Shared-environment safety
 

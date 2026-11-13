@@ -101,8 +101,10 @@ class SchemathesisConfigContract(unittest.TestCase):
         self.assertEqual(self.config["request-retries"], 2)
         self.assertEqual(self.config["rate-limit"], "10/s")
         self.assertEqual(self.config["base-url"], "https://${E2E_BASE_DOMAIN}")
-        self.assertEqual(
-            self.config["headers"]["Authorization"], "Bearer ${E2E_TOKEN}"
+        self.assertNotIn(
+            "headers",
+            self.config,
+            "a static Authorization header overrides keycloak_auth's refreshed credentials",
         )
 
     def test_keycloak_auth_refreshes_proactively_and_on_401(self) -> None:
