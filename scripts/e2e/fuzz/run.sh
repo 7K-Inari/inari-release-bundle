@@ -23,6 +23,11 @@ E2E_TOKEN=$(python3 "$SCRIPT_DIR/fetch_token.py")
 export E2E_TOKEN
 python3 "$SCRIPT_DIR/ensure_tenant.py"
 
+# Make keycloak_auth.py and fetch_token.py importable regardless of the
+# caller's working directory. The hook refreshes the token before it expires.
+PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+
 set +e
 st --config-file "$SCRIPT_DIR/schemathesis.toml" run "$SCHEMA"
 STATUS=$?

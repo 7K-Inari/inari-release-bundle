@@ -24,15 +24,19 @@ are GHCR TLS and exact deployed-tag parity. The schema paths already include
 `https://${E2E_BASE_DOMAIN}`.
 
 `run.sh` obtains a dev-admin direct-grant token with Python stdlib, ensures the
-run-owned tenant once, then invokes `st run`. Only network-level failures are
-retried; an HTTP 500 is never retried into a pass.
+run-owned tenant once, then invokes `st run`. The `keycloak_auth` provider
+refreshes that short-lived token every four minutes and on a 401 response, so
+coverage does not degrade into authentication warnings during the 20-minute
+window. Only network-level failures are retried; an HTTP 500 is never retried
+into a pass.
 
 ## Shared-environment safety
 
 - **One tenant:** `E2E_FUZZ_ORG=e2e-<workflow-uid>-fuzz`. `ensure_tenant.py`
-  creates it once (or reuses it on a local rerun) and every `{org}` path value
-  is forced to that slug. Real write operations therefore exercise an owned
-  fixture, not the seeded `e2e-org`.
+  POSTs the create once and confirms an existing org only after a duplicate
+  409/500 response (a missing org can otherwise return 403). Every `{org}` path
+  value is forced to that slug, so real writes exercise an owned fixture, not
+  the seeded `e2e-org`.
 - **No repeated create:** `createTenant` is excluded from the generated loop.
   Repeating one forced slug found a real duplicate-create 500 tracked by
   **7K-Inari/inari-server#216**; the one-time setup avoids making that known
@@ -111,7 +115,7 @@ docker run --rm --network host \
   -e E2E_BASE_DOMAIN -e E2E_KC_URL -e E2E_USER -e E2E_PASSWORD \
   -e E2E_FUZZ_ORG \
   schemathesis/schemathesis:4.33.4@sha256:708d934c8208a8f785bdf1b1610476e691f1efda0b7a3cb9ce7536d0f3280eec \
-  sh -c 'E2E_TOKEN=$(python3 /work/fuzz/fetch_token.py) && export E2E_TOKEN && st --config-file /work/fuzz/schemathesis.toml replay /report/cache/crashes/<crash-id>.json --schema-location /report/openapi.yaml'
+  sh -c 'PYTHONPATH=/work/fuzz && export PYTHONPATH && E2E_TOKEN=$(python3 /work/fuzz/fetch_token.py) && export E2E_TOKEN && st --config-file /work/fuzz/schemathesis.toml replay /report/cache/crashes/<crash-id>.json --schema-location /report/openapi.yaml'
 ```
 
 Use the VCR cassette to inspect the complete request chain when a crash file

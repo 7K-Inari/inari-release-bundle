@@ -32,24 +32,30 @@ def ensure_tenant(token: str) -> str:
     slug = _required("E2E_FUZZ_ORG")
     base_url = f"https://{_required('E2E_BASE_DOMAIN')}/api/v1/tenants"
     auth = {"Authorization": f"Bearer {token}"}
-
-    lookup = Request(f"{base_url}/{quote(slug, safe='')}", headers=auth, method="GET")
-    status = _send(lookup)
-    if status == 200:
-        return "existing"
-    if status != 404:
-        raise RuntimeError(f"tenant lookup failed: HTTP {status}")
-
     create = Request(
         base_url,
         data=json.dumps({"slug": slug, "displayName": f"E2E API fuzz {slug}"}).encode(),
         headers={**auth, "content-type": "application/json"},
         method="POST",
     )
-    status = _send(create)
-    if status != 200:
-        raise RuntimeError(f"tenant create failed: HTTP {status}")
-    return "created"
+
+    # A missing org may return 403 rather than 404, so a lookup-first flow
+    # cannot distinguish "not created yet" from a genuine authorization bug.
+    # Create first; only a known duplicate response justifies a confirmation
+    # lookup (500 is the pre-inari-server-#216 duplicate-create behavior).
+    create_status = _send(create)
+    if create_status == 200:
+        return "created"
+    if create_status not in (409, 500):
+        raise RuntimeError(f"tenant create failed: HTTP {create_status}")
+
+    lookup = Request(f"{base_url}/{quote(slug, safe='')}", headers=auth, method="GET")
+    lookup_status = _send(lookup)
+    if lookup_status == 200:
+        return "existing"
+    raise RuntimeError(
+        f"tenant create failed: HTTP {create_status}; confirmation lookup returned HTTP {lookup_status}"
+    )
 
 
 if __name__ == "__main__":

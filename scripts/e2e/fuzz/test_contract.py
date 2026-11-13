@@ -105,6 +105,11 @@ class SchemathesisConfigContract(unittest.TestCase):
             self.config["headers"]["Authorization"], "Bearer ${E2E_TOKEN}"
         )
 
+    def test_keycloak_auth_refreshes_proactively_and_on_401(self) -> None:
+        self.assertEqual(self.config["hooks"], "keycloak_auth")
+        self.assertTrue((HERE / "keycloak_auth.py").is_file())
+        self.assertIn("PYTHONPATH", (HERE / "run.sh").read_text())
+
     def test_junit_replay_reports_and_sanitization_are_wired(self) -> None:
         reports = self.config["reports"]
         self.assertEqual(reports["directory"], "/artifacts/report")

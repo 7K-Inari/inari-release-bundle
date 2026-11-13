@@ -37,41 +37,45 @@ def http_error(request, status: int) -> HTTPError:
 )
 class EnsureTenantContract(unittest.TestCase):
     @patch("scripts.e2e.fuzz.ensure_tenant.urlopen")
-    def test_existing_tenant_is_reused_without_a_post(self, mocked) -> None:
-        mocked.return_value = FakeResponse({"slug": "e2e-run-fuzz"})
-        self.assertEqual(ensure_tenant.ensure_tenant("dummy-token"), "existing")
-        request = mocked.call_args.args[0]
-        self.assertEqual(request.get_method(), "GET")
-        self.assertEqual(
-            request.full_url,
-            f"https://inari.example.test/api/v1/tenants/{quote('e2e-run-fuzz')}",
-        )
-        self.assertEqual(request.headers["Authorization"], "Bearer dummy-token")
-
-    @patch("scripts.e2e.fuzz.ensure_tenant.urlopen")
     def test_missing_tenant_is_created_once(self, mocked) -> None:
-        mocked.side_effect = lambda request, **_kwargs: (
-            (_ for _ in ()).throw(http_error(request, 404))
-            if request.get_method() == "GET"
-            else FakeResponse({"slug": "e2e-run-fuzz"})
-        )
+        mocked.return_value = FakeResponse({"slug": "e2e-run-fuzz"})
         self.assertEqual(ensure_tenant.ensure_tenant("dummy-token"), "created")
         create = mocked.call_args.args[0]
         self.assertEqual(create.get_method(), "POST")
+        self.assertEqual(create.full_url, "https://inari.example.test/api/v1/tenants")
         self.assertEqual(
             json.loads(create.data),
             {"slug": "e2e-run-fuzz", "displayName": "E2E API fuzz e2e-run-fuzz"},
         )
         self.assertEqual(create.headers["Content-type"], "application/json")
+        self.assertEqual(create.headers["Authorization"], "Bearer dummy-token")
 
     @patch("scripts.e2e.fuzz.ensure_tenant.urlopen")
-    def test_unexpected_lookup_failure_is_not_treated_as_missing(self, mocked) -> None:
+    def test_duplicate_create_falls_back_to_existing_lookup(self, mocked) -> None:
+        requests = []
+
+        def respond(request, **_kwargs):
+            requests.append(request)
+            if request.get_method() == "POST":
+                raise http_error(request, 500)
+            return FakeResponse({"slug": "e2e-run-fuzz"})
+
+        mocked.side_effect = respond
+        self.assertEqual(ensure_tenant.ensure_tenant("dummy-token"), "existing")
+        self.assertEqual([request.get_method() for request in requests], ["POST", "GET"])
+        self.assertEqual(
+            requests[-1].full_url,
+            f"https://inari.example.test/api/v1/tenants/{quote('e2e-run-fuzz')}",
+        )
+
+    @patch("scripts.e2e.fuzz.ensure_tenant.urlopen")
+    def test_create_error_without_existing_tenant_is_not_hidden(self, mocked) -> None:
         mocked.side_effect = lambda request, **_kwargs: (_ for _ in ()).throw(
             http_error(request, 500)
         )
         with self.assertRaisesRegex(RuntimeError, "HTTP 500"):
             ensure_tenant.ensure_tenant("dummy-token")
-        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual(mocked.call_count, 2)
 
 
 if __name__ == "__main__":
