@@ -7,7 +7,8 @@
 color = false
 hooks = "keycloak_auth"
 base-url = "https://${E2E_BASE_DOMAIN}"
-headers = { Authorization = "Bearer ${E2E_TOKEN}" }
+# Authorization comes ONLY from keycloak_auth. A static header here is applied
+# after the provider and would pin the initial token until it expires.
 workers = 1
 max-time = 1200                 # 20m; the Argo template allows 40m total
 max-failures = 25

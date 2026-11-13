@@ -17,8 +17,9 @@ mkdir -p /artifacts/out /artifacts/report
 cp "$SCHEMA" /artifacts/report/openapi.yaml
 cp "$SCRIPT_DIR/schemathesis.toml" /artifacts/report/schemathesis.toml
 
-# Only the token is captured; fetch_token.py never logs credentials or KC error
-# bodies. Schemathesis sanitizes the Authorization header in its own reports.
+# Only the setup token is captured; fetch_token.py never logs credentials or
+# KC error bodies. keycloak_auth owns Authorization on all fuzz requests and
+# Schemathesis sanitizes it in reports.
 E2E_TOKEN=$(python3 "$SCRIPT_DIR/fetch_token.py")
 export E2E_TOKEN
 python3 "$SCRIPT_DIR/ensure_tenant.py"
