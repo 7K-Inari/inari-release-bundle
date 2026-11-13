@@ -329,6 +329,29 @@ func duringEngine(ctx context.Context, cfg Config, api *APIClient, kube *KubeCli
 	}
 }
 
+func waitForAPIRecovery(ctx context.Context, api *APIClient) error {
+	deadline := time.Now().Add(60 * time.Second)
+	var last error
+	for {
+		status, err := api.UnauthenticatedTenants(ctx)
+		if err == nil && status == http.StatusUnauthorized {
+			return nil
+		}
+		last = err
+		if last == nil {
+			last = fmt.Errorf("unexpected unauthenticated API status %d", status)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("API did not recover to the expected 401: %w", last)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func recoverScenario(ctx context.Context, cfg Config, api *APIClient, kube *KubeClient, state *DomainState) error {
 	switch cfg.Scenario.Name {
 	case "cnpg-primary-delete":
@@ -375,8 +398,7 @@ func recoverScenario(ctx context.Context, cfg Config, api *APIClient, kube *Kube
 		if err := waitServerReady(ctx, kube); err != nil {
 			return err
 		}
-		_, err := api.UnauthenticatedTenants(ctx)
-		return err
+		return waitForAPIRecovery(ctx, api)
 	case "keycloak-latency":
 		if err := api.KeycloakDiscovery(ctx); err != nil {
 			return err

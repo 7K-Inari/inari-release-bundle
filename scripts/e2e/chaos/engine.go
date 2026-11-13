@@ -455,7 +455,9 @@ func waitForResult(ctx context.Context, kube *KubeClient, engine *Engine, termin
 			result, parseErr := parseChaosResult(raw, engine.ResultName)
 			if parseErr != nil {
 				lastErr = parseErr
-			} else if terminal && result.Terminal() || !terminal && result.Running() {
+			} else if terminal && result.Terminal() {
+				return raw, nil
+			} else if !terminal && duringReady(result, engine) {
 				return raw, nil
 			}
 		} else {

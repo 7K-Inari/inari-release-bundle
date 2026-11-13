@@ -100,6 +100,25 @@ func TestNegativeControlRequiresAnOutageNot2xx(t *testing.T) {
 	}
 }
 
+func TestNegativeControlRecoveryRetriesTransientAPIFailure(t *testing.T) {
+	calls := 0
+	server, api := timeoutTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	defer server.Close()
+	if err := waitForAPIRecovery(context.Background(), api); err != nil {
+		t.Fatalf("transient 503 prevented observed API recovery: %v", err)
+	}
+	if calls < 2 {
+		t.Fatal("recovery succeeded before the transient failure was retried")
+	}
+}
+
 func TestOutboxRejectsUnsafeOrgID(t *testing.T) {
 	if _, err := outboxCount(context.Background(), nil, "x' OR true --", true, false); err == nil {
 		t.Fatal("unsafe SQL identifier accepted")

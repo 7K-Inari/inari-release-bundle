@@ -12,9 +12,10 @@ import (
 // module. Unknown fields remain available in the archived raw JSON.
 type ChaosResult struct {
 	Metadata struct {
-		Name      string            `json:"name"`
-		Namespace string            `json:"namespace"`
-		Labels    map[string]string `json:"labels"`
+		Name        string            `json:"name"`
+		Namespace   string            `json:"namespace"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Status struct {
 		ExperimentStatus struct {
@@ -55,6 +56,26 @@ func (r ChaosResult) Terminal() bool {
 
 func (r ChaosResult) Running() bool {
 	return r.Phase() == "Running"
+}
+
+// duringReady prevents Litmus's start-of-test Running phase from releasing
+// network assertions before every snapshotted target is actually injected.
+func duringReady(result ChaosResult, engine *Engine) bool {
+	if !result.Running() {
+		return false
+	}
+	switch engine.Definition.Fault {
+	case "pod-network-latency", "pod-network-loss":
+		if len(engine.TargetPods) == 0 {
+			return false
+		}
+		for _, pod := range engine.TargetPods {
+			if result.Metadata.Annotations["pod/"+pod] != "injected" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (r ChaosResult) Score() (string, error) {

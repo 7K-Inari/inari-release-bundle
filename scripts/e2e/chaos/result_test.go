@@ -22,6 +22,30 @@ func TestChaosResultStateMachine(t *testing.T) {
 	}
 }
 
+func TestNetworkDuringChecksWaitForEveryTargetInjection(t *testing.T) {
+	result, err := parseChaosResult(resultJSON("Running", "Awaited", `"0"`), "engine-result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{Definition: engineDefinition{Fault: "pod-network-latency"}, TargetPods: []string{"pod-a", "pod-b"}}
+	if duringReady(result, engine) {
+		t.Fatal("Litmus SOT Running state was mistaken for injection")
+	}
+	result.Metadata.Annotations = map[string]string{"pod/pod-a": "injected"}
+	if duringReady(result, engine) {
+		t.Fatal("partial target injection released the during checks")
+	}
+	result.Metadata.Annotations["pod/pod-b"] = "injected"
+	if !duringReady(result, engine) {
+		t.Fatal("complete target injection did not release the during checks")
+	}
+	engine.Definition.Fault = "pod-delete"
+	result.Metadata.Annotations = nil
+	if !duringReady(result, engine) {
+		t.Fatal("pod-delete has no injection annotations and must retain its Running gate")
+	}
+}
+
 func TestChaosResultValidation(t *testing.T) {
 	tests := []struct {
 		name string
