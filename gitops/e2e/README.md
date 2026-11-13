@@ -76,12 +76,9 @@ on the public gateway/DNS/TLS path. Per image (`inari-server`,
    the run's ReportPortal launch via the exit-handler, including on failure
    — hard rule 8/10).
 
-One refusal maps to a **loud non-blocking pass**: Harbor's 400 "scanner does
-not support this media type" (the `inari-ui-bundle` ORAS artifact — JS deps
-are owned by inari-ui CI). The ReportPortal testcase name carries the reason
-(`unscannable: ORAS bundle artifact …`), so the pass is never silent.
-Shipping the bundle with a scannable image config media type is a tracked
-inari-ui follow-up.
+Scan API errors fail the gate, including HTTP 400 scanner refusals. The
+console bundle is scanned like the other candidate images; there is no
+per-artifact exemption for scanner refusals.
 
 Policies that live in **Harbor, never in scripts**: CVE allowlists (project
 `ghcr-proxy` → CVE Allowlist), scan-on-push, the daily re-scan schedule. The

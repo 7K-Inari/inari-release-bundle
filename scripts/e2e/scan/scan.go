@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,11 +27,7 @@ type PlatformResult struct {
 	Critical int
 	High     int
 	Scanned  bool // reached scan_status=Success
-	// Unscannable marks Harbor's "scanner does not support this media type"
-	// refusal (ORAS bundle artifacts). A loud non-blocking pass, distinct
-	// from Err: the gate could run, the scanner simply has nothing to scan.
-	Unscannable bool
-	Err         error
+	Err      error
 }
 
 // ImageResult is the outcome for one image. Err marks an image-level
@@ -51,8 +46,6 @@ type ImageResult struct {
 
 // Breached reports whether the result fails the gate: infrastructure error
 // at any level, or the aggregate Critical count exceeding the threshold.
-// Unscannable platforms never breach — they are a loud pass (their testcase
-// name carries the reason into ReportPortal).
 func (r ImageResult) Breached(threshold int) bool {
 	if r.Err != nil {
 		return true
@@ -63,22 +56,6 @@ func (r ImageResult) Breached(threshold int) bool {
 		}
 	}
 	return r.Critical > threshold
-}
-
-// AllUnscannable reports whether every scannable target of the image was
-// refused by the scanner as an unsupported media type (the inari-ui-bundle
-// ORAS artifact is the live case). Such images pass the gate loudly — the
-// JUnit testcase name carries the reason.
-func (r ImageResult) AllUnscannable() bool {
-	if r.Err != nil || len(r.Platforms) == 0 {
-		return false
-	}
-	for _, p := range r.Platforms {
-		if p.Err != nil || !p.Unscannable {
-			return false
-		}
-	}
-	return true
 }
 
 // Options tunes the scan loop (tests shrink these to milliseconds).
@@ -170,12 +147,6 @@ func scanPlatform(ctx context.Context, c *Client, opts Options, regToken string,
 
 	ov, err := c.scanAndWait(ctx, im.Repo, tgt.Digest, opts.PollInterval)
 	if err != nil {
-		if errors.Is(err, ErrUnscannable) {
-			res.Unscannable = true
-			logf("  %s: UNSCANNABLE — scanner does not support this media type "+
-				"(ORAS bundle artifact — JS deps owned by inari-ui CI); loud non-blocking pass", label)
-			return res
-		}
 		res.Err = err
 		return res
 	}

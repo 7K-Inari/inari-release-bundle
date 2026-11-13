@@ -27,13 +27,8 @@ the `ghcr-proxy` proxy-cache project on `harbor.7kgroup.org`):
    .../artifacts/<digest>/scan`) and poll `?with_scan_overview=true` until
    `scan_status=Success` — asynchronous; a prior scan is never trusted
    (scan-on-push latency races). `Error`/`Stopped` gets exactly one
-   retrigger. Platforms scan concurrently per image. Exactly one refusal is
-   mapped to a **loud non-blocking pass**: Harbor's 400 "scanner does not
-   support this media/artifact type" (the `inari-ui-bundle` ORAS artifact —
-   its JS deps are owned by inari-ui CI; coordinator ruling on PR #165).
-   The JUnit testcase name carries `unscannable: ORAS bundle artifact — JS
-   deps owned by inari-ui CI`, so the pass is visible in ReportPortal and
-   never silent. Any other 400 stays a gate-failing error.
+   retrigger. Platforms scan concurrently per image. Scan API errors fail the
+   gate, including HTTP 400 scanner refusals; no candidate artifact is exempt.
 4. **Archive** the full `additions/vulnerabilities` report per platform
    (`REPORTS_DIR`, uploaded to S3 at `e2e/<uid>/scan/reports/`).
 5. **Fail** when the aggregate Critical count exceeds

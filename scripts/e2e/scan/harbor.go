@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -272,26 +271,6 @@ func (c *Client) PrimeTarget(ctx context.Context, regToken, repo string, tgt sca
 
 // --- API side: scan + report ----------------------------------------------
 
-// ErrUnscannable marks Harbor's refusal to scan an artifact whose media type
-// the configured scanner (Trivy) cannot handle — the inari-ui-bundle ORAS
-// artifact is the live case. The gate maps exactly this refusal to a LOUD
-// non-blocking pass (coordinator ruling on PR #165: the bundle's JS deps are
-// owned by inari-ui CI) — never a silent skip, never a hard failure. Any
-// OTHER 400 stays a plain error.
-var ErrUnscannable = errors.New("scanner does not support the artifact's media type")
-
-// unscannableBody reports whether a Harbor 400 body is the scanner's
-// unsupported-media/artifact-type refusal rather than a generic bad request.
-// Harbor v2.15.4's live phrasing: "the configured scanner Trivy does not
-// support scanning artifact with mime type application/vnd.oci.image...".
-func unscannableBody(body []byte) bool {
-	s := strings.ToLower(string(body))
-	return strings.Contains(s, "not scannable") ||
-		(strings.Contains(s, "does not support") &&
-			(strings.Contains(s, "media type") || strings.Contains(s, "mime type") ||
-				strings.Contains(s, "artifact type") || strings.Contains(s, "scanning artifact")))
-}
-
 // TriggerScan asks Harbor to (re)scan the artifact. 202 Accepted is the
 // documented response; any 2xx is accepted, and 409 (a scan is already
 // running — scan-on-push may have beaten us) is fine too. The gate never
@@ -304,9 +283,6 @@ func (c *Client) TriggerScan(ctx context.Context, repo, ref string) error {
 	}
 	if code == http.StatusConflict {
 		return nil
-	}
-	if code == http.StatusBadRequest && unscannableBody(body) {
-		return ErrUnscannable
 	}
 	if code < 200 || code >= 300 {
 		// Harbor's error JSON carries the reason (never credentials) —
