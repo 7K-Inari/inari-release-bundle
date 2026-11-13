@@ -327,7 +327,7 @@ spec:
           - name: chaos-cnpg-primary-delete
             template: chaos-run
             depends: k6-provisioning-outbox.Succeeded || k6-provisioning-outbox.Skipped
-            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == cnpg-primary-delete)"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && (\"{{workflow.parameters.chaos-scenario}}\" == all || \"{{workflow.parameters.chaos-scenario}}\" == \"cnpg-primary-delete\")"
             arguments:
               parameters:
                 - name: scenario
@@ -335,7 +335,7 @@ spec:
           - name: chaos-keycloak-latency
             template: chaos-run
             depends: chaos-cnpg-primary-delete.Succeeded || chaos-cnpg-primary-delete.Skipped
-            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == keycloak-latency)"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && (\"{{workflow.parameters.chaos-scenario}}\" == all || \"{{workflow.parameters.chaos-scenario}}\" == \"keycloak-latency\")"
             arguments:
               parameters:
                 - name: scenario
@@ -343,7 +343,7 @@ spec:
           - name: chaos-nats-outage
             template: chaos-run
             depends: chaos-keycloak-latency.Succeeded || chaos-keycloak-latency.Skipped
-            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == nats-outage)"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && (\"{{workflow.parameters.chaos-scenario}}\" == all || \"{{workflow.parameters.chaos-scenario}}\" == \"nats-outage\")"
             arguments:
               parameters:
                 - name: scenario
@@ -351,7 +351,7 @@ spec:
           - name: chaos-openfga-latency
             template: chaos-run
             depends: chaos-nats-outage.Succeeded || chaos-nats-outage.Skipped
-            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == openfga-latency)"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && (\"{{workflow.parameters.chaos-scenario}}\" == all || \"{{workflow.parameters.chaos-scenario}}\" == \"openfga-latency\")"
             arguments:
               parameters:
                 - name: scenario
@@ -359,7 +359,7 @@ spec:
           - name: chaos-server-pod-delete
             template: chaos-run
             depends: chaos-openfga-latency.Succeeded || chaos-openfga-latency.Skipped
-            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == server-pod-delete)"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && (\"{{workflow.parameters.chaos-scenario}}\" == all || \"{{workflow.parameters.chaos-scenario}}\" == \"server-pod-delete\")"
             arguments:
               parameters:
                 - name: scenario
@@ -368,7 +368,7 @@ spec:
           - name: chaos-negative-control
             template: chaos-run
             depends: chaos-server-pod-delete.Succeeded || chaos-server-pod-delete.Skipped
-            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && {{workflow.parameters.chaos-scenario}} == negative-control"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && \"{{workflow.parameters.chaos-scenario}}\" == \"negative-control\""
             arguments:
               parameters:
                 - name: scenario
