@@ -30,9 +30,10 @@ retried; an HTTP 500 is never retried into a pass.
 ## Shared-environment safety
 
 - **One tenant:** `E2E_FUZZ_ORG=e2e-<workflow-uid>-fuzz`. `ensure_tenant.py`
-  creates it once (or reuses it on a local rerun) and every `{org}` path value
-  is forced to that slug. Real write operations therefore exercise an owned
-  fixture, not the seeded `e2e-org`.
+  POSTs the create once and confirms an existing org only after a duplicate
+  409/500 response (a missing org can otherwise return 403). Every `{org}` path
+  value is forced to that slug, so real writes exercise an owned fixture, not
+  the seeded `e2e-org`.
 - **No repeated create:** `createTenant` is excluded from the generated loop.
   Repeating one forced slug found a real duplicate-create 500 tracked by
   **7K-Inari/inari-server#216**; the one-time setup avoids making that known
