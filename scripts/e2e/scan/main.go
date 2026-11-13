@@ -128,9 +128,6 @@ func run(getenv func(string) string, stdout io.Writer) int {
 		case r.Err != nil:
 			failed = true
 			fmt.Fprintf(stdout, "ERROR %s:%s — %v\n", r.Repo, r.Tag, r.Err)
-		case r.AllUnscannable():
-			fmt.Fprintf(stdout, "PASS %s:%s — unscannable: ORAS bundle artifact — JS deps owned by inari-ui CI (loud non-blocking pass)\n",
-				r.Repo, r.Tag)
 		case r.Breached(threshold):
 			failed = true
 			for _, p := range r.Platforms {

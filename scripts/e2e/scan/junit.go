@@ -36,11 +36,6 @@ func (r ImageResult) caseName() string {
 	if r.Repo != "" {
 		name = fmt.Sprintf("image-scan %s:%s", r.Repo, r.Tag)
 	}
-	if r.AllUnscannable() {
-		// Coordinator ruling (PR #165): the reason rides in the testcase
-		// name so the pass is loud in ReportPortal, never silent.
-		name += " — unscannable: ORAS bundle artifact — JS deps owned by inari-ui CI"
-	}
 	return name
 }
 

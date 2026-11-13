@@ -634,8 +634,10 @@ spec:
     # ?with_scan_overview=true until scan_status=Success (async! never
     # trusts a prior scan's freshness), archive the full
     # additions/vulnerabilities reports in S3, and fail when the aggregate
-    # Critical count exceeds scan-critical-threshold. CVE allowlists are
-    # managed in Harbor, never in the driver. Complements cosign-verify
+    # Critical count exceeds scan-critical-threshold. Scan API errors,
+    # including HTTP 400 scanner refusals, also fail the gate; there is no
+    # per-artifact scanner-refusal exemption. CVE allowlists are managed in
+    # Harbor, never in the driver. Complements cosign-verify
     # (provenance), never replaces it. All Harbor traffic is in-cluster
     # service DNS (harbor-core.harbor.svc: /api/v2.0, /v2/ proxy,
     # /service/token — live-verified) — the gate never depends on the public

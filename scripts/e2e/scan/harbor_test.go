@@ -45,6 +45,9 @@ const testReport = `{"` + vulnerabilityReportMIME + `":{"vulnerabilities":[` +
 	`{"id":"CVE-2099-0001","severity":"Critical"},` +
 	`{"id":"CVE-2099-0002","severity":"High"}]}}`
 
+const scannerRefusal400Body = `{"errors":[{"code":"BAD_REQUEST",` +
+	`"message":"the configured scanner Trivy does not support scanning artifact with mime type application/vnd.oci.image.manifest.v1+json"}]}`
+
 func (f *fakeHarbor) artifactHandler(w http.ResponseWriter, r *http.Request, ref string) {
 	if r.Method == http.MethodPost || strings.HasSuffix(r.URL.Path, "/scan") {
 		f.scanPosts.Add(1)
@@ -347,18 +350,15 @@ func TestFallbackCountingFromReport(t *testing.T) {
 	}
 }
 
-func TestUnscannableMediaTypeLoudPass(t *testing.T) {
-	// The inari-ui-bundle ORAS artifact shape: Harbor's scan POST refuses
-	// with a 400 "scanner does not support this media type". Coordinator
-	// ruling (PR #165): exactly this response maps to a loud non-blocking
-	// pass — no error, no breach, no retrigger, no report fetch.
+func TestScannerRefusal400FailsGate(t *testing.T) {
+	// The console bundle's former scanner-refusal response is an ordinary
+	// scan API error: it breaches the gate without a retrigger or report fetch.
 	f := &fakeHarbor{
-		t:         t,
-		tagBody:   subManifestJSON,
-		tagDigest: idxDigest,
-		subBodies: map[string]string{idxDigest: subManifestJSON},
-		scanPost400: map[string]string{idxDigest: `{"errors":[{"code":"BAD_REQUEST",` +
-			`"message":"the configured scanner Trivy does not support scanning artifact with mime type application/vnd.oci.image.manifest.v1+json"}]}`},
+		t:           t,
+		tagBody:     subManifestJSON,
+		tagDigest:   idxDigest,
+		subBodies:   map[string]string{idxDigest: subManifestJSON},
+		scanPost400: map[string]string{idxDigest: scannerRefusal400Body},
 	}
 	c := newFakeClient(t, f)
 	dir := t.TempDir()
@@ -366,28 +366,32 @@ func TestUnscannableMediaTypeLoudPass(t *testing.T) {
 	res := ScanImage(context.Background(), c, testOptions(), testImage(), dir, discardLog)
 
 	if res.Err != nil {
-		t.Fatalf("unscannable must not be an image error: %v", res.Err)
+		t.Fatalf("unexpected image-level error: %v", res.Err)
 	}
-	if len(res.Platforms) != 1 || !res.Platforms[0].Unscannable || res.Platforms[0].Err != nil {
-		t.Fatalf("platform not marked unscannable: %+v", res.Platforms)
+	if len(res.Platforms) != 1 || res.Platforms[0].Err == nil {
+		t.Fatalf("scanner refusal must be a platform error: %+v", res.Platforms)
 	}
-	if !res.AllUnscannable() {
-		t.Fatal("image with only unscannable targets must be AllUnscannable")
+	perr := res.Platforms[0].Err
+	if !strings.Contains(perr.Error(), "POST scan: HTTP 400") ||
+		!strings.Contains(perr.Error(), "does not support scanning artifact") {
+		t.Fatalf("scanner refusal lost its HTTP status or reason: %v", perr)
 	}
-	if res.Breached(0) {
-		t.Fatal("unscannable must never breach the gate")
+	if !res.Breached(0) {
+		t.Fatal("scanner-refusal 400 must breach the gate")
+	}
+	if res.Scanned {
+		t.Fatal("scanner-refusal 400 must not mark the image as scanned")
 	}
 	if f.scanPosts.Load() != 1 {
-		t.Fatalf("unscannable must not be retried, got %d POSTs", f.scanPosts.Load())
+		t.Fatalf("scanner-refusal 400 must not be retried, got %d POSTs", f.scanPosts.Load())
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Fatalf("no report exists for an unscannable artifact, found %d files", len(entries))
+		t.Fatalf("no report exists after a scan refusal, found %d files", len(entries))
 	}
 }
 
 func TestScan400GenericIsAnError(t *testing.T) {
-	// A 400 that is NOT the unsupported-media-type refusal stays a plain,
-	// gate-failing error.
+	// A generic 400 is likewise a plain, gate-failing error.
 	f := &fakeHarbor{
 		t:         t,
 		tagBody:   subManifestJSON,
@@ -400,9 +404,6 @@ func TestScan400GenericIsAnError(t *testing.T) {
 
 	res := ScanImage(context.Background(), c, testOptions(), testImage(), t.TempDir(), discardLog)
 
-	if res.AllUnscannable() {
-		t.Fatal("generic 400 must not map to unscannable")
-	}
 	if !res.Breached(0) {
 		t.Fatal("generic 400 must fail the gate")
 	}
