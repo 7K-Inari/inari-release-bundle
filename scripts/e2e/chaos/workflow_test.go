@@ -45,9 +45,12 @@ func TestChaosDAGSelectionAndOrdering(t *testing.T) {
 		if !strings.Contains(workflow, "name: chaos-"+scenario) || !strings.Contains(workflow, "chaos/"+scenario+"/junit.xml") {
 			t.Errorf("scenario %s lacks DAG/reporting wiring", scenario)
 		}
+		if !strings.Contains(workflow, `\"{{workflow.parameters.chaos-scenario}}\" == \"`+scenario+`\"`) {
+			t.Errorf("scenario %s selector must quote the substituted value and scenario string", scenario)
+		}
 	}
 	for _, line := range strings.Split(workflow, "\n") {
-		if strings.Contains(line, "chaos-scenario}} == negative-control") && strings.Contains(line, "chaos-scenario}} == all ||") {
+		if strings.Contains(line, `chaos-scenario}} == \"negative-control\"`) && strings.Contains(line, "chaos-scenario}} == all ||") {
 			t.Fatalf("negative control can be selected by all: %s", line)
 		}
 	}
