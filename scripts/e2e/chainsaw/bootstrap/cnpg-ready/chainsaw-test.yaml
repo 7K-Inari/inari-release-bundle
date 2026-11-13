@@ -17,9 +17,7 @@ spec:
           kind: Cluster
           metadata:
             name: postgresql
-          spec:
-            instances: ($values.postgresql.instances)
+          (status.instances == spec.instances): true
+          (status.readyInstances == spec.instances): true
           status:
             phase: Cluster in healthy state
-            instances: ($values.postgresql.instances)
-            readyInstances: ($values.postgresql.instances)
