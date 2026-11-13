@@ -27,7 +27,7 @@ spec:
             - {name: TARGET_CONTAINER, value: {{.TargetContainer | printf "%q"}}}
             - {name: DESTINATION_HOSTS, value: {{.DestinationHosts | printf "%q"}}}
             - {name: CONTAINER_RUNTIME, value: "containerd"}
-            - {name: SOCKET_PATH, value: "/run/containerd/containerd.sock"}
+            - {name: SOCKET_PATH, value: "/run/k3s/containerd/containerd.sock"}
             - {name: DEFAULT_HEALTH_CHECK, value: "false"}
             - {name: SEQUENCE, value: "parallel"}
         probe:

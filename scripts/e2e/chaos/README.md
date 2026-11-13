@@ -6,6 +6,7 @@ Five bounded resilience scenarios run inside the existing `e2e-stack` weekly wor
 
 - **Install:** `7k-app-of-apps/apps/7kgroup/litmuschaos.yaml`, official `litmus-core` chart **3.31.1**, operator/runner **3.31.0**, `operatorMode=namespaced`, destination `inari-e2e`. The GitOps acceptance checks all three CRDs Established and confirms no chart ClusterRole/Binding.
 - **Tests:** this directory and `gitops/e2e/argo-workflows/`. Vendored fault definitions come from official `chaos-charts` tag **3.31.0**. The network helper is pinned to `gaiadocker/iproute2@sha256:d0cd5819fbeaf2e7501dcb223bb5bad4fda7c1e76ff9877baba6e559c70b6d1e`.
+- **Container runtime:** network faults use RKE2's CRI v1 socket at `/run/k3s/containerd/containerd.sock`, in both the experiment defaults and engine overrides. The generic `/run/containerd/containerd.sock` endpoint on these nodes does not register `runtime.v1.RuntimeService`; the install chart has no socket values knob.
 - **Isolation:** the driver requires exactly namespace `inari-e2e`, domain `inari-e2e.7kgroup.org`, and Keycloak `https://auth-e2e.7kgroup.org`. It resolves exact Ready pod names and renders both `spec.selectors.pods` and `TARGET_PODS`. `chaos-rbac.yaml` contains namespaced Roles only and no Secret access.
 
 ## Prerequisites

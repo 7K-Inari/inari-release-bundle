@@ -39,6 +39,11 @@ func TestRenderEveryEngineIsPinnedAndNamespaced(t *testing.T) {
 				if !strings.Contains(string(engine.Experiment), "gaiadocker/iproute2@sha256:d0cd5819fbeaf2e7501dcb223bb5bad4fda7c1e76ff9877baba6e559c70b6d1e") {
 					t.Fatal("network helper digest is not pinned")
 				}
+				for _, manifest := range [][]byte{engine.Manifest, engine.Experiment} {
+					if !strings.Contains(string(manifest), `{name: SOCKET_PATH, value: "/run/k3s/containerd/containerd.sock"}`) {
+						t.Fatalf("network fault does not use the RKE2 CRI socket:\n%s", manifest)
+					}
+				}
 			}
 			if !strings.Contains(string(engine.Experiment), "go-runner:3.31.0") {
 				t.Fatal("fault image is not pinned to 3.31.0")
