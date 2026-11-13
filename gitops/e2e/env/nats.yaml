@@ -1,10 +1,10 @@
 # inari-e2e-nats — JetStream event bus for the e2e environment (wave 1).
-# Permanently 3-node clustered: standalone→clustered conversion is NOT
-# supported (JetStream never elects a meta leader over a PVC born
-# non-clustered — the 2026-11-07 nightly died on exactly this), so the
-# baseline matches the prod topology and HA runs no longer touch NATS (the
-# flip covers server/console/agent only). The server pins streamReplicas per
-# run (R=1 non-HA / R=3 HA); R=1 streams are fine on a clustered bus.
+# Permanently 3-node clustered with R=3 streams: standalone→clustered
+# conversion is NOT supported (JetStream never elects a meta leader over a
+# PVC born non-clustered — the 2026-11-07 nightly died on exactly this), and
+# R=1↔R=3 stream flips remap every consumer (the 2026-11-10/11 nightlies
+# then died on corrupt consumer Raft state). The baseline therefore matches
+# the prod topology; non-HA runs trim the app tier, not NATS durability.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
