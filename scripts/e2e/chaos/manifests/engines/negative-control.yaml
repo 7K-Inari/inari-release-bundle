@@ -1,0 +1,40 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: {{.Name}}
+  namespace: inari-e2e
+  labels: {e2e.inari.io/run-id: {{.RunID}}}
+spec:
+  engineState: active
+  jobCleanUpPolicy: retain
+  defaultHealthCheck: false
+  terminationGracePeriodSeconds: 10
+  appinfo: {appns: inari-e2e, applabel: "", appkind: ""}
+  selectors:
+    pods:
+      - {names: {{.TargetPods | printf "%q"}}, namespace: inari-e2e}
+  chaosServiceAccount: e2e-chaos-runner
+  experiments:
+    - name: {{.ExperimentName}}
+      spec:
+        components:
+          env:
+            - {name: TOTAL_CHAOS_DURATION, value: "{{.DurationSeconds}}"}
+            - {name: NETWORK_PACKET_LOSS_PERCENTAGE, value: "{{.LossPercent}}"}
+            - {name: TARGET_PODS, value: {{.TargetPods | printf "%q"}}}
+            - {name: TARGET_CONTAINER, value: {{.TargetContainer | printf "%q"}}}
+            - {name: CONTAINER_RUNTIME, value: "containerd"}
+            - {name: SOCKET_PATH, value: "/run/containerd/containerd.sock"}
+            - {name: DEFAULT_HEALTH_CHECK, value: "false"}
+            - {name: SEQUENCE, value: "parallel"}
+        probe:
+          # This Continuous probe MUST fail. The driver independently requires
+          # a failed native verdict/UI check and then fails this manual leg.
+          - name: negative-control-api-outage
+            type: httpProbe
+            mode: Continuous
+            httpProbe/inputs:
+              url: {{.APIURL}}
+              insecureSkipVerify: false
+              method: {get: {criteria: ==, responseCode: "401"}}
+            runProperties: {probeTimeout: 5s, interval: 5s, retry: 0, attempt: 1, stopOnFailure: false}

@@ -2,7 +2,13 @@
 # never in PR/release gates). The e2e-stack template's weekly mode runs the
 # k6 legs (W7): permissions-cache → login-storm → provisioning-outbox,
 # sequential k6-operator TestRuns, thresholds gating via the runner exit
-# code. LitmusChaos legs join this same slot in W9 (taxonomy `chaos`).
+# code. W9 adds manual/activation-ready LitmusChaos legs, but this schedule
+# stays weekly-suite=load until BOTH gates are evidenced: three consecutive
+# green scheduled nightlies + latest scheduled k6, and an enabled nightly
+# reset with one successful semaphore-coordinated restore proof. As of
+# 2026-11-13 the reset is still a suspended placeholder; recurring chaos is
+# NOT live. Activation changes only weekly-suite to all (scenario stays all,
+# which never includes the manual negative-control).
 #
 # Enabled after the W7 acceptance run (2026-11-12): all three legs went green
 # end-to-end and ReportPortal launch 72 recorded the three named k6 testsuites.
@@ -32,6 +38,10 @@ spec:
       parameters:
         - name: mode
           value: weekly
+        - name: weekly-suite
+          value: load
+        - name: chaos-scenario
+          value: all
         - name: ha
           value: "true"
         - name: charts-ref

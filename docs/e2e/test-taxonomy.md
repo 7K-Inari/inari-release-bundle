@@ -48,7 +48,7 @@ triage, never for gating decisions on their own:
 |---|---|---|
 | `load` | k6 via k6-operator TestRuns — realized (W7) as the sequential `k6-run` legs of the e2e-stack template (`mode=weekly`; `scripts/e2e/load/`), not a Ginkgo/Playwright label | **Never** in PR or release gates; weekly CronWorkflow only |
 | `fuzz` | Schemathesis via the `fuzz` leg of the e2e-stack template (`mode=nightly`; `scripts/e2e/fuzz/`), not a Ginkgo/Playwright label | **Never** in PR or release gates; nightly only, serialized after Ginkgo and Playwright; surfaces as the `fuzz` JUnit testsuite |
-| `chaos` | LitmusChaos (runs as Argo Workflows) | **Never** in gates; dedicated env only, scheduled the night before the nightly-reset CronWorkflow |
+| `chaos` | LitmusChaos, realized (W9) as five sequential `chaos-run` legs of the e2e-stack template (`mode=weekly`, `weekly-suite=chaos|all`; `scripts/e2e/chaos/`), not a Ginkgo/Playwright label | **Never** in PR or release gates; dedicated env only. Manual chaos-only acceptance is supported. Recurring `weekly-suite=all` stays gated on three green scheduled nightlies + green weekly k6 and an enabled, restore-tested nightly reset; the cron remains `load` until then |
 
 The kubeproxy/tunnel throughput target from the migration plan is
 **deliberately dropped** (W7 D4): kubeproxy is disabled on the e2e env and
@@ -105,7 +105,7 @@ unified:
 | **Release gate** (`E2E_MODE=release`, via thin `release-e2e.yaml` → Argo) | `(p0 \|\| smoke) && !quarantine` | `--grep "@p0\|@smoke" --grep-invert @quarantine` | `smoke` set only | **Yes** — blocks the Release PR |
 | **Nightly** (CronWorkflow, `E2E_MODE=nightly`) | `p0 \|\| p1 \|\| p2` incl. `quarantine` | `--grep "@p0\|@p1\|@p2"` incl. `@quarantine` (`continue-on-error`) | all | No — signal + flake sweep |
 | **Upgrade** (`E2E_MODE=upgrade`, phase 2 — W5) | `(p0 \|\| smoke) && !quarantine` (the gate selection, re-run on the upgraded stack) | `--grep "@p0\|@smoke" --grep-invert @quarantine` | full bootstrap set, post-upgrade | **No — non-gating** (suspended CronWorkflow + manual); release-gating flip only after ~2 weeks stable, see below |
-| **Weekly** (CronWorkflow, `E2E_MODE=weekly`, phase 2) | — (W7: the weekly mode runs the k6 load legs — sequential `k6-run` TestRuns, thresholds gating via the runner exit code; `load`/`chaos` are workflow legs, not suite labels — same realization model as the upgrade stage. Chaos legs join in W9.) | — | — | No |
+| **Weekly** (CronWorkflow, `E2E_MODE=weekly`, phase 2) | — (W7 k6 + W9 Litmus are workflow legs, not suite labels. k6 runs for `weekly-suite=load|all`; five sequential chaos scenarios run for `chaos|all`, after successful/skipped k6. The default/cron remains `load` until the W9 activation gates.) | Chaos baseline/recovery `@smoke`; during-fault `@p0\|@smoke --grep-invert @quarantine` (NATS `@smoke` only). No standalone weekly Playwright shard | — | No |
 | **PostSync hook** (ArgoCD PostSync after env sync) | `smoke` | `--grep @smoke` | `smoke` | Sync health only |
 
 Notes:
@@ -123,6 +123,15 @@ Notes:
   excludes every other mode, and its dependency expression runs it after both
   Ginkgo and Playwright regardless of their outcomes so a red suite does not
   starve the fuzz signal.
+- `chaos` is a weekly workflow execution profile, not a per-test label.
+  `weekly-suite=chaos` selects focused manual acceptance; `all` runs k6 then
+  CNPG failover → Keycloak latency → NATS outage → OpenFGA latency/timeout →
+  server replacement. `chaos-scenario` selects one named scenario or `all`;
+  `negative-control` is deliberately excluded from `all` and fails its manual
+  Argo leg after proving the outage and recovering. Each scenario emits a
+  `chaos.<scenario>` JUnit wrapper plus raw ChaosResult/evidence. Recurring
+  activation and reset/stability evidence are documented in
+  `scripts/e2e/chaos/README.md`.
 - **Upgrade is a stage, not a per-test label.** The `upgrade` stage
   (phase 2, W5) is realized as `E2E_MODE=upgrade` on the e2e-stack
   WorkflowTemplate: the run deploys the previous stable artifact set, writes
@@ -194,12 +203,14 @@ Every suite leg writes JUnit XML to a shared artifact directory:
 
 ```
 /artifacts/{ginkgo,playwright,chainsaw,apischema,k6,scan,fuzz}/junit.xml
+/artifacts/out/junit.xml                    # one chaos-run leg; S3 key includes chaos/<scenario>/
 ```
 
 - The workflow `onExit` handler uploads **all** JUnit to ReportPortal
   unconditionally — aborted and failed runs still report.
 - Every launch carries attributes: `mode` (`E2E_MODE`), `E2E_RUN_ID`,
-  `server-image`/`console-image` tags, `charts-ref`. ReportPortal's trend
+  `server-image`/`console-image` tags, `charts-ref`, plus workflow-only
+  `weekly-suite`/`chaos-scenario` selectors. ReportPortal's trend
   widgets + analyzer then slice history by mode/label.
 - Playwright additionally writes its HTML report + traces (artifact only);
   live streaming via `@reportportal/agent-js-playwright` is optional.
@@ -215,6 +226,13 @@ Every suite leg writes JUnit XML to a shared artifact directory:
   testcase per candidate image; failures carry the Critical count, the
   threshold, and the S3 pointer to the full `additions/vulnerabilities`
   report archived at `e2e/<uid>/scan/reports/`).
+- Chaos emits one `chaos.<scenario>` synthetic JUnit per selected leg at
+  `e2e/<uid>/chaos/<scenario>/junit.xml`, with raw results and browser/domain
+  evidence under the sibling `evidence/` key. Native phase/verdict and the
+  unchanged Litmus `probeSuccessPercentage` are separate testcases from
+  Playwright, domain, cleanup, and recovery verdicts, so a native 100% cannot
+  mask an independent failure. The optional negative-control wrapper is failed
+  by design and still imports through the unconditional exit handler.
 - Artifacts live in a Garage S3 bucket (the platform cluster convention);
   `retention-days` honored via bucket lifecycle.
 - Skipped testcases are dropped from the ReportPortal **import copy** and

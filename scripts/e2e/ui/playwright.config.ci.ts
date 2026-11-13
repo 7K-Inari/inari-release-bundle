@@ -13,6 +13,11 @@ import { defineConfig } from "@playwright/test";
 import base from "./playwright.config";
 
 const RP_ENABLED = Boolean(process.env.RP_ENDPOINT && process.env.RP_API_KEY);
+// M1W9: opt-in only from the chaos driver. Normal release/nightly/weekly UI
+// runs have neither variable and retain the existing reporter set.
+const CHAOS_REPORTER_ENABLED = Boolean(
+  process.env.E2E_CHAOS_REPORTER && process.env.E2E_CHAOS_MARKER_FILE,
+);
 
 const reportPortal = [
   "@reportportal/agent-js-playwright",
@@ -44,6 +49,11 @@ export default defineConfig({
     // JSON copy of the results (debugging; the quarantine sweep reads
     // ReportPortal, not this file — report-flakes.mjs was retired).
     ["json", { outputFile: "test-results/report.json" }],
+    ...(CHAOS_REPORTER_ENABLED
+      ? ([
+          ["../chaos/reporter.mjs", { markerFile: process.env.E2E_CHAOS_MARKER_FILE }],
+        ] as [string, Record<string, unknown>][])
+      : []),
     ...(RP_ENABLED ? [reportPortal as unknown as [string, Record<string, unknown>]] : []),
   ],
   use: {

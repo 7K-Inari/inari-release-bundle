@@ -1,0 +1,49 @@
+# Minimal vendored official chaos-charts 3.31.0 pod-delete definition.
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: {{.ExperimentName}}
+  namespace: inari-e2e
+  labels:
+    name: pod-delete
+    app.kubernetes.io/part-of: litmus
+    app.kubernetes.io/component: chaosexperiment
+    app.kubernetes.io/version: 3.31.0
+    e2e.inari.io/run-id: {{.RunID}}
+spec:
+  definition:
+    scope: Namespaced
+    permissions:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "pods/exec", "events", "configmaps"]
+        verbs: ["create", "delete", "get", "list", "patch", "update", "deletecollection", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+        verbs: ["list", "get"]
+      - apiGroups: ["batch"]
+        resources: ["jobs"]
+        verbs: ["create", "list", "get", "delete", "deletecollection"]
+      - apiGroups: ["litmuschaos.io"]
+        resources: ["chaosengines", "chaosexperiments", "chaosresults"]
+        verbs: ["create", "list", "get", "patch", "update", "delete"]
+    image: litmuschaos.docker.scarf.sh/litmuschaos/go-runner:3.31.0
+    imagePullPolicy: IfNotPresent
+    args: ["-c", "./experiments -name pod-delete"]
+    command: ["/bin/bash"]
+    env:
+      - {name: TOTAL_CHAOS_DURATION, value: "15"}
+      - {name: RAMP_TIME, value: ""}
+      - {name: FORCE, value: "true"}
+      - {name: CHAOS_INTERVAL, value: "5"}
+      - {name: PODS_AFFECTED_PERC, value: ""}
+      - {name: TARGET_CONTAINER, value: ""}
+      - {name: TARGET_PODS, value: ""}
+      - {name: DEFAULT_HEALTH_CHECK, value: "false"}
+      - {name: NODE_LABEL, value: ""}
+      - {name: SEQUENCE, value: "parallel"}
+    labels:
+      name: pod-delete
+      app.kubernetes.io/part-of: litmus
+      app.kubernetes.io/component: experiment-job
+      app.kubernetes.io/runtime-api-usage: "true"
+      app.kubernetes.io/version: 3.31.0

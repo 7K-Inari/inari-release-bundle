@@ -29,7 +29,10 @@ spec:
           sectionName: https-7kgroup
         postgresql:
           enabled: true
-          instances: 1
+          # M1W9 failover prerequisite: three healthy instances are required
+          # before cnpg-primary-delete may run. Wait for replica backfill and
+          # Ready=3 after this GitOps topology change; never test on one node.
+          instances: 3
           storageClass: longhorn-hdd-no-backup
           storageSize: 5Gi
           auth:
