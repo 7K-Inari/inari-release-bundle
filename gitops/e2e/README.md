@@ -26,7 +26,11 @@ AppProject **inari-e2e**.
 The file values are the **non-HA steady state** (1 replica, single-node
 NATS R=1, memory cache, no kubeproxy). Candidate image tags and HA values
 are applied per run by the W3 env-prep step; the release gate tests exactly
-the run's artifact set, never "whatever is deployed" (invariant 5).
+the run's artifact set, never "whatever is deployed" (invariant 5). CNPG is
+**three instances** since W9 (`env/platform-config.yaml`) to make the chaos
+primary-failover experiment valid; wait for all three replicas/backfill to be
+healthy before running it. This is an e2e-only topology change, not a chart
+default or live-instance change.
 
 ## Image pull path — Harbor `ghcr-proxy`
 
@@ -227,10 +231,11 @@ lives in 7k-app-of-apps (W1).
 | `harbor-scanner-secret.yaml` | ESO ExternalSecret syncing the Harbor scan-gate robot credentials (Vault `inari-e2e/harbor-robot`); the scan gate fails LOUD until the owner provisions it — a release gate never silently skips (§Harbor scan gate) |
 | `workflowtemplate-e2e-janitor.yaml` + `cronworkflow-janitor.yaml` | Reap `e2e-*` orgs older than retention-days (contract invariant 6), skipping `e2e-org` + active runs; every 6h. Two identities: requests as dev-admin, approves as **e2e-ops** (lifecycle approvals are never self-decidable) |
 | `cronworkflow-nightly.yaml` | 03:17 UTC full surface incl. quarantined, edge images, env-wide HA flip |
-| `cronworkflow-weekly.yaml` | **Enabled after W7 acceptance** (2026-11-12) — Saturday 02:17 UTC `mode=weekly`: the k6 load legs (never in PR/release gates). Sits ~23h ahead of the nightly-reset — the plan's "load/chaos the night before the reset" ordering; chaos legs join this slot in W9 |
+| `cronworkflow-weekly.yaml` | Saturday 02:17 UTC `mode=weekly`, explicitly `weekly-suite=load`: k6 only for now. W9 chaos is manual/activation-ready, **not live**; switch to `all` only after three consecutive green scheduled nightlies + latest scheduled k6 and an enabled, restore-tested nightly reset. Sits ~23h ahead of the Sunday reset; `concurrencyPolicy: Forbid` stays unchanged |
 | `cronworkflow-nightly-reset.yaml` | **Suspended placeholder** (restore-from-backup needs CNPG barman wiring in env-extras first) |
 | `semaphore-e2e-env-lock.yaml` | One permit — serializes every run against the single env |
 | `rbac.yaml` | Runner SAs (e2e-runner default; e2e-seed, e2e-agent-ensure, e2e-chainsaw-hook, e2e-load per step; e2e-submitter for the GHA wrappers), the env-prep Application-patch Role in ns argocd, the controller semaphore-write fix, and the e2e agent namespace + cluster RBAC |
+| `chaos-rbac.yaml` | W9 separate `e2e-chaos-driver` / `e2e-chaos-runner` SAs, Roles, and RoleBindings in `inari-e2e` only; Litmus CRUD, exact target/workload reads, pod log/exec and recorded-resource cleanup. No Secret, Node, Namespace, CRD, ClusterRole, or live-agent permissions |
 | `env-contract-configmap.yaml` | The non-secret half of the env contract, envFrom'd into every leg |
 | `artifact-repo-credentials.yaml` | GarageKey + GarageReferenceGrant copying the artifact-repo S3 creds into inari-e2e (artifact secrets resolve in the workflow's namespace) |
 | `../chainsaw-hooks/smoke-job.yaml` | PostSync chainsaw smoke Job, attached to the inari-e2e-server app as a second source — every candidate flip is smoke-gated. **Deviation (Q9):** only chainsaw runs as a PostSync hook; the taxonomy §3 Ginkgo/Playwright smoke sets run via `mode=smoke` submissions |
@@ -262,6 +267,29 @@ e2e-submitter-token -o jsonpath='{.data.token}' | base64 -d)"`. Every
 run — succeeded, failed, or aborted — lands in ReportPortal project
 `inari-e2e` as one launch (`https://reportportal.7kgroup.org/ui/#inari-e2e/launches/all`);
 JUnit XMLs also persist in the Garage bucket at `e2e/<workflow-uid>/`.
+
+### LitmusChaos legs (`mode=weekly`, W9)
+
+The namespaced operator install is owned by
+`7k-app-of-apps/apps/7kgroup/litmuschaos.yaml` (litmus-core 3.31.1,
+operator/runner 3.31.0). After that GitOps PR merges, prove the Application
+Healthy, deployment `litmus` Ready, all three Litmus CRDs Established on RKE2
+1.35, and no chart ClusterRole/ClusterRoleBinding. The bundle owns only test
+definitions/RBAC/workflow legs.
+
+`weekly-suite=chaos` skips k6 for focused manual acceptance; `all` requires
+k6 success and then runs five serialized scenarios. `chaos-scenario` selects
+one or all five; `negative-control` is manual-only and intentionally red.
+See [`scripts/e2e/chaos/README.md`](../../scripts/e2e/chaos/README.md) for the
+exact scenario contracts, submit command, native score/JUnit semantics, S3
+evidence, and break-glass cleanup. Every leg runs under the existing
+`e2e-env-lock`, and its JUnit joins the same unconditional ReportPortal
+launch even when the leg fails.
+
+The scheduled cron remains `weekly-suite=load` until the stability and reset
+gates in that runbook are both satisfied. In particular, the current
+suspended reset placeholder is **not** a wipe/restore proof and must not be
+used to justify recurring chaos.
 
 ### Fuzz leg (`mode=nightly`, W8)
 

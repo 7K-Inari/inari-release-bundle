@@ -65,7 +65,8 @@ jobs:
             scripts/e2e/ui/helpers/poll.test.ts \
             scripts/e2e/ui/helpers/env.test.ts \
             scripts/e2e/ui/helpers/git.test.ts \
-            scripts/e2e/ui/quarantine-issues.test.mjs
+            scripts/e2e/ui/quarantine-issues.test.mjs \
+            scripts/e2e/chaos/reporter.test.mjs
 
       - name: Set up Go (e2e seed)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -83,6 +84,12 @@ jobs:
         # machine, threshold math, JUnit wrapper, Harbor API encoding. Same
         # Go toolchain as the seed (both go.mod files pin go 1.26).
         working-directory: scripts/e2e/scan
+        run: go test ./...
+
+      - name: e2e chaos driver unit tests (go test)
+        # M1W9: fail-closed guards, exact-name cleanup, native result state,
+        # domain-probe classification, and independent JUnit verdicts.
+        working-directory: scripts/e2e/chaos
         run: go test ./...
 
       - name: chart-testing lint

@@ -1,0 +1,47 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: {{.Name}}
+  namespace: inari-e2e
+  labels: {e2e.inari.io/run-id: {{.RunID}}}
+spec:
+  engineState: active
+  jobCleanUpPolicy: retain
+  defaultHealthCheck: false
+  terminationGracePeriodSeconds: 10
+  appinfo: {appns: inari-e2e, applabel: "", appkind: ""}
+  selectors:
+    pods:
+      - {names: {{.TargetPods | printf "%q"}}, namespace: inari-e2e}
+  chaosServiceAccount: e2e-chaos-runner
+  experiments:
+    - name: {{.ExperimentName}}
+      spec:
+        components:
+          env:
+            - {name: TOTAL_CHAOS_DURATION, value: "{{.DurationSeconds}}"}
+            - {name: CHAOS_INTERVAL, value: "5"}
+            - {name: FORCE, value: "false"}
+            - {name: TARGET_PODS, value: {{.TargetPods | printf "%q"}}}
+            - {name: TARGET_CONTAINER, value: {{.TargetContainer | printf "%q"}}}
+            - {name: DEFAULT_HEALTH_CHECK, value: "false"}
+        probe:
+          - name: api-remains-authn-protected
+            type: httpProbe
+            mode: Continuous
+            httpProbe/inputs:
+              url: {{.APIURL}}
+              insecureSkipVerify: false
+              method: {get: {criteria: ==, responseCode: "401"}}
+            runProperties: {probeTimeout: 10s, interval: 5s, retry: 1, attempt: 1, stopOnFailure: false}
+          - name: server-deployment-present-eot
+            type: k8sProbe
+            mode: EOT
+            k8sProbe/inputs:
+              group: apps
+              version: v1
+              resource: deployments
+              namespace: inari-e2e
+              resourceNames: inari-server
+              operation: present
+            runProperties: {probeTimeout: 10s, interval: 5s, retry: 1, attempt: 1}

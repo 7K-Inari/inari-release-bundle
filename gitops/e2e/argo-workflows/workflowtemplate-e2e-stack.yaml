@@ -24,6 +24,10 @@
 # - W7 (landed): weekly mode gains the k6 load legs (k6-run template × 3
 #   scenarios, sequential, mode==weekly only). Load NEVER runs in PR or
 #   release gates (hard rule 6); thresholds gate via the runner exit code.
+# - W9: weekly-suite=chaos|all adds five sequential, bounded LitmusChaos
+#   scenarios after successful/skipped k6. weekly-suite=load remains the
+#   default/cron value until the stability + restore-reset activation gates;
+#   the explicit negative-control is manual-only and intentionally fails.
 # - W8: nightly mode gains a serialized Schemathesis fuzz leg AFTER the
 #   Ginkgo/Playwright outcomes. It pulls the OpenAPI OCI tag matching
 #   server-image, scopes writes to one run-owned tenant, and archives JUnit +
@@ -116,6 +120,17 @@ spec:
         # k6-run step then shrinks every load-shape knob (rate/VUs/pace/
         # ramps). Ignored by every other mode.
         value: ""
+      - name: weekly-suite
+        # Workflow-only W9 selector; never injected into suite env contracts.
+        # load preserves W7 behavior. chaos is manual acceptance/debugging;
+        # all is enabled on the cron only after stability + reset gates.
+        value: load
+        enum: ["load", "chaos", "all"]
+      - name: chaos-scenario
+        # One named scenario for acceptance, or all five in weekly-suite=all.
+        # negative-control is never selected by all and fails by design.
+        value: all
+        enum: ["all", "cnpg-primary-delete", "keycloak-latency", "nats-outage", "openfga-latency", "server-pod-delete", "negative-control"]
       - name: reportportal-launch
         # Empty → resolve computes "<mode>-<workflow uid>".
         value: ""
@@ -280,7 +295,7 @@ spec:
           - name: k6-permissions-cache
             template: k6-run
             depends: seed
-            when: "{{workflow.parameters.mode}} == weekly"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == load || {{workflow.parameters.weekly-suite}} == all)"
             arguments:
               parameters:
                 - name: scenario
@@ -288,7 +303,7 @@ spec:
           - name: k6-login-storm
             template: k6-run
             depends: k6-permissions-cache
-            when: "{{workflow.parameters.mode}} == weekly"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == load || {{workflow.parameters.weekly-suite}} == all)"
             arguments:
               parameters:
                 - name: scenario
@@ -296,11 +311,63 @@ spec:
           - name: k6-provisioning-outbox
             template: k6-run
             depends: k6-login-storm
-            when: "{{workflow.parameters.mode}} == weekly"
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == load || {{workflow.parameters.weekly-suite}} == all)"
             arguments:
               parameters:
                 - name: scenario
                   value: provisioning-outbox
+          # --- weekly mode only (W9): serialized LitmusChaos legs -----------
+          # chaos-only manual runs skip k6; all runs require the k6 chain to
+          # succeed. A red scenario blocks every later injection via depends.
+          - name: chaos-cnpg-primary-delete
+            template: chaos-run
+            depends: k6-provisioning-outbox.Succeeded || k6-provisioning-outbox.Skipped
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == cnpg-primary-delete)"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: cnpg-primary-delete
+          - name: chaos-keycloak-latency
+            template: chaos-run
+            depends: chaos-cnpg-primary-delete.Succeeded || chaos-cnpg-primary-delete.Skipped
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == keycloak-latency)"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: keycloak-latency
+          - name: chaos-nats-outage
+            template: chaos-run
+            depends: chaos-keycloak-latency.Succeeded || chaos-keycloak-latency.Skipped
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == nats-outage)"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: nats-outage
+          - name: chaos-openfga-latency
+            template: chaos-run
+            depends: chaos-nats-outage.Succeeded || chaos-nats-outage.Skipped
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == openfga-latency)"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: openfga-latency
+          - name: chaos-server-pod-delete
+            template: chaos-run
+            depends: chaos-openfga-latency.Succeeded || chaos-openfga-latency.Skipped
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && ({{workflow.parameters.chaos-scenario}} == all || {{workflow.parameters.chaos-scenario}} == server-pod-delete)"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: server-pod-delete
+          # Deliberate red acceptance control: never included in scenario=all.
+          - name: chaos-negative-control
+            template: chaos-run
+            depends: chaos-server-pod-delete.Succeeded || chaos-server-pod-delete.Skipped
+            when: "{{workflow.parameters.mode}} == weekly && ({{workflow.parameters.weekly-suite}} == chaos || {{workflow.parameters.weekly-suite}} == all) && {{workflow.parameters.chaos-scenario}} == negative-control"
+            arguments:
+              parameters:
+                - name: scenario
+                  value: negative-control
 
     # -------------------------------------------------------------- resolve
     # Validates the parameter contract (release ⇒ cosign ON, quarantined
@@ -2032,6 +2099,139 @@ spec:
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/k6/{{inputs.parameters.scenario}}/runner.log
 
+    # -------------------------------------------------------------- chaos-run
+    # W9: one bounded Litmus scenario. The exact charts-ref supplies driver,
+    # vendored 3.31.0 faults, Playwright config, and tests — no bespoke image.
+    # The driver writes JUnit before every nonzero return; Argo still uploads
+    # outputs on failure and the unconditional exit handler imports them.
+    - name: chaos-run
+      activeDeadlineSeconds: 1800
+      podSpecPatch: '{"serviceAccountName":"e2e-chaos-driver","terminationGracePeriodSeconds":60}'
+      inputs:
+        parameters:
+          - name: scenario
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: tools
+          emptyDir: {}
+      initContainers:
+        - name: clone-bundle
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - git init -q /work && cd /work && git remote add origin https://github.com/7K-Inari/inari-release-bundle.git && git fetch -q --depth 1 origin "$REF" && git checkout -q FETCH_HEAD
+          env:
+            - name: REF
+              value: "{{workflow.parameters.charts-ref}}"
+          volumeMounts:
+            - name: work
+              mountPath: /work
+        - name: build-driver
+          image: golang:1.26.3-bookworm
+          command: ["/bin/sh", "-c"]
+          args:
+            - cd /work/scripts/e2e/chaos && CGO_ENABLED=0 go build -trimpath -o /tools/chaos-driver .
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: tools
+              mountPath: /tools
+        - name: kubectl
+          image: alpine/k8s:1.35.10
+          command: ["/bin/sh", "-c"]
+          args:
+            - cp "$(command -v kubectl)" /tools/kubectl
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+      script:
+        image: mcr.microsoft.com/playwright:v1.64.1-noble
+        command: [sh]
+        envFrom:
+          - configMapRef:
+              name: e2e-env-contract
+        env:
+          - name: E2E_RUN_ID
+            value: "{{workflow.uid}}"
+          - name: E2E_MODE
+            value: "{{workflow.parameters.mode}}"
+          - name: E2E_HA
+            value: "{{workflow.parameters.ha}}"
+          - name: CHAOS_SCENARIO
+            value: "{{inputs.parameters.scenario}}"
+          - name: E2E_USER
+            value: dev-admin
+          - name: E2E_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: dev-admin-password}
+          - name: E2E_OPERATOR_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: operator-password}
+          - name: E2E_EDITOR_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: editor-password}
+          - name: E2E_VIEWER_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: viewer-password}
+          - name: E2E_MEMBER_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: inari-e2e-personas, key: member-password}
+          - name: OUT_DIR
+            value: /artifacts/out
+          - name: EVIDENCE_DIR
+            value: /artifacts/evidence
+          - name: BUNDLE_DIR
+            value: /work
+          - name: UI_DIR
+            value: /work/scripts/e2e/ui
+          - name: KUBECTL
+            value: /tools/kubectl
+          - name: PATH
+            value: /tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        source: |
+          set -eu
+          mkdir -p /artifacts/out /artifacts/evidence
+          /tools/kubectl version --client=true
+          exec /tools/chaos-driver
+        volumeMounts:
+          - name: work
+            mountPath: /work
+          - name: tools
+            mountPath: /tools
+      outputs:
+        artifacts:
+          - name: junit
+            path: /artifacts/out/junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/{{inputs.parameters.scenario}}/junit.xml
+          - name: evidence
+            path: /artifacts/evidence
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/{{inputs.parameters.scenario}}/evidence/
+
     # ----------------------------------------------------- exit-handler
     # Unconditional result reporting (hard rule 8/10): every suite's JUnit
     # lands here even when the run failed or was aborted (optional inputs
@@ -2209,6 +2409,110 @@ spec:
                 name: argo-workflows-s3-credentials
                 key: ACCESS_SECRET_KEY
               key: e2e/{{workflow.uid}}/k6/provisioning-outbox/junit.xml
+          # Weekly W9 chaos wrappers. Optional inputs are load-bearing for
+          # failed/aborted/manual runs: every available red JUnit is imported.
+          - name: chaos-cnpg-primary-delete-junit
+            optional: true
+            path: /junit/chaos-cnpg-primary-delete-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/cnpg-primary-delete/junit.xml
+          - name: chaos-keycloak-latency-junit
+            optional: true
+            path: /junit/chaos-keycloak-latency-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/keycloak-latency/junit.xml
+          - name: chaos-nats-outage-junit
+            optional: true
+            path: /junit/chaos-nats-outage-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/nats-outage/junit.xml
+          - name: chaos-openfga-latency-junit
+            optional: true
+            path: /junit/chaos-openfga-latency-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/openfga-latency/junit.xml
+          - name: chaos-server-pod-delete-junit
+            optional: true
+            path: /junit/chaos-server-pod-delete-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/server-pod-delete/junit.xml
+          - name: chaos-negative-control-junit
+            optional: true
+            path: /junit/chaos-negative-control-junit.xml
+            archive:
+              none: {}
+            s3:
+              bucket: argo-workflows-artifacts
+              endpoint: garage.garage.svc.cluster.local:3900
+              insecure: true
+              region: garage
+              accessKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_KEY_ID
+              secretKeySecret:
+                name: argo-workflows-s3-credentials
+                key: ACCESS_SECRET_KEY
+              key: e2e/{{workflow.uid}}/chaos/negative-control/junit.xml
           # Keep in sync with the playwright task's withParam shard list.
           - name: playwright-junit-1-2
             optional: true
@@ -2269,13 +2573,15 @@ spec:
           [ -n "$LAUNCH" ] || LAUNCH="{{workflow.parameters.mode}}-{{workflow.uid}}"
           echo "run: {{workflow.parameters.mode}} / {{workflow.uid}} (status {{workflow.status}})"
           echo "launch: $LAUNCH"
-          echo "attributes: mode={{workflow.parameters.mode}} charts-ref={{workflow.parameters.charts-ref}} server-image={{workflow.parameters.server-image}} console-image={{workflow.parameters.console-image}} agent-image={{workflow.parameters.agent-image}}"
+          echo "attributes: mode={{workflow.parameters.mode}} weekly-suite={{workflow.parameters.weekly-suite}} chaos-scenario={{workflow.parameters.chaos-scenario}} charts-ref={{workflow.parameters.charts-ref}} server-image={{workflow.parameters.server-image}} console-image={{workflow.parameters.console-image}} agent-image={{workflow.parameters.agent-image}}"
 
           mkdir -p /artifacts/out
           {
             echo "run_id={{workflow.uid}}"
             echo "launch=$LAUNCH"
             echo "mode={{workflow.parameters.mode}}"
+            echo "weekly-suite={{workflow.parameters.weekly-suite}}"
+            echo "chaos-scenario={{workflow.parameters.chaos-scenario}}"
             echo "status={{workflow.status}}"
           } > /artifacts/out/manifest.txt
 
@@ -2371,6 +2677,8 @@ spec:
               --arg server "{{workflow.parameters.server-image}}" \
               --arg console "{{workflow.parameters.console-image}}" \
               --arg agent "{{workflow.parameters.agent-image}}" \
+              --arg weeklysuite "{{workflow.parameters.weekly-suite}}" \
+              --arg chaosscenario "{{workflow.parameters.chaos-scenario}}" \
               --arg status "{{workflow.status}}" \
               '{name: $name, mode: "DEFAULT", description: $desc, attributes: [
                 {key: "mode", value: $mode},
@@ -2379,6 +2687,8 @@ spec:
                 {key: "server-image", value: $server},
                 {key: "console-image", value: $console},
                 {key: "agent-image", value: $agent},
+                {key: "weekly-suite", value: $weeklysuite},
+                {key: "chaos-scenario", value: $chaosscenario},
                 {key: "status", value: $status},
                 {key: "skippedIsNotIssue", value: "true", system: true}]}')
 
