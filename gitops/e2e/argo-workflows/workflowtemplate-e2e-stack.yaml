@@ -11,8 +11,8 @@
 # - Q3: agent-image="build" is unsupported on the Argo path (no in-cluster
 #   image builds); the agent repo publishes a moving "edge" image instead.
 # - Q5: HA is an ENV-WIDE flip (env-prep scales the server to 2 replicas +
-#   redis cache; NATS stays permanently 3-node — standalone→clustered
-#   JetStream conversion is unsupported, the 2026-11-07 nightly died on it)
+#   redis cache; NATS stays permanently 3-node with R=3 streams — topology
+#   conversion/remapping is unsafe, the 2026-11-07/10/11 nightlies died on it)
 #   — one serialized env cannot run HA and non-HA legs in parallel, so the
 #   plan §5 "HA legs via withParam" sketch becomes a single ginkgo leg with
 #   E2E_HA=1.
@@ -73,6 +73,11 @@ spec:
   # agent-ensure 10m + ginkgo HA ~50m + playwright shards ~40m, partially
   # parallel) fits in 3h with margin.
   activeDeadlineSeconds: 10800
+  # Deleting a completed Workflow also garbage-collects its pods. Keep failures
+  # longer for diagnosis; successful runs only need their persisted artifacts.
+  ttlStrategy:
+    secondsAfterSuccess: 86400
+    secondsAfterFailure: 604800
   onExit: exit-handler
   arguments:
     parameters:
@@ -740,8 +745,10 @@ spec:
     # charts/inari-platform gates against the merged platform chart; its
     # changes converge post-merge and are exercised by the nightly.
     #
-    # HA flip (ha=true): NATS 3-node + R=3 streams, server 2 replicas + redis
-    # cache + scaffold knobs (ported from suite/provision.go). Every patch
+    # HA flip (ha=true): server 2 replicas + redis cache + scaffold knobs
+    # (ported from suite/provision.go). NATS stays 3-node with R=3 streams in
+    # every mode: R=1↔R=3 flips remap every consumer and corrupt Raft state.
+    # Every patch
     # writes the COMPLETE valuesObject (baseline + flip) — ArgoCD never merges
     # a values string with valuesObject — so a non-HA run deterministically
     # resets HA-only keys back to the file baseline.
@@ -803,7 +810,7 @@ spec:
                 tag: $tag,
                 pullPolicy: "Always"
               },
-              nats: {enabled: false, url: "nats://nats:4222", streamReplicas: 1},
+              nats: {enabled: false, url: "nats://nats:4222", streamReplicas: 3},
               kubeproxy: {enabled: false},
               keycloak: {
                 baseUrl: "http://keycloak-service:8080",
@@ -841,7 +848,6 @@ spec:
               | .replicaCount = 2
               | .cache = {backend: "redis"}
               | .redis = {enabled: true, image: {registry: "docker.io", repository: "bitnamilegacy/redis", tag: "8.2.1"}}
-              | .nats.streamReplicas = 3
               | .extraEnv += [
                   {name: "INARI_SCAFFOLD_TEMPLATE_DIR", value: "/templates"},
                   {name: "INARI_SCAFFOLD_GIT_ORG", value: "e2e-platform"},
@@ -869,7 +875,8 @@ spec:
           # (permanently 3-node since 2026-11-07: standalone→clustered
           # conversion is unsupported — the first nightly died on it). The
           # deterministic rewrite is pure self-heal. The HA flip now covers
-          # server/console/agent only; the server pins streamReplicas per run.
+          # server/console/agent only; SERVER_VALUES also keeps streamReplicas
+          # at 3 so consumer Raft groups are never remapped between modes.
           NATS_VALUES=$(jq -nc '{
             fullnameOverride: "nats",
             config: {

@@ -3,8 +3,9 @@
 # ghcr-proxy pull-through cache (hard rule 7: pull-blocking on that project
 # stays OFF — e2e deploys unscanned edge/old images for upgrade tests).
 #
-# Baseline is the NON-HA trim (1 replica, R=1 streams, memory cache, no
-# kubeproxy — mirrors scripts/e2e/stack/testdata/server-values-e2e.yaml).
+# Baseline is the NON-HA app trim (1 server replica, memory cache, no
+# kubeproxy). NATS stays 3-node with R=3 streams in every mode: repeatedly
+# remapping all consumers between R=1 and R=3 corrupts their Raft state.
 # HA legs and candidate image tags are applied per run by the W3 env-prep
 # step (JSON-patch on /spec/sources/0 below; the env pointer app ignores
 # exactly those fields via ignoreDifferences); this file is the steady state
@@ -47,7 +48,7 @@ spec:
           nats:
             enabled: false
             url: nats://nats:4222
-            streamReplicas: 1
+            streamReplicas: 3
           # kubectl gateway is covered by the docker-only suite
           # (scripts/e2e/kubectl/kubectl-tunnel.sh); its image is published
           # only at server release time — enabling it here would

@@ -23,10 +23,11 @@ AppProject **inari-e2e**.
 | `inari-e2e-nats`, `inari-e2e-openfga`, `inari-e2e-git-service` (1) | dependencies |
 | `inari-e2e-server`, `inari-e2e-console` (3) | first-party components |
 
-The file values are the **non-HA steady state** (1 replica, single-node
-NATS R=1, memory cache, no kubeproxy). Candidate image tags and HA values
-are applied per run by the W3 env-prep step; the release gate tests exactly
-the run's artifact set, never "whatever is deployed" (invariant 5). CNPG is
+The file values are the **non-HA app steady state** (1 server replica,
+memory cache, no kubeproxy). NATS stays 3-node with R=3 streams in every
+mode. Candidate image tags and HA app values are applied per run by the W3
+env-prep step; the release gate tests exactly the run's artifact set, never
+"whatever is deployed" (invariant 5). CNPG is
 **three instances** since W9 (`env/platform-config.yaml`) to make the chaos
 primary-failover experiment valid; wait for all three replicas/backfill to be
 healthy before running it. This is an e2e-only topology change, not a chart
@@ -240,6 +241,11 @@ lives in 7k-app-of-apps (W1).
 | `artifact-repo-credentials.yaml` | GarageKey + GarageReferenceGrant copying the artifact-repo S3 creds into inari-e2e (artifact secrets resolve in the workflow's namespace) |
 | `../chainsaw-hooks/smoke-job.yaml` | PostSync chainsaw smoke Job, attached to the inari-e2e-server app as a second source — every candidate flip is smoke-gated. **Deviation (Q9):** only chainsaw runs as a PostSync hook; the taxonomy §3 Ginkgo/Playwright smoke sets run via `mode=smoke` submissions |
 
+Completed `e2e-stack` workflows and their pods expire after 1 day on success
+or 7 days on failure (`spec.ttlStrategy`), preserving failure evidence while
+bounding namespace pod growth. JUnit/report artifacts persist independently
+in S3 and ReportPortal.
+
 Env-prep mutates the child Applications (`inari-e2e-server` /
 `inari-e2e-console` / `inari-e2e-nats`) by JSON patch —
 `targetRevision` + `helm.valuesObject`. **ArgoCD never merges
@@ -252,11 +258,13 @@ persist for the run's duration and each run re-converges the env to its
 own artifact set (hard rule 5). Platform apps are health-checked, never
 mutated.
 
-**NATS is permanently 3-node clustered** (since 2026-11-07): JetStream
-cannot convert a standalone-born PVC to clustered in place (no meta
-leader — the first nightly died on exactly this), so `env/nats.yaml` and
-env-prep both pin `cluster.enabled: true, replicas: 3` and the HA flip
-covers server/console/agent only.
+**NATS is permanently 3-node clustered with R=3 streams**: JetStream cannot
+convert a standalone-born PVC to clustered in place (no meta leader — the
+2026-11-07 nightly died on exactly this), and flipping streams between R=1
+and R=3 remaps every consumer (the 2026-11-10/11 nightlies then died on
+corrupt consumer Raft state). `env/nats.yaml` and env-prep both pin
+`cluster.enabled: true, replicas: 3`; the server env and env-prep pin
+`nats.streamReplicas: 3`. The HA flip covers server/console/agent only.
 
 Manual run: `argo submit --from workflowtemplate/e2e-stack -n inari-e2e -p
 mode=smoke` (identity: platform-admin SSO, or the e2e-submitter token). The
