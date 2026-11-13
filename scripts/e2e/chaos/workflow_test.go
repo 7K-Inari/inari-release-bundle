@@ -87,6 +87,22 @@ func TestChaosRBACIsNamespacedAndSecretless(t *testing.T) {
 	}
 }
 
+func TestChaosUsesExistingGinkgoIdentityAndPrecompiledBinary(t *testing.T) {
+	rbac := repoFile(t, "gitops", "e2e", "argo-workflows", "chaos-rbac.yaml")
+	if strings.Contains(rbac, "kind: ServiceAccount\nmetadata:\n  name: e2e-chaos-driver") {
+		t.Fatal("a second broad Ginkgo identity was introduced instead of reusing e2e-runner")
+	}
+	if !regexp.MustCompile(`(?s)name: e2e-chaos-driver\nsubjects:.*name: e2e-runner`).MatchString(rbac) {
+		t.Fatal("driver Role is not bound to the existing e2e-runner identity")
+	}
+	workflow := repoFile(t, "gitops", "e2e", "argo-workflows", "workflowtemplate-e2e-stack.yaml")
+	for _, want := range []string{"go test -c -tags=e2e -o /tools/stack.test .", `"serviceAccountName":"e2e-runner"`, "name: GINKGO_BINARY"} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("workflow missing amended Ginkgo requirement %q", want)
+		}
+	}
+}
+
 func TestCNPGTopologyPrerequisite(t *testing.T) {
 	platform := repoFile(t, "gitops", "e2e", "env", "platform-config.yaml")
 	if !regexp.MustCompile(`(?m)^\s+instances: 3$`).MatchString(platform) {

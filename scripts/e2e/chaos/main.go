@@ -36,17 +36,26 @@ func realMain(getenv func(string) string, stdout io.Writer) int {
 	runner := ExecRunner{Stdout: stdout}
 	kube := &KubeClient{Binary: cfg.Kubectl, Namespace: cfg.Namespace, Runner: runner}
 	api := NewAPIClient(cfg)
-	playwright := &Playwright{
-		Runner:      runner,
-		UIDir:       cfg.UIDir,
-		EvidenceDir: cfg.EvidenceDir,
-		Env: []string{
-			"CI=1",
-			"E2E_RUN_ID=" + cfg.RunID,
-			"CHAOS_SCENARIO=" + cfg.Scenario.Name,
+	suiteEnv := []string{
+		"CI=1",
+		"E2E_RUN_ID=" + cfg.RunID,
+		"CHAOS_SCENARIO=" + cfg.Scenario.Name,
+	}
+	steady := &Steady{
+		Ginkgo: &Ginkgo{
+			Runner:      runner,
+			Binary:      cfg.GinkgoBinary,
+			EvidenceDir: cfg.EvidenceDir,
+			Env:         append([]string(nil), suiteEnv...),
+		},
+		Playwright: &Playwright{
+			Runner:      runner,
+			UIDir:       cfg.UIDir,
+			EvidenceDir: cfg.EvidenceDir,
+			Env:         append([]string(nil), suiteEnv...),
 		},
 	}
-	execute(ctx, cfg, report, kube, api, playwright)
+	execute(ctx, cfg, report, kube, api, steady)
 	return finish(report, cfg.OutDir, cfg.EvidenceDir, stdout)
 }
 
@@ -70,7 +79,7 @@ func finish(report *Report, outDir, evidenceDir string, stdout io.Writer) int {
 	return 0
 }
 
-func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, api *APIClient, playwright *Playwright) {
+func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, api *APIClient, steady *Steady) {
 	if err := preflight(ctx, kube); err != nil {
 		report.Add("Litmus/operator preflight", err, "CRDs are proven Established by GitOps installation; API discovery and operator readiness are rechecked here")
 		return
@@ -85,13 +94,16 @@ func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, 
 			return
 		}
 	}
-	if err := playwright.Prepare(ctx); err != nil {
-		report.Add("Playwright dependency setup", err, "npm ci failed before fault injection")
+	if err := steady.Prepare(ctx); err != nil {
+		report.Add("steady-state dependency setup", err, "Ginkgo binary or Playwright npm setup failed before fault injection")
 		return
 	}
-	baseline := playwright.Run(ctx, cfg.Scenario, "baseline", "")
-	report.Add("baseline Playwright @smoke", baseline.Err, baseline.Output)
-	if baseline.Err != nil {
+	baseline := steady.Run(ctx, cfg.Scenario, "baseline")
+	for _, suite := range []string{"ginkgo", "playwright"} {
+		result := baseline[suite]
+		report.Add("baseline "+suite+" @smoke", result.Err, result.Output)
+	}
+	if steadyFailed(baseline) {
 		return
 	}
 
@@ -104,7 +116,7 @@ func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, 
 
 	var engines []*Engine
 	negativeNativeFailed := false
-	negativeUIFailed := false
+	negativeSteadyFailed := map[string]bool{}
 	negativeAPIFailed := false
 
 	for _, key := range cfg.Scenario.Engines {
@@ -145,25 +157,30 @@ func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, 
 			break
 		}
 
-		var ui *PlaywrightHandle
-		if engine.Definition.Playwright {
-			marker := filepath.Join(cfg.EvidenceDir, "marker-"+key+".json")
-			_ = os.Remove(marker)
-			ui = playwright.Start(ctx, cfg.Scenario, key, marker)
-			if err := ui.WaitMarker(ctx); err != nil {
-				ui.Cancel()
-				result := ui.Wait()
-				report.Add(key+" first-test synchronization", errors.Join(err, result.Err), result.Output)
+		var handles map[string]*SteadyHandle
+		if engine.Definition.Steady {
+			handles = steady.Start(ctx, cfg.Scenario, key)
+			if err := WaitSteadyMarkers(ctx, handles); err != nil {
+				results := CollectSteady(handles, true)
+				output := err.Error()
+				for _, suite := range []string{"ginkgo", "playwright"} {
+					output += "\n" + suite + ": " + results[suite].Output
+				}
+				report.Add(key+" Ginkgo+Playwright first-spec/test synchronization", err, output)
 				break
 			}
+			report.Add(key+" Ginkgo+Playwright first-spec/test synchronization", nil, "both real-suite markers observed before engine apply")
 		}
 
 		engine.Applied = true // cleanup intent, including partial apply failures
 		if err := kube.Apply(ctx, engine.Manifest); err != nil {
 			report.Add(key+" engine apply", err, "")
-			if ui != nil {
-				ui.Cancel()
-				ui.Wait()
+			if handles != nil {
+				results := CollectSteady(handles, true)
+				for _, suite := range []string{"ginkgo", "playwright"} {
+					result := results[suite]
+					report.Add(key+" "+suite+" after failed engine apply", result.Err, result.Output)
+				}
 			}
 			break
 		}
@@ -172,10 +189,12 @@ func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, 
 		runningRaw, runningErr := waitForResult(ctx, kube, engine, false)
 		if runningErr != nil {
 			report.Add(key+" injection evidence", runningErr, string(runningRaw))
-			if ui != nil {
-				ui.Cancel()
-				result := ui.Wait()
-				report.Add(key+" Playwright after failed injection", result.Err, result.Output)
+			if handles != nil {
+				results := CollectSteady(handles, true)
+				for _, suite := range []string{"ginkgo", "playwright"} {
+					result := results[suite]
+					report.Add(key+" "+suite+" after failed injection", result.Err, result.Output)
+				}
 			}
 			archiveEngine(ctx, kube, engine, cfg.EvidenceDir)
 			break
@@ -194,17 +213,20 @@ func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, 
 			report.Add(key+" scenario invariant during fault", duringErr, "independent domain assertion")
 		}
 
-		if ui != nil {
-			result := ui.Wait()
-			if cfg.Scenario.Negative {
-				negativeUIFailed = result.Err != nil
-				if result.Err != nil {
-					report.Add("negative-control steady-state failure observed", nil, result.Output)
+		if handles != nil {
+			results := CollectSteady(handles, false)
+			for _, suite := range []string{"ginkgo", "playwright"} {
+				result := results[suite]
+				if cfg.Scenario.Negative {
+					negativeSteadyFailed[suite] = result.Err != nil
+					if result.Err != nil {
+						report.Add("negative-control "+suite+" steady-state failure observed", nil, result.Output)
+					} else {
+						report.Add("negative-control "+suite+" steady-state failure observed", fmt.Errorf("%s unexpectedly passed during a full server outage", suite), result.Output)
+					}
 				} else {
-					report.Add("negative-control steady-state failure observed", fmt.Errorf("Playwright unexpectedly passed during a full server outage"), result.Output)
+					report.Add(key+" during-fault "+suite, result.Err, result.Output)
 				}
-			} else {
-				report.Add(key+" during-fault Playwright", result.Err, result.Output)
 			}
 		}
 
@@ -269,20 +291,25 @@ func execute(ctx context.Context, cfg Config, report *Report, kube *KubeClient, 
 	} else {
 		report.Add("domain recovery", nil, "scenario-specific recovery assertions passed")
 	}
-	recovery := playwright.Run(recoveryCtx, cfg.Scenario, "recovery", "")
-	report.Add("recovery Playwright @smoke", recovery.Err, recovery.Output)
+	recovery := steady.Run(recoveryCtx, cfg.Scenario, "recovery")
+	for _, suite := range []string{"ginkgo", "playwright"} {
+		result := recovery[suite]
+		report.Add("recovery "+suite+" @smoke", result.Err, result.Output)
+	}
 	if err := state.WriteEvidence(filepath.Join(cfg.EvidenceDir, "domain-probes.json")); err != nil {
 		report.Add("domain evidence", err, "")
 	}
 
 	if cfg.Scenario.Negative {
+		ginkgoFailed := negativeSteadyFailed["ginkgo"]
+		playwrightFailed := negativeSteadyFailed["playwright"]
 		switch {
-		case negativeNativeFailed && negativeUIFailed && negativeAPIFailed:
+		case negativeControlEffective(negativeNativeFailed, ginkgoFailed, playwrightFailed, negativeAPIFailed):
 			// The negative control is effective only when the run is red. Keep a
 			// deliberate failing testcase after all cleanup/recovery checks.
-			report.Add("negative-control intentional workflow failure", fmt.Errorf("negative control was effective; this manual run must fail by design"), "native probes, API, and Playwright all observed the outage; cleanup and recovery completed")
+			report.Add("negative-control intentional workflow failure", fmt.Errorf("negative control was effective; this manual run must fail by design"), "native probes, API, Ginkgo, and Playwright all observed the outage; cleanup and recovery completed")
 		default:
-			report.Add("negative-control intentional workflow failure", fmt.Errorf("negative control ineffective (native=%t UI=%t API=%t)", negativeNativeFailed, negativeUIFailed, negativeAPIFailed), "the outage did not affect every required probe; do not claim negative-control validation")
+			report.Add("negative-control intentional workflow failure", fmt.Errorf("negative control ineffective (native=%t ginkgo=%t playwright=%t API=%t)", negativeNativeFailed, ginkgoFailed, playwrightFailed, negativeAPIFailed), "the outage did not affect every required probe; do not claim negative-control validation")
 		}
 	}
 }

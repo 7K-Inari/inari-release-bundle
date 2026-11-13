@@ -25,8 +25,9 @@
 #   scenarios, sequential, mode==weekly only). Load NEVER runs in PR or
 #   release gates (hard rule 6); thresholds gate via the runner exit code.
 # - W9: weekly-suite=chaos|all adds five sequential, bounded LitmusChaos
-#   scenarios after successful/skipped k6. weekly-suite=load remains the
-#   default/cron value until the stability + restore-reset activation gates;
+#   scenarios after successful/skipped k6. Both Ginkgo and Playwright are the
+#   steady-state selections (Ginkgo process E2E_HA=0); weekly-suite=load stays
+#   the default/cron value until stability + restore-reset activation gates;
 #   the explicit negative-control is manual-only and intentionally fails.
 # - W8: nightly mode gains a serialized Schemathesis fuzz leg AFTER the
 #   Ginkgo/Playwright outcomes. It pulls the OpenAPI OCI tag matching
@@ -2101,12 +2102,17 @@ spec:
 
     # -------------------------------------------------------------- chaos-run
     # W9: one bounded Litmus scenario. The exact charts-ref supplies driver,
-    # vendored 3.31.0 faults, Playwright config, and tests — no bespoke image.
+    # vendored 3.31.0 faults, Ginkgo binary, Playwright config, and tests — no
+    # bespoke image. Both suites mark their first real spec/test before fault
+    # injection; the Ginkgo process alone runs with E2E_HA=0.
     # The driver writes JUnit before every nonzero return; Argo still uploads
     # outputs on failure and the unconditional exit handler imports them.
     - name: chaos-run
       activeDeadlineSeconds: 1800
-      podSpecPatch: '{"serviceAccountName":"e2e-chaos-driver","terminationGracePeriodSeconds":60}'
+      # Reuse the existing suite identity: Ginkgo's p0 RBAC phase needs the
+      # e2e-runner's pre-existing grants. chaos-rbac.yaml adds only a
+      # namespaced Litmus driver RoleBinding to this SA.
+      podSpecPatch: '{"serviceAccountName":"e2e-runner","terminationGracePeriodSeconds":60}'
       inputs:
         parameters:
           - name: scenario
@@ -2131,7 +2137,7 @@ spec:
           image: golang:1.26.3-bookworm
           command: ["/bin/sh", "-c"]
           args:
-            - cd /work/scripts/e2e/chaos && CGO_ENABLED=0 go build -trimpath -o /tools/chaos-driver .
+            - export CGO_ENABLED=0; cd /work/scripts/e2e/chaos && go build -trimpath -o /tools/chaos-driver . && cd /work/scripts/e2e/stack && go test -c -tags=e2e -o /tools/stack.test .
           volumeMounts:
             - name: work
               mountPath: /work
@@ -2187,6 +2193,8 @@ spec:
             value: /work/scripts/e2e/ui
           - name: KUBECTL
             value: /tools/kubectl
+          - name: GINKGO_BINARY
+            value: /tools/stack.test
           - name: PATH
             value: /tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         source: |

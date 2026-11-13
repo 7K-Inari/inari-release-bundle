@@ -1,17 +1,12 @@
-# M1W9 LitmusChaos identities — namespaced to inari-e2e only.
-# The driver owns run-scoped manifests, exact target snapshots, domain probes,
-# and cleanup. The runner has only the upstream fault's namespaced permissions.
-# Neither identity can read Secrets, Nodes, Namespaces, CRDs, or live-agent
-# resources, and no ClusterRole/ClusterRoleBinding is present. CRD installation
-# and Established proof belong to the GitOps install acceptance.
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: e2e-chaos-driver
-  namespace: inari-e2e
-  labels:
-    app.kubernetes.io/part-of: inari-e2e-workflows
+# M1W9 LitmusChaos identities — namespaced additions to inari-e2e only.
+# The driver Role is bound to the EXISTING e2e-runner SA because the amended
+# steady-state contract runs the full Ginkgo gate selection, whose RBAC phase
+# already requires that identity's suite/handoff/agent permissions. This reuses
+# existing grants instead of inventing a second broad identity. Only the new
+# Litmus driver/runner Roles below are added; there is no new Secret rule,
+# ClusterRole, or ClusterRoleBinding. The Litmus runner remains a separate SA
+# with only the upstream fault's namespaced permissions. CRD installation and
+# Established proof belong to the GitOps install acceptance.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -62,8 +57,9 @@ roleRef:
   kind: Role
   name: e2e-chaos-driver
 subjects:
+  # Existing suite identity; its pre-existing permissions are NOT duplicated.
   - kind: ServiceAccount
-    name: e2e-chaos-driver
+    name: e2e-runner
     namespace: inari-e2e
 ---
 apiVersion: v1

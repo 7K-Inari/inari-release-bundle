@@ -105,7 +105,7 @@ unified:
 | **Release gate** (`E2E_MODE=release`, via thin `release-e2e.yaml` → Argo) | `(p0 \|\| smoke) && !quarantine` | `--grep "@p0\|@smoke" --grep-invert @quarantine` | `smoke` set only | **Yes** — blocks the Release PR |
 | **Nightly** (CronWorkflow, `E2E_MODE=nightly`) | `p0 \|\| p1 \|\| p2` incl. `quarantine` | `--grep "@p0\|@p1\|@p2"` incl. `@quarantine` (`continue-on-error`) | all | No — signal + flake sweep |
 | **Upgrade** (`E2E_MODE=upgrade`, phase 2 — W5) | `(p0 \|\| smoke) && !quarantine` (the gate selection, re-run on the upgraded stack) | `--grep "@p0\|@smoke" --grep-invert @quarantine` | full bootstrap set, post-upgrade | **No — non-gating** (suspended CronWorkflow + manual); release-gating flip only after ~2 weeks stable, see below |
-| **Weekly** (CronWorkflow, `E2E_MODE=weekly`, phase 2) | — (W7 k6 + W9 Litmus are workflow legs, not suite labels. k6 runs for `weekly-suite=load|all`; five sequential chaos scenarios run for `chaos|all`, after successful/skipped k6. The default/cron remains `load` until the W9 activation gates.) | Chaos baseline/recovery `@smoke`; during-fault `@p0\|@smoke --grep-invert @quarantine` (NATS `@smoke` only). No standalone weekly Playwright shard | — | No |
+| **Weekly** (CronWorkflow, `E2E_MODE=weekly`, phase 2) | Chaos driver: baseline/recovery `smoke`; during-fault `(p0\|\|smoke)&&!quarantine` (NATS `smoke` only), with `E2E_HA=0` to suppress the suite's own disruption specs. No standalone weekly Ginkgo DAG leg; W7 k6 + W9 Litmus remain workflow profiles, and cron stays `load` until activation | Chaos baseline/recovery `@smoke`; during-fault `@p0\|@smoke --grep-invert @quarantine` (NATS `@smoke` only). No standalone weekly Playwright shard | — | No |
 | **PostSync hook** (ArgoCD PostSync after env sync) | `smoke` | `--grep @smoke` | `smoke` | Sync health only |
 
 Notes:
@@ -128,7 +128,9 @@ Notes:
   CNPG failover → Keycloak latency → NATS outage → OpenFGA latency/timeout →
   server replacement. `chaos-scenario` selects one named scenario or `all`;
   `negative-control` is deliberately excluded from `all` and fails its manual
-  Argo leg after proving the outage and recovering. Each scenario emits a
+  Argo leg after proving the outage and recovering. Both suites mark their
+  first real spec/test before injection; the Ginkgo process uses `E2E_HA=0`
+  so its own HA faults never compound with the driver's. Each scenario emits a
   `chaos.<scenario>` JUnit wrapper plus raw ChaosResult/evidence. Recurring
   activation and reset/stability evidence are documented in
   `scripts/e2e/chaos/README.md`.
@@ -230,8 +232,8 @@ Every suite leg writes JUnit XML to a shared artifact directory:
   `e2e/<uid>/chaos/<scenario>/junit.xml`, with raw results and browser/domain
   evidence under the sibling `evidence/` key. Native phase/verdict and the
   unchanged Litmus `probeSuccessPercentage` are separate testcases from
-  Playwright, domain, cleanup, and recovery verdicts, so a native 100% cannot
-  mask an independent failure. The optional negative-control wrapper is failed
+  Ginkgo, Playwright, domain, cleanup, and recovery verdicts, so a native 100%
+  cannot mask an independent failure. The optional negative-control wrapper is failed
   by design and still imports through the unconditional exit handler.
 - Artifacts live in a Garage S3 bucket (the platform cluster convention);
   `retention-days` honored via bucket lifecycle.

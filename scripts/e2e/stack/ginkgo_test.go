@@ -57,3 +57,12 @@ var _ = BeforeSuite(func() {
 	}
 	env.RequireHAMigrations(GinkgoT())
 })
+
+// M1W9 opt-in first-real-spec marker. The chaos driver sets E2E_HA=0 and waits
+// for this marker AND Playwright's before injecting a fault. Unset in every
+// ordinary suite run, so existing behavior is unchanged.
+var _ = ReportBeforeEach(func(report SpecReport) {
+	if err := suite.MarkChaosGinkgoSpec(report); err != nil {
+		Fail("writing chaos first-spec marker: " + err.Error())
+	}
+})

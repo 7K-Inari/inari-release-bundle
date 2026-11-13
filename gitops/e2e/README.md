@@ -235,7 +235,7 @@ lives in 7k-app-of-apps (W1).
 | `cronworkflow-nightly-reset.yaml` | **Suspended placeholder** (restore-from-backup needs CNPG barman wiring in env-extras first) |
 | `semaphore-e2e-env-lock.yaml` | One permit — serializes every run against the single env |
 | `rbac.yaml` | Runner SAs (e2e-runner default; e2e-seed, e2e-agent-ensure, e2e-chainsaw-hook, e2e-load per step; e2e-submitter for the GHA wrappers), the env-prep Application-patch Role in ns argocd, the controller semaphore-write fix, and the e2e agent namespace + cluster RBAC |
-| `chaos-rbac.yaml` | W9 separate `e2e-chaos-driver` / `e2e-chaos-runner` SAs, Roles, and RoleBindings in `inari-e2e` only; Litmus CRUD, exact target/workload reads, pod log/exec and recorded-resource cleanup. No Secret, Node, Namespace, CRD, ClusterRole, or live-agent permissions |
+| `chaos-rbac.yaml` | W9 namespaced `e2e-chaos-driver` Role bound to the **existing** `e2e-runner` SA (required by Ginkgo's p0 RBAC phase), plus a separate least-privilege `e2e-chaos-runner` SA/Role for Litmus faults. No new Secret, Node, Namespace, CRD, ClusterRole/Binding, or live-agent permissions are added |
 | `env-contract-configmap.yaml` | The non-secret half of the env contract, envFrom'd into every leg |
 | `artifact-repo-credentials.yaml` | GarageKey + GarageReferenceGrant copying the artifact-repo S3 creds into inari-e2e (artifact secrets resolve in the workflow's namespace) |
 | `../chainsaw-hooks/smoke-job.yaml` | PostSync chainsaw smoke Job, attached to the inari-e2e-server app as a second source — every candidate flip is smoke-gated. **Deviation (Q9):** only chainsaw runs as a PostSync hook; the taxonomy §3 Ginkgo/Playwright smoke sets run via `mode=smoke` submissions |
@@ -280,7 +280,9 @@ definitions/RBAC/workflow legs.
 `weekly-suite=chaos` skips k6 for focused manual acceptance; `all` requires
 k6 success and then runs five serialized scenarios. `chaos-scenario` selects
 one or all five; `negative-control` is manual-only and intentionally red.
-See [`scripts/e2e/chaos/README.md`](../../scripts/e2e/chaos/README.md) for the
+Both Ginkgo and Playwright mark their first real spec/test before injection;
+the precompiled Ginkgo process receives `E2E_HA=0` while the workflow retains
+its HA topology. See [`scripts/e2e/chaos/README.md`](../../scripts/e2e/chaos/README.md) for the
 exact scenario contracts, submit command, native score/JUnit semantics, S3
 evidence, and break-glass cleanup. Every leg runs under the existing
 `e2e-env-lock`, and its JUnit joins the same unconditional ReportPortal

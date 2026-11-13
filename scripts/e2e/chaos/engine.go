@@ -102,17 +102,17 @@ type engineDefinition struct {
 	DestinationHosts string
 	LatencyMS        int
 	LossPercent      int
-	Playwright       bool
+	Steady           bool
 }
 
 var engineRegistry = map[string]engineDefinition{
-	"cnpg-primary-delete": {Key: "cnpg-primary-delete", Fault: "pod-delete", DurationSeconds: 120, TargetContainer: "postgres", Playwright: true},
-	"keycloak-latency":    {Key: "keycloak-latency", Fault: "pod-network-latency", DurationSeconds: 120, TargetContainer: "server", DestinationHosts: "keycloak-service.inari-e2e.svc.cluster.local", LatencyMS: 250, Playwright: true},
-	"nats-outage":         {Key: "nats-outage", Fault: "pod-network-loss", DurationSeconds: 120, TargetContainer: "nats", LossPercent: 100, Playwright: true},
-	"openfga-latency":     {Key: "openfga-latency", Fault: "pod-network-latency", DurationSeconds: 120, TargetContainer: "server", DestinationHosts: "openfga.inari-e2e.svc.cluster.local", LatencyMS: 250, Playwright: true},
+	"cnpg-primary-delete": {Key: "cnpg-primary-delete", Fault: "pod-delete", DurationSeconds: 120, TargetContainer: "postgres", Steady: true},
+	"keycloak-latency":    {Key: "keycloak-latency", Fault: "pod-network-latency", DurationSeconds: 120, TargetContainer: "server", DestinationHosts: "keycloak-service.inari-e2e.svc.cluster.local", LatencyMS: 250, Steady: true},
+	"nats-outage":         {Key: "nats-outage", Fault: "pod-network-loss", DurationSeconds: 120, TargetContainer: "nats", LossPercent: 100, Steady: true},
+	"openfga-latency":     {Key: "openfga-latency", Fault: "pod-network-latency", DurationSeconds: 120, TargetContainer: "server", DestinationHosts: "openfga.inari-e2e.svc.cluster.local", LatencyMS: 250, Steady: true},
 	"openfga-timeout":     {Key: "openfga-timeout", Fault: "pod-network-latency", DurationSeconds: 120, TargetContainer: "server", DestinationHosts: "openfga.inari-e2e.svc.cluster.local", LatencyMS: 90000},
-	"server-pod-delete":   {Key: "server-pod-delete", Fault: "pod-delete", DurationSeconds: 120, TargetContainer: "server", Playwright: true},
-	"negative-control":    {Key: "negative-control", Fault: "pod-network-loss", DurationSeconds: 120, TargetContainer: "server", LossPercent: 100, Playwright: true},
+	"server-pod-delete":   {Key: "server-pod-delete", Fault: "pod-delete", DurationSeconds: 120, TargetContainer: "server", Steady: true},
+	"negative-control":    {Key: "negative-control", Fault: "pod-network-loss", DurationSeconds: 120, TargetContainer: "server", LossPercent: 100, Steady: true},
 }
 
 type Engine struct {

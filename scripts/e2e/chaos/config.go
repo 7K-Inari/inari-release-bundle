@@ -36,21 +36,22 @@ var scenarioRegistry = map[string]Scenario{
 // Config contains only non-secret paths plus the persona credential inherited
 // from the existing e2e secret. Credentials are never included in evidence.
 type Config struct {
-	Scenario    Scenario
-	RunID       string
-	Namespace   string
-	BaseDomain  string
-	KCURL       string
-	User        string
-	Password    string
-	TenantSlug  string
-	HA          bool
-	OutDir      string
-	EvidenceDir string
-	BundleDir   string
-	ManifestDir string
-	UIDir       string
-	Kubectl     string
+	Scenario     Scenario
+	RunID        string
+	Namespace    string
+	BaseDomain   string
+	KCURL        string
+	User         string
+	Password     string
+	TenantSlug   string
+	HA           bool
+	OutDir       string
+	EvidenceDir  string
+	BundleDir    string
+	ManifestDir  string
+	UIDir        string
+	Kubectl      string
+	GinkgoBinary string
 }
 
 var runIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -69,19 +70,20 @@ func loadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("CHAOS_SCENARIO must name exactly one supported scenario (got %q; all is workflow-only)", name)
 	}
 	cfg := Config{
-		Scenario:    scenario,
-		RunID:       getenv("E2E_RUN_ID"),
-		Namespace:   getenv("E2E_NAMESPACE"),
-		BaseDomain:  getenv("E2E_BASE_DOMAIN"),
-		KCURL:       getenv("E2E_KC_URL"),
-		User:        envOr(getenv, "E2E_USER", "dev-admin"),
-		Password:    getenv("E2E_PASSWORD"),
-		TenantSlug:  envOr(getenv, "E2E_TENANT_SLUG", "e2e-org"),
-		HA:          getenv("E2E_HA") == "true" || getenv("E2E_HA") == "1",
-		OutDir:      envOr(getenv, "OUT_DIR", "/artifacts/out"),
-		EvidenceDir: envOr(getenv, "EVIDENCE_DIR", "/artifacts/evidence"),
-		BundleDir:   envOr(getenv, "BUNDLE_DIR", "/work"),
-		Kubectl:     envOr(getenv, "KUBECTL", "kubectl"),
+		Scenario:     scenario,
+		RunID:        getenv("E2E_RUN_ID"),
+		Namespace:    getenv("E2E_NAMESPACE"),
+		BaseDomain:   getenv("E2E_BASE_DOMAIN"),
+		KCURL:        getenv("E2E_KC_URL"),
+		User:         envOr(getenv, "E2E_USER", "dev-admin"),
+		Password:     getenv("E2E_PASSWORD"),
+		TenantSlug:   envOr(getenv, "E2E_TENANT_SLUG", "e2e-org"),
+		HA:           getenv("E2E_HA") == "true" || getenv("E2E_HA") == "1",
+		OutDir:       envOr(getenv, "OUT_DIR", "/artifacts/out"),
+		EvidenceDir:  envOr(getenv, "EVIDENCE_DIR", "/artifacts/evidence"),
+		BundleDir:    envOr(getenv, "BUNDLE_DIR", "/work"),
+		Kubectl:      envOr(getenv, "KUBECTL", "kubectl"),
+		GinkgoBinary: envOr(getenv, "GINKGO_BINARY", "/tools/stack.test"),
 	}
 	cfg.ManifestDir = envOr(getenv, "CHAOS_MANIFEST_DIR", filepath.Join(cfg.BundleDir, "scripts/e2e/chaos/manifests"))
 	cfg.UIDir = envOr(getenv, "UI_DIR", filepath.Join(cfg.BundleDir, "scripts/e2e/ui"))
@@ -115,7 +117,7 @@ func loadConfig(getenv func(string) string) (Config, error) {
 	if cfg.Scenario.RequiresHA && !cfg.HA {
 		return cfg, fmt.Errorf("scenario %s requires E2E_HA=1 (two server replicas)", cfg.Scenario.Name)
 	}
-	for key, value := range map[string]string{"OUT_DIR": cfg.OutDir, "EVIDENCE_DIR": cfg.EvidenceDir, "BUNDLE_DIR": cfg.BundleDir, "UI_DIR": cfg.UIDir, "CHAOS_MANIFEST_DIR": cfg.ManifestDir} {
+	for key, value := range map[string]string{"OUT_DIR": cfg.OutDir, "EVIDENCE_DIR": cfg.EvidenceDir, "BUNDLE_DIR": cfg.BundleDir, "UI_DIR": cfg.UIDir, "CHAOS_MANIFEST_DIR": cfg.ManifestDir, "GINKGO_BINARY": cfg.GinkgoBinary} {
 		if !filepath.IsAbs(value) {
 			return cfg, fmt.Errorf("%s must be an absolute path (got %q)", key, value)
 		}

@@ -38,10 +38,10 @@ func TestNegativeControlDisablesDuringRetries(t *testing.T) {
 }
 
 func TestWaitMarkerEarlyExitCanBeCollectedOnce(t *testing.T) {
-	done := make(chan PlaywrightResult, 1)
-	done <- PlaywrightResult{Err: context.Canceled, Output: "early exit"}
+	done := make(chan SteadyResult, 1)
+	done <- SteadyResult{Err: context.Canceled, Output: "early exit"}
 	close(done)
-	handle := &PlaywrightHandle{Marker: t.TempDir() + "/missing-marker", Done: done, Cancel: func() {}}
+	handle := &SteadyHandle{Suite: "playwright", Marker: t.TempDir() + "/missing-marker", Done: done, Cancel: func() {}}
 	if err := handle.WaitMarker(context.Background()); err == nil {
 		t.Fatal("early Playwright exit produced no synchronization error")
 	}

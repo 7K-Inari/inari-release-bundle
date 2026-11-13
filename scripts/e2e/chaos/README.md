@@ -1,12 +1,12 @@
 # M1W9 LitmusChaos weekly experiments
 
-Five bounded resilience scenarios run inside the existing `e2e-stack` weekly workflow. They use the existing `e2e-env-lock` semaphore, existing persona/artifact secrets, and the existing single-launch ReportPortal importer. There is no ChaosCenter, Grafana, public route, new credential, or PR/release gate.
+Five bounded resilience scenarios run inside the existing `e2e-stack` weekly workflow. **Both Ginkgo and Playwright** provide baseline, during-fault, and recovery steady-state verdicts. The scenarios use the existing `e2e-env-lock` semaphore, existing suite identity/persona/artifact secrets, and the existing single-launch ReportPortal importer. There is no ChaosCenter, Grafana, public route, new credential, or PR/release gate.
 
 ## Ownership and pins
 
 - **Install:** `7k-app-of-apps/apps/7kgroup/litmuschaos.yaml`, official `litmus-core` chart **3.31.1**, operator/runner **3.31.0**, `operatorMode=namespaced`, destination `inari-e2e`. The GitOps acceptance checks all three CRDs Established and confirms no chart ClusterRole/Binding.
 - **Tests:** this directory and `gitops/e2e/argo-workflows/`. Vendored fault definitions come from official `chaos-charts` tag **3.31.0**. The network helper is pinned to `gaiadocker/iproute2@sha256:d0cd5819fbeaf2e7501dcb223bb5bad4fda7c1e76ff9877baba6e559c70b6d1e`.
-- **Isolation:** the driver requires exactly namespace `inari-e2e`, domain `inari-e2e.7kgroup.org`, and Keycloak `https://auth-e2e.7kgroup.org`. It resolves exact Ready pod names and renders both `spec.selectors.pods` and `TARGET_PODS`. `chaos-rbac.yaml` contains namespaced Roles only and no Secret access.
+- **Isolation:** the driver requires exactly namespace `inari-e2e`, domain `inari-e2e.7kgroup.org`, and Keycloak `https://auth-e2e.7kgroup.org`. It resolves exact Ready pod names and renders both `spec.selectors.pods` and `TARGET_PODS`. `chaos-rbac.yaml` adds namespaced Roles only and no Secret rules. Its driver Role binds the existing `e2e-runner` SA so Ginkgo retains its established suite/RBAC permissions; the Litmus runner remains a separate least-privilege SA, and no new ClusterRole/ClusterRoleBinding is introduced.
 
 ## Prerequisites
 
@@ -16,6 +16,14 @@ Five bounded resilience scenarios run inside the existing `e2e-stack` weekly wor
 4. The normal workflow `env-prep` and `seed` have completed. A red baseline `@smoke` prevents injection.
 5. k6 must be green in `weekly-suite=all`. `weekly-suite=chaos` deliberately skips k6 for focused manual acceptance.
 
+## Two-suite steady-state contract
+
+- Baseline and recovery run Ginkgo `smoke` and Playwright `@smoke`; a red result in either suite prevents injection or fails recovery.
+- The normal resilience window runs Ginkgo `(p0||smoke)&&!quarantine` and Playwright `--grep "@p0|@smoke" --grep-invert @quarantine`. NATS uses only the two smoke selections because full p0 depends on asynchronous outbox materialization.
+- The workflow still supplies the HA topology, but the chaos Ginkgo process alone receives **`E2E_HA=0`**. This suppresses the suite's own disruption specs; it does not scale down the environment or the driver's targets.
+- Both suites start concurrently. Playwright's opt-in reporter marks the first non-setup test; Ginkgo's opt-in `ReportBeforeEach` hook marks the first non-skipped/non-pending spec. The driver waits for **both markers** before applying the engine. A marker/setup failure or a suite that finishes before the other is ready prevents injection, so a later run cannot masquerade as during-fault evidence.
+- Raw Ginkgo and Playwright JUnit is evidence only. Their independent wrapper testcases cannot be masked by a native Litmus score or by each other. Negative-control runs disable Playwright retries and force one Ginkgo attempt so post-outage recovery cannot hide the required failure.
+
 ## Scenarios
 
 All faults self-terminate after 120 seconds. Scenarios are sequential; a failed leg prevents later injection.
@@ -23,13 +31,11 @@ All faults self-terminate after 120 seconds. Scenarios are sequential; a failed 
 | `chaos-scenario` | Fault and exact target | Independent proof |
 |---|---|---|
 | `cnpg-primary-delete` | Graceful pod-delete of the current CNPG primary | Three-instance preflight; primary changes; all three instances return Ready; a run-owned tenant survives in SQL and through the API |
-| `keycloak-latency` | 250 ms server → `keycloak-service.inari-e2e.svc.cluster.local` | Native Keycloak discovery + API 401 probes, gate Playwright selection, recovery smoke |
+| `keycloak-latency` | 250 ms server → `keycloak-service.inari-e2e.svc.cluster.local` | Native Keycloak discovery + API 401 probes, both gate selections, recovery smoke in both suites |
 | `nats-outage` | 100% packet loss on all three NATS pods | Tenant creation is accepted during the outage; at least one unpublished outbox row for that returned `org_id` accumulates; that org drains with no dead-letter and becomes readable after recovery |
-| `openfga-latency` | First 250 ms, then 90 seconds server → `openfga.inari-e2e.svc.cluster.local` | Gate Playwright in window one; a fresh run-owned tenant/token in window two must produce 403/5xx or the bounded 75s deadline, never 2xx or stale-token 401; protected read recovers |
-| `server-pod-delete` | Graceful delete of exactly one of two server pods | API 401 native probe, gate Playwright, two updated Ready replicas, scenario-org outbox drain, tenant read, recovery smoke |
-| `negative-control` | **Manual only:** 100% packet loss on both server pods | Native API probe, direct API check, and Playwright must all observe failure; the Argo leg then fails intentionally after cleanup and recovery |
-
-For the normal gate selection the driver runs Playwright `--grep "@p0|@smoke" --grep-invert @quarantine`. Baseline, NATS, and recovery use `@smoke`. The opt-in `reporter.mjs` marks the first non-setup test; only then does the driver apply the engine. Normal Playwright runs do not load this reporter.
+| `openfga-latency` | First 250 ms, then 90 seconds server → `openfga.inari-e2e.svc.cluster.local` | Both gate selections in window one and no steady-state suite in window two; a fresh run-owned tenant/token in window two must produce 403/5xx or the bounded 75s deadline, never 2xx or stale-token 401; protected read recovers |
+| `server-pod-delete` | Graceful delete of exactly one of two server pods | API 401 native probe, both gate selections, two updated Ready replicas, scenario-org outbox drain, tenant read, recovery smoke in both suites |
+| `negative-control` | **Manual only:** 100% packet loss on both server pods | Native API probe, direct API check, Ginkgo, and Playwright must all observe failure; the Argo leg then fails intentionally after cleanup and recovery |
 
 ## Manual acceptance
 
@@ -43,7 +49,7 @@ argo submit --from workflowtemplate/e2e-stack -n inari-e2e \
   -p server-src-ref=main --wait
 ```
 
-Run the negative control with `chaos-scenario=negative-control`. **Expected:** the workflow ends `Failed`, `chaos.negative-control` imports as failed into the same ReportPortal launch, and its cleanup/domain-recovery/Playwright-recovery checks are green. If the outage does not break all three required probes, the wrapper says the control was ineffective; that is not validation.
+Run the negative control with `chaos-scenario=negative-control`. **Expected:** the workflow ends `Failed`, `chaos.negative-control` imports as failed into the same ReportPortal launch, and its cleanup/domain-recovery/Ginkgo/Playwright recovery checks are green. If the outage does not break the native probe, direct API check, **and both suites**, the wrapper says the control was ineffective; that is not validation.
 
 The whole workflow holds `e2e-env-lock` from `resolve` through chaos cleanup and `onExit`. A contending workflow therefore remains pending while a fault is active. Do not run a second chaos submission to “speed up” acceptance.
 
@@ -52,11 +58,11 @@ The whole workflow holds `e2e-env-lock` from `resolve` through chaos cleanup and
 Each leg writes:
 
 - `e2e/<workflow-uid>/chaos/<scenario>/junit.xml` — testsuite `chaos.<scenario>`;
-- `e2e/<workflow-uid>/chaos/<scenario>/evidence/` — rendered engines/experiments, exact target snapshots, raw ChaosResult JSON, live engine JSON, available runner logs, domain-probe JSON, driver report, and raw Playwright JUnit/HTML/results.
+- `e2e/<workflow-uid>/chaos/<scenario>/evidence/` — rendered engines/experiments, exact target snapshots, raw ChaosResult JSON, live engine JSON, available runner logs, domain-probe JSON, driver report, and raw Ginkgo/Playwright JUnit, logs, HTML, and results.
 
 JUnit testcases independently cover baseline, native phase/verdict, native `probeSuccessPercentage`, browser checks, scenario invariants, cleanup/leak checks, and recovery. The score testcase is named `resilience score = <value>%` (prefixed by engine where needed). It is the unchanged Litmus score, not a weighted score. A native 100% cannot hide a failed independent check.
 
-The existing `onExit` handler imports all optional chaos wrappers into the run's **one** ReportPortal launch, including failed/aborted runs, with `weekly-suite` and `chaos-scenario` attributes. Raw Playwright XML remains evidence only, avoiding duplicate ReportPortal items.
+The existing `onExit` handler imports all optional chaos wrappers into the run's **one** ReportPortal launch, including failed/aborted runs, with `weekly-suite` and `chaos-scenario` attributes. Raw Ginkgo and Playwright XML remains evidence only, avoiding duplicate ReportPortal items.
 
 ## Cleanup and break-glass
 
@@ -91,6 +97,13 @@ The reset is a suspended placeholder as of 2026-11-13, so this implementation do
 cd scripts/e2e/chaos
 go test ./...
 node --test reporter.test.mjs
+cd ../stack
+go test ./...
+go test -c -tags=e2e -o /tmp/inari-stack-e2e.test .
+# Verify the real first-spec hook without a cluster:
+E2E_CHAOS_GINKGO_MARKER_FILE=/tmp/ginkgo-marker.json E2E_HA=0 \
+  /tmp/inari-stack-e2e.test -test.v --ginkgo.dry-run \
+  --ginkgo.label-filter=smoke --ginkgo.junit-report=/tmp/ginkgo-junit.xml
 ```
 
-CI runs both. The tests cover environment/manifest guards, all engine rendering and pins, native result parsing, JUnit independence, exact-name cleanup, protected-read classification, workflow selection, and the load-only cron.
+CI runs the unit suites and binary build. Tests cover environment/manifest guards, all engine rendering and pins, native result parsing, JUnit independence, exact-name cleanup, protected-read classification, negative-control selection/retries, Ginkgo HA/filter/flag behavior, both-suite marker coordination and early-exit collection, workflow selection, and the load-only cron.

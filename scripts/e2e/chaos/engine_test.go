@@ -82,6 +82,7 @@ func TestOpenFGATimeoutHasBoundedFault(t *testing.T) {
 type recordedCommand struct {
 	name string
 	args []string
+	env  []string
 }
 
 type fakeRunner struct {
@@ -89,8 +90,8 @@ type fakeRunner struct {
 	output   string
 }
 
-func (f *fakeRunner) Run(_ context.Context, _ string, _ []string, _ []byte, name string, args ...string) (string, error) {
-	f.commands = append(f.commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+func (f *fakeRunner) Run(_ context.Context, _ string, env []string, _ []byte, name string, args ...string) (string, error) {
+	f.commands = append(f.commands, recordedCommand{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
 	return f.output, nil
 }
 

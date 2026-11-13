@@ -92,6 +92,14 @@ jobs:
         working-directory: scripts/e2e/chaos
         run: go test ./...
 
+      - name: e2e stack unit tests + chaos binary build
+        # The chaos workflow executes this precompiled attach-mode binary with
+        # E2E_HA=0. Compile it in CI even when the live release gate is skipped.
+        working-directory: scripts/e2e/stack
+        run: |
+          go test ./...
+          go test -c -tags=e2e -o /tmp/inari-stack-e2e.test .
+
       - name: chart-testing lint
         run: ct lint --config ct.yaml
 
