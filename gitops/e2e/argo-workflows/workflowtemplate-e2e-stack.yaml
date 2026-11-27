@@ -834,7 +834,9 @@ spec:
                 {name: "INARI_GIT_PROVIDER", value: "local"},
                 {name: "INARI_GIT_LOCAL_ROOT", value: "/var/lib/inari/git"},
                 {name: "INARI_LOG_FORMAT", value: "json"},
-                {name: "INARI_ESO_SECRET_NAMESPACE", value: "inari-e2e-agent"}
+                {name: "INARI_ESO_SECRET_NAMESPACE", value: "inari-e2e-agent"},
+                {name: "INARI_TENANT_PROVISIONING_IDENTITIES", valueFrom: {secretKeyRef: {name: "inari-provisioning-lifecycle", key: "identities"}}},
+                {name: "INARI_PLAN_LIMITS_PROVIDER", value: "keycloak"}
               ],
               extraVolumes: [{name: "git-root", persistentVolumeClaim: {claimName: "inari-e2e-git"}}],
               extraVolumeMounts: [{name: "git-root", mountPath: "/var/lib/inari/git"}],

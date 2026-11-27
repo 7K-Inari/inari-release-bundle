@@ -101,6 +101,15 @@ spec:
             # default (inari-server #212).
             - name: INARI_ESO_SECRET_NAMESPACE
               value: "inari-e2e-agent"
+            # Generic actor-free lifecycle identity from BIL-1. The exact
+            # client:subject pair is environment-specific and delivered by ESO.
+            - name: INARI_TENANT_PROVISIONING_IDENTITIES
+              valueFrom:
+                secretKeyRef:
+                  name: inari-provisioning-lifecycle
+                  key: identities
+            - name: INARI_PLAN_LIMITS_PROVIDER
+              value: "keycloak"
           extraVolumes:
             - name: git-root
               persistentVolumeClaim:
